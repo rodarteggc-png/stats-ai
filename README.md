@@ -1,0 +1,2 @@
+# stats-ai
+Proyecto Tipster
