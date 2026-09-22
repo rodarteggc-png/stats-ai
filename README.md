@@ -1,36 +1,16 @@
-# Stats.AI — Análisis Deportivo con IA
+# React + Vite
 
-## Setup rápido (PC)
+This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
 
-### 1. Descomprime el ZIP y entra a la carpeta
-```
-cd stats-ai
-```
+Currently, two official plugins are available:
 
-### 2. Instala dependencias
-```
-npm install
-```
+- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
+- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
 
-### 3. Crea tu archivo .env (copia .env.example y renómbralo)
-```
-VITE_ANTHROPIC_KEY=sk-ant-TU_KEY_AQUI
-```
-Obtén tu key en: https://console.anthropic.com
+## React Compiler
 
-### 4. Levanta la app
-```
-npm run dev
-```
-Abre: http://localhost:5173
+The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
 
-### Acceso desde celular/tablet en tu red local
-```
-npm run dev -- --host
-```
+## Expanding the Oxlint configuration
 
-## Deploy en Vercel (gratis, acceso desde cualquier lugar)
-1. Sube este proyecto a GitHub
-2. Importa el repo en vercel.com
-3. Settings → Environment Variables → agrega VITE_ANTHROPIC_KEY
-4. Deploy ✅
+If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
