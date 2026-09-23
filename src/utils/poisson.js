@@ -53,6 +53,12 @@ export function calculateMatchProbabilities(
   if (homeRest < 4) hXG *= 0.90; // Penalización del 10% por jugar hace 3 días o menos
   if (awayRest < 4) aXG *= 0.90;
 
+  // 4. Modificador de Memoria de Lecciones Aprendidas (IA con Cap de Seguridad)
+  const hPen = parseFloat(homePenalty) || 0;
+  const aPen = parseFloat(awayPenalty) || 0;
+  if (hPen > 0) hXG *= (1 - Math.min(hPen, 0.04));
+  if (aPen > 0) aXG *= (1 - Math.min(aPen, 0.04));
+
   hXG = Math.max(0.1, hXG);
   aXG = Math.max(0.1, aXG);
 

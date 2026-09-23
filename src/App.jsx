@@ -357,23 +357,24 @@ export default function App() {
     // Calcular la ventaja (Value) real en puntos respecto a Vegas
     const homeSpreadValue = expectedHomeLead - (-vegasSpread);
     
-    // Determinar el pick principal considerando EV (Expected Value)
+    // Determinar el pick principal considerando EV (Expected Value) y Veto Preventivo de Spreads Pesados (> 7.5 pts)
     let pick, pickType, confidence, evMessage;
+    const isHeavySpread = Math.abs(vegasSpread) > 7.5;
     
-    if (homeSpreadValue >= 3.5) {
+    if (homeSpreadValue >= 3.5 && !isHeavySpread) {
       pick = { team: game.home.name, abbr: game.home.abbr, type: "EV+ Spread Local", detail: `${vegasSpread > 0 ? '+' : ''}${vegasSpread}` };
       pickType = "ev_plus";
       confidence = "ALTA";
       evMessage = `+${homeSpreadValue.toFixed(1)} pts de Valor vs Vegas`;
-    } else if (homeSpreadValue <= -3.5) {
-      pick = { team: game.away.name, abbr: game.away.abbr, type: "EV+ Spread Visita", detail: `${vegasSpread > 0 ? '-' : '+'}${Math.abs(vegasSpread)}` };
-      pickType = "ev_plus";
+    } else if (homeSpreadValue <= -3.5 && (!isHeavySpread || vegasSpread < 0)) {
+      pick = { team: game.away.name, abbr: game.away.abbr, type: isHeavySpread ? "Protección Underdog" : "EV+ Spread Visita", detail: `${vegasSpread > 0 ? '-' : '+'}${Math.abs(vegasSpread)}` };
+      pickType = isHeavySpread ? "underdog" : "ev_plus";
       confidence = "ALTA";
       evMessage = `+${Math.abs(homeSpreadValue).toFixed(1)} pts de Valor vs Vegas`;
-    } else if (homeCoversVegas && hWin >= 55) {
+    } else if (homeCoversVegas && hWin >= 57 && !isHeavySpread) {
       pick = { team: game.home.name, abbr: game.home.abbr, type: "Cubre Spread", detail: `${vegasSpread > 0 ? '+' : ''}${vegasSpread}` };
       pickType = "spread_cover";
-      confidence = hWin >= 70 ? "ALTA" : hWin >= 60 ? "MEDIA" : "BAJA";
+      confidence = hWin >= 70 ? "ALTA" : "MEDIA";
     } else if (hWin >= 55) {
       pick = { team: game.home.name, abbr: game.home.abbr, type: "Moneyline", detail: "ML" };
       pickType = "moneyline";
@@ -386,7 +387,7 @@ export default function App() {
       const underdogTeam = vegasSpread < 0 ? game.away : game.home;
       pick = { team: underdogTeam.name, abbr: underdogTeam.abbr, type: "Underdog +Pts", detail: `+${Math.abs(vegasSpread)}` };
       pickType = "underdog";
-      confidence = "BAJA";
+      confidence = isHeavySpread ? "MEDIA" : "BAJA";
     }
     
     return {
@@ -430,12 +431,14 @@ export default function App() {
       let opportunities = [];
 
       for (const matchData of activeSchedule) {
+        const learned = getLearnedAdjustmentsForMatch(matchData.home?.name, matchData.away?.name);
+
         if (activeSport === 'futbol') {
           const probs = calculateMatchProbabilities(
             matchData.home.xG, matchData.away.xG, 
             matchData.home.elo, matchData.away.elo, 
             matchData.home.daysRest, matchData.away.daysRest,
-            0, 0
+            learned.homePenalty, learned.awayPenalty
           );
           
           const hWin = parseFloat(probs.homeWin);
@@ -607,7 +610,7 @@ export default function App() {
             matchData.away.ops, matchData.home.pitcher.whip,
             matchData.home.elo, matchData.away.elo,
             matchData.home.daysRest, matchData.away.daysRest,
-            0, 0,
+            learned.homePenalty, learned.awayPenalty,
             matchData.home.name
           );
 
@@ -776,7 +779,7 @@ export default function App() {
           const probs = calculateNflProbabilities(
             homeYpp, homeTo,
             awayYpp, awayTo,
-            0, 0,
+            learned.homePenalty, learned.awayPenalty,
             vegasSpread,
             homeEpa, awayEpa,
             vegasTotal,
@@ -844,30 +847,33 @@ export default function App() {
               meta: `Apertura Clave: ${vegasSpreadFormatted}`
             });
           }
-          // 3. Ventaja Clara contra el Spread
-          else if (homeCoversVegas && homeCoverProb >= 54) {
+          // 3. Ventaja Clara contra el Spread (con Filtro Preventivo de Spreads Pesados <= 7.5 y Edge >= 5.0%)
+          else if (homeCoversVegas && homeCoverProb >= 57.0 && Math.abs(vegasSpread) <= 7.5) {
             matchHadSpreadValue = true;
             opportunities.push({
               match: matchData,
               tier: 1,
-              type: '🏈 VENTAJA CONTRA EL SPREAD',
+              type: '🏈 VENTAJA CONTRA EL SPREAD (NFL)',
               pick: `${matchData.home.name} ${vegasSpreadFormatted} (Cubre Línea de Vegas)`,
-              reason: `El modelo proyecta victoria local por ${expectedHomeLead.toFixed(1)} puntos frente a la línea de ${vegasSpreadFormatted} de Las Vegas. Ventaja en yardas por jugada.`,
+              reason: `El modelo proyecta victoria local por ${expectedHomeLead.toFixed(1)} puntos frente a la línea de ${vegasSpreadFormatted} de Las Vegas (Prob. Cubrir: ${homeCoverProb.toFixed(1)}%, Edge: +${(homeCoverProb - 52.4).toFixed(1)}%). Filtro preventivo de spread verificado (<= 7.5 pts).`,
               prob: `${homeCoverProb.toFixed(1)}%`,
               odds: getFairOddsDecimal(homeCoverProb),
               color: "#3b82f6",
               meta: `Vegas: ${vegasSpreadFormatted} | Proyección Modelo: -${expectedHomeLead.toFixed(1)} pts`
             });
-          } else if (!homeCoversVegas && awayCoverProb >= 53) {
+          } else if (!homeCoversVegas && awayCoverProb >= 56.5) {
             matchHadSpreadValue = true;
             const underdogTeam = vegasSpread < 0 ? matchData.away.name : matchData.home.name;
             const underdogSpread = Math.abs(vegasSpread);
+            const isHeavySpread = Math.abs(vegasSpread) > 7.5;
             opportunities.push({
               match: matchData,
               tier: 2,
-              type: '🏈 VALOR EN PUNTOS (UNDERDOG)',
+              type: isHeavySpread ? '🛡️ PROTECCIÓN UNDERDOG ANTE SPREAD PESADO' : '🏈 VALOR EN PUNTOS (UNDERDOG)',
               pick: `${underdogTeam} +${underdogSpread} (Hándicap Positivo)`,
-              reason: `Las Vegas infló al favorito (${vegasSpreadFormatted}). El modelo proyecta paridad en las trincheras y otorga valor defensivo al underdog.`,
+              reason: isHeavySpread
+                ? `Las Vegas infló en exceso al favorito (${vegasSpreadFormatted} > 7.5 pts). Alto valor defensivo en el Underdog con colchón amplio ante backdoor covers.`
+                : `Las Vegas sobrevaloró al favorito (${vegasSpreadFormatted}). El modelo proyecta paridad en las trincheras y otorga valor defensivo al underdog (+${(awayCoverProb - 52.4).toFixed(1)}% Edge).`,
               prob: `${awayCoverProb.toFixed(1)}%`,
               odds: getFairOddsDecimal(awayCoverProb),
               color: "#10b981",
@@ -875,12 +881,12 @@ export default function App() {
             });
           }
 
-          // 4. Evaluación de Totales (Over/Under) contra Vegas y Clima
+          // 4. Evaluación de Totales (Over/Under) contra Vegas y Clima (Edge estricto >= 5.0%)
           const totalsEval = probs.totalsEvaluation;
-          if (totalsEval && totalsEval.isValue) {
+          if (totalsEval && totalsEval.isValue && parseFloat(totalsEval.edge) >= 5.0) {
             opportunities.push({
               match: matchData,
-              tier: totalsEval.edge >= 6.0 ? 1 : 2,
+              tier: totalsEval.edge >= 6.5 ? 1 : 2,
               type: totalsEval.isUnder ? '💨 TOTALES NFL (VALOR UNDER)' : '🔥 TOTALES NFL (VALOR OVER)',
               pick: totalsEval.pick,
               reason: `El modelo proyecta un total efectivo de ${totalsEval.effectiveTotal} pts frente a los ${vegasTotal} pts de Las Vegas (Edge: +${totalsEval.edge}%). ${parseFloat(totalsEval.windPenalty) > 0 ? `Viento adverso de ${windMph} mph en estadio abierto reduce anotación y FGs.` : 'Diferencial en ritmo ofensivo y eficiencia neta.'}`,
@@ -1011,7 +1017,7 @@ export default function App() {
           matchData.home.xG, matchData.away.xG, 
           matchData.home.elo, matchData.away.elo, 
           matchData.home.daysRest, matchData.away.daysRest,
-          0, 0
+          learned.homePenalty, learned.awayPenalty
         );
         const corners = calculatePropProbabilities(matchData.home.cornersAvg, matchData.away.cornersAvg, 9.5);
         const cards = calculatePropProbabilities(matchData.home.cardsAvg, matchData.away.cardsAvg, 4.5);
@@ -1048,7 +1054,7 @@ export default function App() {
           matchData.away.ops, matchData.home.pitcher.whip,
           matchData.home.elo, matchData.away.elo,
           matchData.home.daysRest, matchData.away.daysRest,
-          0, 0, matchData.home.name
+          learned.homePenalty, learned.awayPenalty, matchData.home.name
         );
         mathProbs = { type: 'mlb', probs };
 
@@ -1093,7 +1099,7 @@ export default function App() {
         const probs = calculateNflProbabilities(
           homeYpp, homeTo,
           awayYpp, awayTo,
-          0, 0,
+          learned.homePenalty, learned.awayPenalty,
           vegasSpread,
           matchData.home?.epaNet, matchData.away?.epaNet,
           vegasTotal,
@@ -1328,7 +1334,7 @@ export default function App() {
 
         {/* Sport Selector */}
         <div style={{ display: "flex", gap: 10, marginBottom: 25, justifyContent: "center" }}>
-          <SportBtn id="futbol" icon="⚽" label="Fútbol (Liga MX / Europa)" active={activeSport} set={setActiveSport} />
+          <SportBtn id="futbol" icon="⚽" label="Fútbol (Ligas, Femenil, Nations League)" active={activeSport} set={setActiveSport} />
           <SportBtn id="mlb" icon="⚾" label="MLB (Grandes Ligas)" active={activeSport} set={setActiveSport} />
           <SportBtn id="nfl" icon="🏈" label="NFL" active={activeSport} set={setActiveSport} />
         </div>

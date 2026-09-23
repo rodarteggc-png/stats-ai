@@ -68,12 +68,28 @@ export function evaluateEnsembleConsensus({
     const homeCover = parseFloat(probs.homeCoverProb || 50);
     const awayCover = parseFloat(probs.awayCoverProb || 50);
     const maxCover = Math.max(homeCover, awayCover);
+    const spread = parseFloat(match.market?.spread !== undefined ? match.market.spread : (match.vegas?.spread !== undefined ? match.vegas.spread : -3.5));
+    const absSpread = Math.abs(spread);
+    const keyEval = probs.keyEvaluation || {};
 
-    if (maxCover >= 54 || edgeVal >= 5.0 || probs.keyEvaluation?.trapWarning || probs.keyEvaluation?.keyAlert) {
+    // Veto preventivo a favoritos en spreads pesados (> 7.5 puntos por riesgo de Backdoor Cover)
+    const isFavoriteCover = (spread < 0 && homeCover >= awayCover) || (spread > 0 && awayCover >= homeCover);
+    const isHeavySpread = absSpread > 7.5;
+
+    if (isHeavySpread && isFavoriteCover) {
+      vote1Passed = false;
+      vote1Reason = `⛔ Veto Preventivo NFL: Spread abultado (${absSpread} pts > 7.5). Riesgo extremo de Backdoor Cover en 4º cuarto. No jugar al favorito.`;
+    } else if (keyEval.trapWarning) {
       vote1Passed = true;
-      vote1Reason = `Diferencial de EPA/Net YPP otorga ${maxCover.toFixed(0)}% de probabilidad de cubrir la línea.`;
+      vote1Reason = `Trampa de Medio Punto detectada en Las Vegas. Colchón de número clave a favor del Underdog (+${absSpread}).`;
+    } else if (keyEval.keyAlert) {
+      vote1Passed = true;
+      vote1Reason = `Oportunidad Clave en -2.5. Línea por debajo del número crítico 3.`;
+    } else if (maxCover >= 57.0 || edgeVal >= 5.0) {
+      vote1Passed = true;
+      vote1Reason = `Diferencial de EPA/Net YPP otorga ${maxCover.toFixed(1)}% de probabilidad de cubrir la línea (Edge: +${(maxCover - 52.4).toFixed(1)}%).`;
     } else {
-      vote1Reason = `Línea de Las Vegas ajustada con precisión. Sin ventaja cuantificable contra el spread.`;
+      vote1Reason = `Ventaja matemática insuficiente en NFL (${maxCover.toFixed(1)}% inferior al umbral preventivo del 57.0% / Edge 5.0%).`;
     }
   }
 
@@ -139,14 +155,44 @@ export function evaluateEnsembleConsensus({
     const league = (match.league || '').toLowerCase();
 
     const matchingTrap = lessons.find(l => {
-      const txt = (l.lesson || '').toLowerCase();
-      return (txt.includes(hName) || txt.includes(aName) || txt.includes(league)) && 
-             (txt.includes('trampa') || txt.includes('inflado') || txt.includes('cuidado') || txt.includes('precaución'));
+      if (l.active === false) return false;
+      const combinedText = [
+        l.diagnosisText || '',
+        l.lesson || '',
+        l.learnedRule || '',
+        l.actualResult || ''
+      ].join(' ').toLowerCase();
+
+      const lTeam = (l.team || '').toLowerCase();
+
+      // Debe coincidir específicamente con el equipo involucrado (local o visitante)
+      const matchesHome = Boolean(hName && (
+        (lTeam && (hName.includes(lTeam) || lTeam.includes(hName))) ||
+        (hName.length >= 4 && combinedText.includes(hName))
+      ));
+      const matchesAway = Boolean(aName && (
+        (lTeam && (aName.includes(lTeam) || lTeam.includes(aName))) ||
+        (aName.length >= 4 && combinedText.includes(aName))
+      ));
+
+      const mentionsTeam = matchesHome || matchesAway;
+
+      const hasTrapKeyword = (
+        combinedText.includes('trampa') ||
+        combinedText.includes('inflado') ||
+        combinedText.includes('cuidado') ||
+        combinedText.includes('precaución') ||
+        combinedText.includes('advertencia') ||
+        combinedText.includes('colapso')
+      );
+
+      return mentionsTeam && hasTrapKeyword;
     });
 
     if (matchingTrap) {
       vote3Passed = false;
-      vote3Reason = `⚠️ Veto por Memoria Histórica: Coincide con lección previa de trampa ("${matchingTrap.lesson.slice(0, 70)}...").`;
+      const trapExplanation = matchingTrap.learnedRule || matchingTrap.diagnosisText || matchingTrap.lesson || 'Patrón recurrente de fallo en este equipo';
+      vote3Reason = `⚠️ Veto por Memoria Histórica: Coincide con lección previa de trampa ("${trapExplanation.slice(0, 70)}...").`;
     }
   } catch (e) {
     // history fallback seguro

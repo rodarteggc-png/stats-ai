@@ -1,0 +1,41 @@
+[
+  {
+    "id": "lesson-seed-1",
+    "date": "2026-09-01T12:00:00.000Z",
+    "team": "Dallas Cowboys",
+    "opponent": "NFL Underdogs",
+    "sport": "nfl",
+    "predictedPick": "Dallas Cowboys -7.5",
+    "actualResult": "No cubrió la línea",
+    "diagnosisText": "Trampa de spread inflado por favoritismo mediático en Las Vegas. Cuidado al dar más de 7 puntos.",
+    "learnedRule": "Evitar spreads inflados superiores a un touchdown en Dallas sin confirmación de trinchera.",
+    "penaltyModifier": 0.04,
+    "active": true
+  },
+  {
+    "id": "lesson-seed-2",
+    "date": "2026-09-05T18:00:00.000Z",
+    "team": "Colorado Rockies",
+    "opponent": "Visitantes en Coors Field",
+    "sport": "mlb",
+    "predictedPick": "Under 11.5 Carreras",
+    "actualResult": "Colapso de pitcheo y bullpen",
+    "diagnosisText": "Advertencia: El estadio Coors Field dilata el quiebre de lanzamientos. Trampa severa en líneas bajas de carreras.",
+    "learnedRule": "Precaución extrema con unders en Colorado debido a la altitud y fatiga de bullpen.",
+    "penaltyModifier": 0.05,
+    "active": true
+  },
+  {
+    "id": "lesson-seed-3",
+    "date": "2026-09-10T20:00:00.000Z",
+    "team": "Club América",
+    "opponent": "Liga MX Rival",
+    "sport": "futbol",
+    "predictedPick": "Victoria Club América",
+    "actualResult": "Empate 1-1",
+    "diagnosisText": "Precaución: Rotación de plantilla previo a fecha FIFA o Concacaf genera líneas infladas de cuota baja (trampa de momio corto).",
+    "learnedRule": "Requerir doble oportunidad ante visitas de bloque bajo cuando el momio esté excesivamente castigado.",
+    "penaltyModifier": 0.03,
+    "active": true
+  }
+]

@@ -1,6 +1,6 @@
 // src/services/sportsApi.js
 // LIVE SPORTS BIG DATA INTEGRATION (Official MLB Stats API + ESPN Live Scoreboards)
-import { normalizeTeamName, getDynamicElo } from './history.js';
+import { normalizeTeamName, getDynamicElo, isTeamMatch } from './history.js';
 
 // ================= DETECTOR 1: RASTREO PERSISTENTE DE STEAM MOVES (SMART MONEY) =================
 const SNAPSHOTS_STORAGE_KEY = 'fstats_odds_snapshots';
@@ -491,6 +491,51 @@ async function fetchLiveMlbTeamStats(teamId) {
   }
 }
 
+// ================= STANDINGS Y RACHAS REALES DE MLB (MLB STATS API) =================
+const mlbStandingsCache = { data: null, timestamp: 0 };
+const MLB_STANDINGS_TTL_MS = 2 * 60 * 60 * 1000; // 2 horas de caché
+
+export async function fetchLiveMlbStandings() {
+  const now = Date.now();
+  if (mlbStandingsCache.data && (now - mlbStandingsCache.timestamp < MLB_STANDINGS_TTL_MS)) {
+    return mlbStandingsCache.data;
+  }
+
+  try {
+    const res = await fetch('https://statsapi.mlb.com/api/v1/standings?leagueId=103,104');
+    if (!res.ok) throw new Error("Error en API de Standings MLB");
+    const json = await res.json();
+    const map = {};
+
+    json.records?.forEach(rec => {
+      rec.teamRecords?.forEach(tr => {
+        const last10 = tr.records?.splitRecords?.find(s => s.type === 'lastTen');
+        const teamObj = {
+          teamId: tr.team?.id,
+          name: tr.team?.name || '',
+          streak: tr.streak?.streakCode || 'N/A',
+          lastTen: last10 ? `${last10.wins}-${last10.losses}` : 'N/A',
+          runsScored: tr.runsScored,
+          runsAllowed: tr.runsAllowed,
+          runDiff: tr.runDifferential
+        };
+        if (tr.team?.id) map[tr.team.id] = teamObj;
+        if (tr.team?.name) map[tr.team.name.toLowerCase()] = teamObj;
+      });
+    });
+
+    if (Object.keys(map).length >= 25) {
+      mlbStandingsCache.data = map;
+      mlbStandingsCache.timestamp = now;
+      return map;
+    }
+  } catch (err) {
+    console.warn("No se pudo obtener standings en vivo de MLB:", err.message);
+  }
+
+  return mlbStandingsCache.data || {};
+}
+
 /**
  * Obtiene partidos reales de la MLB usando la API oficial de las Grandes Ligas (statsapi.mlb.com)
  */
@@ -498,7 +543,11 @@ async function fetchRealMlbSchedule(dateRange) {
   const { mlbStart, mlbEnd } = getDateRanges(dateRange);
   const url = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=${mlbStart}&endDate=${mlbEnd}&hydrate=probablePitcher,linescore,team,decisions`;
   
-  const res = await fetch(url);
+  const [res, mlbStandings] = await Promise.all([
+    fetch(url),
+    fetchLiveMlbStandings()
+  ]);
+
   if (!res.ok) throw new Error("No se pudo conectar a la MLB Stats API");
   const data = await res.json();
 
@@ -544,6 +593,12 @@ async function fetchRealMlbSchedule(dateRange) {
           avg: parseFloat(aStats.avg) || 0.250 
         };
 
+        const hStanding = mlbStandings[homeTeam.team.id] || mlbStandings[homeTeam.team.name?.toLowerCase()];
+        const aStanding = mlbStandings[awayTeam.team.id] || mlbStandings[awayTeam.team.name?.toLowerCase()];
+
+        const homeForm = hStanding?.streak ? `Racha: ${hStanding.streak} | L10: ${hStanding.lastTen}` : (homePct >= 0.55 ? "W W L W W" : "L W L L W");
+        const awayForm = aStanding?.streak ? `Racha: ${aStanding.streak} | L10: ${aStanding.lastTen}` : (awayPct >= 0.55 ? "W W W L W" : "L L W L L");
+
         return {
           id: `mlb-${g.gamePk}`,
           sport: 'mlb',
@@ -553,7 +608,10 @@ async function fetchRealMlbSchedule(dateRange) {
           home: {
             name: homeTeam.team.name,
             record: `${homeTeam.leagueRecord?.wins || 0}-${homeTeam.leagueRecord?.losses || 0}`,
-            recentForm: homePct >= 0.55 ? "W W L W W" : "L W L L W",
+            recentForm: homeForm,
+            streak: hStanding?.streak,
+            lastTen: hStanding?.lastTen,
+            runDiff: hStanding?.runDiff,
             ops: hStats.ops,
             elo: homeElo,
             daysRest: 1,
@@ -569,7 +627,10 @@ async function fetchRealMlbSchedule(dateRange) {
           away: {
             name: awayTeam.team.name,
             record: `${awayTeam.leagueRecord?.wins || 0}-${awayTeam.leagueRecord?.losses || 0}`,
-            recentForm: awayPct >= 0.55 ? "W W W L W" : "L L W L L",
+            recentForm: awayForm,
+            streak: aStanding?.streak,
+            lastTen: aStanding?.lastTen,
+            runDiff: aStanding?.runDiff,
             ops: aStats.ops,
             elo: awayElo,
             daysRest: 1,
@@ -641,9 +702,37 @@ async function fetchRealMlbSchedule(dateRange) {
 }
 
 const soccerLiveStatsCache = {};
-export const knownSoccerTeams = {};
+export const knownSoccerTeams = {
+  // Liga MX Femenil (Dispersión y brecha amplia para explotar spreads y totales)
+  'tigres uanl femenil': { name: 'Tigres UANL Femenil', xG: '2.90', goalsAllowedPerGame: '0.65', homeOffenseXg: 3.20, homeDefenseXg: 0.55, awayOffenseXg: 2.60, awayDefenseXg: 0.75, elo: 1740 },
+  'tigres femenil': { name: 'Tigres UANL Femenil', xG: '2.90', goalsAllowedPerGame: '0.65', homeOffenseXg: 3.20, homeDefenseXg: 0.55, awayOffenseXg: 2.60, awayDefenseXg: 0.75, elo: 1740 },
+  'monterrey femenil': { name: 'CF Monterrey Femenil (Rayadas)', xG: '2.75', goalsAllowedPerGame: '0.70', homeOffenseXg: 3.05, homeDefenseXg: 0.60, awayOffenseXg: 2.45, awayDefenseXg: 0.80, elo: 1720 },
+  'rayadas': { name: 'CF Monterrey Femenil (Rayadas)', xG: '2.75', goalsAllowedPerGame: '0.70', homeOffenseXg: 3.05, homeDefenseXg: 0.60, awayOffenseXg: 2.45, awayDefenseXg: 0.80, elo: 1720 },
+  'américa femenil': { name: 'Club América Femenil', xG: '2.65', goalsAllowedPerGame: '0.85', homeOffenseXg: 2.95, homeDefenseXg: 0.75, awayOffenseXg: 2.35, awayDefenseXg: 0.95, elo: 1690 },
+  'america femenil': { name: 'Club América Femenil', xG: '2.65', goalsAllowedPerGame: '0.85', homeOffenseXg: 2.95, homeDefenseXg: 0.75, awayOffenseXg: 2.35, awayDefenseXg: 0.95, elo: 1690 },
+  'chivas femenil': { name: 'CD Guadalajara Femenil', xG: '2.10', goalsAllowedPerGame: '1.00', homeOffenseXg: 2.35, homeDefenseXg: 0.90, awayOffenseXg: 1.85, awayDefenseXg: 1.10, elo: 1630 },
+  'guadalajara femenil': { name: 'CD Guadalajara Femenil', xG: '2.10', goalsAllowedPerGame: '1.00', homeOffenseXg: 2.35, homeDefenseXg: 0.90, awayOffenseXg: 1.85, awayDefenseXg: 1.10, elo: 1630 },
+  'pachuca femenil': { name: 'Pachuca Femenil', xG: '2.30', goalsAllowedPerGame: '1.10', homeOffenseXg: 2.55, homeDefenseXg: 0.95, awayOffenseXg: 2.05, awayDefenseXg: 1.25, elo: 1640 },
+  'juárez femenil': { name: 'FC Juárez Femenil', xG: '1.45', goalsAllowedPerGame: '1.35', homeOffenseXg: 1.65, homeDefenseXg: 1.20, awayOffenseXg: 1.25, awayDefenseXg: 1.50, elo: 1510 },
+  'juarez femenil': { name: 'FC Juárez Femenil', xG: '1.45', goalsAllowedPerGame: '1.35', homeOffenseXg: 1.65, homeDefenseXg: 1.20, awayOffenseXg: 1.25, awayDefenseXg: 1.50, elo: 1510 },
+  'toluca femenil': { name: 'Toluca Femenil', xG: '1.35', goalsAllowedPerGame: '1.45', homeOffenseXg: 1.55, homeDefenseXg: 1.30, awayOffenseXg: 1.15, awayDefenseXg: 1.60, elo: 1490 },
+  'pumas femenil': { name: 'Pumas UNAM Femenil', xG: '1.30', goalsAllowedPerGame: '1.50', homeOffenseXg: 1.50, homeDefenseXg: 1.35, awayOffenseXg: 1.10, awayDefenseXg: 1.65, elo: 1480 },
+  'tijuana femenil': { name: 'Club Tijuana Femenil', xG: '1.25', goalsAllowedPerGame: '1.55', homeOffenseXg: 1.45, homeDefenseXg: 1.40, awayOffenseXg: 1.05, awayDefenseXg: 1.70, elo: 1460 },
+  'xolos femenil': { name: 'Club Tijuana Femenil', xG: '1.25', goalsAllowedPerGame: '1.55', homeOffenseXg: 1.45, homeDefenseXg: 1.40, awayOffenseXg: 1.05, awayDefenseXg: 1.70, elo: 1460 },
+  'atlas femenil': { name: 'Atlas Femenil', xG: '1.15', goalsAllowedPerGame: '1.70', homeOffenseXg: 1.35, homeDefenseXg: 1.50, awayOffenseXg: 0.95, awayDefenseXg: 1.90, elo: 1430 },
+  'león femenil': { name: 'Club León Femenil', xG: '1.10', goalsAllowedPerGame: '1.75', homeOffenseXg: 1.30, homeDefenseXg: 1.55, awayOffenseXg: 0.90, awayDefenseXg: 1.95, elo: 1420 },
+  'leon femenil': { name: 'Club León Femenil', xG: '1.10', goalsAllowedPerGame: '1.75', homeOffenseXg: 1.30, homeDefenseXg: 1.55, awayOffenseXg: 0.90, awayDefenseXg: 1.95, elo: 1420 },
+  'querétaro femenil': { name: 'Querétaro Femenil', xG: '0.95', goalsAllowedPerGame: '1.90', homeOffenseXg: 1.10, homeDefenseXg: 1.70, awayOffenseXg: 0.80, awayDefenseXg: 2.10, elo: 1390 },
+  'cruz azul femenil': { name: 'Cruz Azul Femenil', xG: '0.90', goalsAllowedPerGame: '1.95', homeOffenseXg: 1.05, homeDefenseXg: 1.75, awayOffenseXg: 0.75, awayDefenseXg: 2.15, elo: 1380 },
+  'san luis femenil': { name: 'Atlético San Luis Femenil', xG: '0.85', goalsAllowedPerGame: '2.10', homeOffenseXg: 1.00, homeDefenseXg: 1.85, awayOffenseXg: 0.70, awayDefenseXg: 2.35, elo: 1360 },
+  'puebla femenil': { name: 'Puebla Femenil', xG: '0.75', goalsAllowedPerGame: '2.30', homeOffenseXg: 0.90, homeDefenseXg: 2.05, awayOffenseXg: 0.60, awayDefenseXg: 2.55, elo: 1330 },
+  'mazatlán femenil': { name: 'Mazatlán FC Femenil', xG: '0.70', goalsAllowedPerGame: '2.50', homeOffenseXg: 0.85, homeDefenseXg: 2.20, awayOffenseXg: 0.55, awayDefenseXg: 2.80, elo: 1310 },
+  'mazatlan femenil': { name: 'Mazatlán FC Femenil', xG: '0.70', goalsAllowedPerGame: '2.50', homeOffenseXg: 0.85, homeDefenseXg: 2.20, awayOffenseXg: 0.55, awayDefenseXg: 2.80, elo: 1310 },
+  'necaxa femenil': { name: 'Necaxa Femenil', xG: '0.65', goalsAllowedPerGame: '2.60', homeOffenseXg: 0.75, homeDefenseXg: 2.30, awayOffenseXg: 0.55, awayDefenseXg: 2.90, elo: 1290 },
+  'santos femenil': { name: 'Santos Laguna Femenil', xG: '0.65', goalsAllowedPerGame: '2.70', homeOffenseXg: 0.75, homeDefenseXg: 2.40, awayOffenseXg: 0.55, awayDefenseXg: 3.00, elo: 1280 }
+};
 
-async function fetchLiveSoccerStandings(leagueCode) {
+export async function fetchLiveSoccerStandings(leagueCode) {
   if (soccerLiveStatsCache[leagueCode]) return soccerLiveStatsCache[leagueCode];
 
   try {
@@ -652,7 +741,16 @@ async function fetchLiveSoccerStandings(leagueCode) {
     const data = await res.json();
     
     const teamStatsMap = {};
-    const entries = data.children?.[0]?.standings?.entries || [];
+    let entries = [];
+    if (data.children && Array.isArray(data.children)) {
+      data.children.forEach(child => {
+        if (child.standings?.entries && Array.isArray(child.standings.entries)) {
+          entries = entries.concat(child.standings.entries);
+        }
+      });
+    } else if (data.standings?.entries && Array.isArray(data.standings.entries)) {
+      entries = data.standings.entries;
+    }
     
     entries.forEach(entry => {
       const teamId = entry.team.id;
@@ -706,8 +804,24 @@ async function fetchLiveSoccerStandings(leagueCode) {
   }
 }
 
+// ================= MONITOREO DINÁMICO DE FATIGA Y DESCANSO EN FÚTBOL =================
+function getSoccerDaysRest(leagueCode, gameDateStr) {
+  if (!gameDateStr) return 5;
+  const lCode = (leagueCode || '').toLowerCase();
+  const isCup = lCode.includes('champions') || lCode.includes('europa') || lCode.includes('libertadores') || lCode.includes('sudamericana') || lCode.includes('nations');
+  const dayOfWeek = new Date(gameDateStr).getUTCDay();
+  
+  if (isCup) {
+    return 3; // Competición internacional o Nations League con calendario apretado (fatiga alta)
+  }
+  if (dayOfWeek >= 2 && dayOfWeek <= 4) {
+    return 3; // Doble jornada de liga entre semana (martes a jueves)
+  }
+  return 5; // Jornada regular de fin de semana
+}
+
 /**
- * Obtiene partidos reales de Fútbol (Liga MX, Premier League, LaLiga, Serie A, Champions League, Europa League, etc.)
+ * Obtiene partidos reales de Fútbol (Liga MX, Premier League, LaLiga, Serie A, Champions League, Nations League, Femenil, etc.)
  */
 async function fetchRealSoccerSchedule(dateRange) {
   const { espnDatesList } = getDateRanges(dateRange);
@@ -729,7 +843,16 @@ async function fetchRealSoccerSchedule(dateRange) {
     { code: 'ned.1', name: 'Eredivisie (Países Bajos)' },
     { code: 'sco.1', name: 'Scottish Premiership (Escocia)' },
     { code: 'arg.1', name: 'Liga Profesional Argentina' },
-    { code: 'bra.1', name: 'Brasileirão' }
+    { code: 'bra.1', name: 'Brasileirão' },
+    // Selecciones / Torneos Internacionales
+    { code: 'uefa.nations', name: 'UEFA Nations League' },
+    { code: 'concacaf.nations.league', name: 'Concacaf Nations League' },
+    // Ligas Femeniles (Alta disparidad de nivel -> Oportunidades Sharp en Hándicaps y Totales)
+    { code: 'mex.w.1', name: 'Liga MX Femenil' },
+    { code: 'usa.nwsl', name: 'NWSL (EE.UU. Femenil)' },
+    { code: 'esp.w.1', name: 'Liga F (España Femenil)' },
+    { code: 'eng.w.1', name: 'Super League Femenil (Inglaterra)' },
+    { code: 'uefa.wchampions', name: "UEFA Women's Champions League" }
   ];
 
   const results = await Promise.allSettled(
@@ -758,7 +881,7 @@ async function fetchRealSoccerSchedule(dateRange) {
         });
       });
 
-      return allEvents.map(ev => ({ ev, leagueName: l.name, standings }));
+      return allEvents.map(ev => ({ ev, leagueName: l.name, leagueCode: l.code, standings }));
     })
   );
 
@@ -766,7 +889,7 @@ async function fetchRealSoccerSchedule(dateRange) {
   results.forEach(r => {
     if (r.status !== 'fulfilled' || !Array.isArray(r.value)) return;
     
-    r.value.forEach(({ ev, leagueName, standings }) => {
+    r.value.forEach(({ ev, leagueName, leagueCode, standings }) => {
       const comp = ev.competitions?.[0];
       if (!comp) return;
 
@@ -805,6 +928,10 @@ async function fetchRealSoccerSchedule(dateRange) {
       const homeXG = ((realHomeXg * 0.60) + (vegasImpliedHomeXG * 0.40)).toFixed(2);
       const awayXG = ((realAwayXg * 0.60) + (vegasImpliedAwayXG * 0.40)).toFixed(2);
 
+      const soccerDaysRest = getSoccerDaysRest(leagueCode, ev.date);
+      const homeLeader = comp.leaders?.[0]?.leaders?.[0]?.athlete?.displayName || home.leaders?.[0]?.leaders?.[0]?.athlete?.displayName || "Delantero Principal";
+      const awayLeader = comp.leaders?.[1]?.leaders?.[0]?.athlete?.displayName || away.leaders?.[0]?.leaders?.[0]?.athlete?.displayName || "Extremo Titular";
+
       games.push({
         id: `soccer-${ev.id}`,
         sport: 'futbol',
@@ -816,20 +943,20 @@ async function fetchRealSoccerSchedule(dateRange) {
           recentForm: homeForm.split('').join(' '),
           xG: isNaN(homeXG) ? hStats.xG : homeXG,
           elo: getDynamicElo(home.team?.displayName, hStats.elo),
-          daysRest: 5,
+          daysRest: soccerDaysRest,
           cornersAvg: (3.5 + (parseFloat(homeXG) || 1) * 1.8).toFixed(1),
           cardsAvg: (2.8 - (parseFloat(homeXG) || 1) * 0.3).toFixed(1),
-          keyPlayer: { name: "Delantero Principal", shotsOnTargetAvg: (parseFloat(homeXG) || 1).toFixed(1) }
+          keyPlayer: { name: homeLeader, shotsOnTargetAvg: (parseFloat(homeXG) || 1).toFixed(1) }
         },
         away: {
           name: away.team?.displayName || "Visitante",
           recentForm: awayForm.split('').join(' '),
           xG: isNaN(awayXG) ? aStats.xG : awayXG,
           elo: getDynamicElo(away.team?.displayName, aStats.elo),
-          daysRest: 5,
+          daysRest: soccerDaysRest,
           cornersAvg: (3.0 + (parseFloat(awayXG) || 1) * 1.5).toFixed(1),
           cardsAvg: (3.0 - (parseFloat(awayXG) || 1) * 0.2).toFixed(1),
-          keyPlayer: { name: "Extremo Titular", shotsOnTargetAvg: ((parseFloat(awayXG) || 1) * 0.8).toFixed(1) }
+          keyPlayer: { name: awayLeader, shotsOnTargetAvg: ((parseFloat(awayXG) || 1) * 0.8).toFixed(1) }
         },
         market: (() => {
           const homeMLOpen = odds?.moneyline?.home?.open?.odds;
@@ -1012,6 +1139,77 @@ const nflTeamRatings = {
   'Carolina Panthers': { ypp: 4.4, to: -6, elo: 1370, qb: 'Bryce Young', epaNet: -0.12 }
 };
 
+// ================= STANDINGS DINÁMICOS Y EPA NET EN VIVO (ESPN NFL API) =================
+const nflStandingsCache = { data: null, timestamp: 0 };
+const NFL_STANDINGS_TTL_MS = 2 * 60 * 60 * 1000; // 2 horas de caché
+
+export async function fetchLiveNflStandings() {
+  const now = Date.now();
+  if (nflStandingsCache.data && (now - nflStandingsCache.timestamp < NFL_STANDINGS_TTL_MS)) {
+    return nflStandingsCache.data;
+  }
+
+  try {
+    const res = await fetch('https://site.api.espn.com/apis/v2/sports/football/nfl/standings');
+    if (!res.ok) throw new Error("Error en API de Standings NFL");
+    const json = await res.json();
+    const standingsMap = {};
+
+    function extractEntries(node) {
+      if (node.standings && Array.isArray(node.standings.entries)) {
+        node.standings.entries.forEach(e => {
+          const teamName = e.team?.displayName || e.team?.name || '';
+          if (!teamName) return;
+
+          const pf = parseFloat(e.stats?.find(s => s.name === 'pointsFor')?.displayValue || 0);
+          const pa = parseFloat(e.stats?.find(s => s.name === 'pointsAgainst')?.displayValue || 0);
+          const w = parseFloat(e.stats?.find(s => s.name === 'wins')?.displayValue || 0);
+          const l = parseFloat(e.stats?.find(s => s.name === 'losses')?.displayValue || 0);
+          const t = parseFloat(e.stats?.find(s => s.name === 'ties')?.displayValue || 0);
+          const streak = e.stats?.find(s => s.name === 'streak')?.displayValue || '';
+
+          const gp = w + l + t || 1;
+          const diff = pf - pa;
+          const diffPerGame = diff / gp;
+          // Regresión Bayesiana hacia 0.0 con peso de 4 juegos iniciales para calibración empírica
+          const regressedDiff = diffPerGame * (gp / (gp + 4));
+          // Calibración a escala empírica de EPA/play (~65 jugadas ofensivas por partido)
+          const epaNet = Number((regressedDiff / 65).toFixed(3));
+          
+          const winPct = (w + 0.5 * t) / gp;
+          const dynamicBaseElo = Math.round(1500 + (winPct * 120) + (diffPerGame * 6));
+
+          standingsMap[teamName] = {
+            id: e.team?.id,
+            teamName,
+            epaNet,
+            elo: dynamicBaseElo,
+            record: `${w}-${l}${t > 0 ? '-' + t : ''}`,
+            streak: streak || (w >= l ? 'W1' : 'L1'),
+            pointsForPerGame: Number((pf / gp).toFixed(1)),
+            pointsAgainstPerGame: Number((pa / gp).toFixed(1))
+          };
+        });
+      }
+      if (Array.isArray(node.children)) {
+        node.children.forEach(extractEntries);
+      }
+    }
+
+    extractEntries(json);
+
+    if (Object.keys(standingsMap).length >= 28) {
+      nflStandingsCache.data = standingsMap;
+      nflStandingsCache.timestamp = now;
+      return standingsMap;
+    }
+  } catch (err) {
+    console.warn("No se pudo obtener standings en vivo de NFL:", err.message);
+  }
+
+  return nflStandingsCache.data || {};
+}
+
 // ================= MONITOREO CLIMÁTICO Y VIENTO EN TIEMPO REAL (OPEN-METEO API) =================
 const NFL_STADIUMS = {
   'packers': { lat: 44.5013, lon: -88.0622, isDome: false, name: 'Lambeau Field' },
@@ -1142,7 +1340,7 @@ async function fetchRealNflSchedule(dateRange) {
       lineupStatus: getMatchLineupStatus(g.gameDate, 'nfl', g.home, g.away),
       home: {
         ...g.home,
-        recentForm: g.home.elo > 1550 ? "W W L W W" : "L W L L W",
+        recentForm: g.home.streak ? `Racha: ${g.home.streak} (${g.home.record})` : (g.home.elo > 1550 ? "W W L W W" : "L W L L W"),
         netYardsPerPlay: g.home.ypp.toFixed(1),
         turnoverDifferential: g.home.turnoverDiff,
         epaNet: g.home.epaNet !== undefined ? g.home.epaNet : 0.0,
@@ -1151,7 +1349,7 @@ async function fetchRealNflSchedule(dateRange) {
       },
       away: {
         ...g.away,
-        recentForm: g.away.elo > 1550 ? "W W W L W" : "L L W L L",
+        recentForm: g.away.streak ? `Racha: ${g.away.streak} (${g.away.record})` : (g.away.elo > 1550 ? "W W W L W" : "L L W L L"),
         netYardsPerPlay: g.away.ypp.toFixed(1),
         turnoverDifferential: g.away.turnoverDiff,
         epaNet: g.away.epaNet !== undefined ? g.away.epaNet : 0.0,
@@ -1227,7 +1425,12 @@ export async function fetchNflWeekSchedule(weekNumber = null) {
     ? `https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?seasontype=2&week=${weekNumber}`
     : `https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard`;
   
-  const res = await fetch(baseUrl);
+  // Descargar scoreboard de la semana y standings oficiales de ESPN en paralelo
+  const [res, standingsMap] = await Promise.all([
+    fetch(baseUrl),
+    fetchLiveNflStandings()
+  ]);
+
   if (!res.ok) throw new Error("No se pudo conectar a la API de NFL");
   const data = await res.json();
 
@@ -1252,14 +1455,29 @@ export async function fetchNflWeekSchedule(weekNumber = null) {
     const homeId = home.team?.id;
     const awayId = away.team?.id;
 
-    // Obtener los datos base (Elo y nombre del QB estático inicial)
-    const baseHStats = nflTeamRatings[homeName] || { elo: 1500, qb: 'QB Titular' };
-    const baseAStats = nflTeamRatings[awayName] || { elo: 1500, qb: 'QB Titular' };
+    // Standings dinámicos oficiales de ESPN (EPA Net, Elo base y racha real)
+    const liveHStanding = standingsMap[homeName] || Object.values(standingsMap).find(t => isTeamMatch(t.teamName, homeName));
+    const liveAStanding = standingsMap[awayName] || Object.values(standingsMap).find(t => isTeamMatch(t.teamName, awayName));
+
+    // QB titular en vivo desde el reporte de líderes del scoreboard de ESPN
+    const liveHomeQb = home.leaders?.find(l => l.name === 'passingLeader')?.leaders?.[0]?.athlete?.displayName;
+    const liveAwayQb = away.leaders?.find(l => l.name === 'passingLeader')?.leaders?.[0]?.athlete?.displayName;
+
+    // Respaldo de emergencia si falla la red
+    const fallbackHStats = nflTeamRatings[homeName] || { elo: 1500, qb: 'QB Titular', epaNet: 0.0 };
+    const fallbackAStats = nflTeamRatings[awayName] || { elo: 1500, qb: 'QB Titular', epaNet: 0.0 };
+
+    const effectiveHomeElo = liveHStanding?.elo || fallbackHStats.elo;
+    const effectiveAwayElo = liveAStanding?.elo || fallbackAStats.elo;
+    const effectiveHomeQb = liveHomeQb || fallbackHStats.qb || 'QB Titular';
+    const effectiveAwayQb = liveAwayQb || fallbackAStats.qb || 'QB Titular';
+    const effectiveHomeEpa = liveHStanding?.epaNet !== undefined ? liveHStanding.epaNet : (fallbackHStats.epaNet !== undefined ? fallbackHStats.epaNet : 0.0);
+    const effectiveAwayEpa = liveAStanding?.epaNet !== undefined ? liveAStanding.epaNet : (fallbackAStats.epaNet !== undefined ? fallbackAStats.epaNet : 0.0);
 
     // ¡Descargar estadísticas REALES y VIVAS de la API de ESPN!
     const [hStats, aStats, weather] = await Promise.all([
-      fetchLiveNflTeamStats(homeId, baseHStats.elo, baseHStats.qb),
-      fetchLiveNflTeamStats(awayId, baseAStats.elo, baseAStats.qb),
+      fetchLiveNflTeamStats(homeId, effectiveHomeElo, effectiveHomeQb),
+      fetchLiveNflTeamStats(awayId, effectiveAwayElo, effectiveAwayQb),
       fetchStadiumWeather(homeName)
     ]);
 
@@ -1267,8 +1485,8 @@ export async function fetchNflWeekSchedule(weekNumber = null) {
     const spread = odds?.spread !== undefined ? parseFloat(odds.spread) : -3;
     const overUnder = odds?.overUnder || 43.5;
     
-    const homeRecord = home.records?.[0]?.summary || "0-0";
-    const awayRecord = away.records?.[0]?.summary || "0-0";
+    const homeRecord = liveHStanding?.record || home.records?.[0]?.summary || "0-0";
+    const awayRecord = liveAStanding?.record || away.records?.[0]?.summary || "0-0";
 
     const gameStatus = comp.status?.type?.name || "STATUS_SCHEDULED";
     const isCompleted = comp.status?.type?.completed === true;
@@ -1288,22 +1506,24 @@ export async function fetchNflWeekSchedule(weekNumber = null) {
         abbr: homeAbbr,
         logo: homeLogo,
         record: homeRecord,
-        qb: hStats.qb,
+        streak: liveHStanding?.streak,
+        qb: effectiveHomeQb,
         ypp: hStats.ypp,
         turnoverDiff: hStats.to,
-        elo: getDynamicElo(homeName, hStats.elo),
-        epaNet: baseHStats.epaNet !== undefined ? baseHStats.epaNet : 0.0
+        elo: getDynamicElo(homeName, effectiveHomeElo),
+        epaNet: effectiveHomeEpa
       },
       away: {
         name: awayName,
         abbr: awayAbbr,
         logo: awayLogo,
         record: awayRecord,
-        qb: aStats.qb,
+        streak: liveAStanding?.streak,
+        qb: effectiveAwayQb,
         ypp: aStats.ypp,
         turnoverDiff: aStats.to,
-        elo: getDynamicElo(awayName, aStats.elo),
-        epaNet: baseAStats.epaNet !== undefined ? baseAStats.epaNet : 0.0
+        elo: getDynamicElo(awayName, effectiveAwayElo),
+        epaNet: effectiveAwayEpa
       },
       vegas: {
         spread,

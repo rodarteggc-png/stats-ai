@@ -1,5 +1,7 @@
 // src/services/history.js
 // SISTEMA DE MEMORIA ACTIVA, AUDITORÍA FORENSE, ELO DINÁMICO, APRENDIZAJE CONTINUO Y AUTO-VERIFICACIÓN CON APIS EN VIVO
+import defaultLessons from '../data/lessons.json' with { type: 'json' };
+import defaultEloData from '../data/dynamicElo.json' with { type: 'json' };
 
 const STORAGE_KEY = 'fstats_memory';
 const LESSONS_KEY = 'fstats_team_lessons';
@@ -11,13 +13,10 @@ const MODEL = "gemini-3.6-flash";
 
 export function seedInitialMemory() {
   if (typeof window === 'undefined' || !localStorage) return;
-  // Limpiar cualquier semilla artificial previa que distorsionaba a White Sox, América o Cowboys
   try {
-    const existingLessons = localStorage.getItem(LESSONS_KEY);
-    if (existingLessons) {
-      const parsed = JSON.parse(existingLessons);
-      const filtered = parsed.filter(l => !l.id?.startsWith('seed'));
-      localStorage.setItem(LESSONS_KEY, JSON.stringify(filtered));
+    const existing = localStorage.getItem(LESSONS_KEY);
+    if (!existing && Array.isArray(defaultLessons)) {
+      localStorage.setItem(LESSONS_KEY, JSON.stringify(defaultLessons));
     }
   } catch {
     // Ignorar errores de parseo
@@ -25,15 +24,20 @@ export function seedInitialMemory() {
 }
 seedInitialMemory();
 
-// --- SISTEMA ELO DINÁMICO CON K-FACTOR CALIBRADO ---
+// --- SISTEMA ELO DINÁMICO CON K-FACTOR CALIBRADO, HFA Y MARGEN DE VICTORIA (MOV) ---
+let nodeEloMemoryCache = null;
+
 export function getDynamicEloStore() {
-  if (typeof window === 'undefined' || !localStorage) return {};
-  try {
-    const raw = localStorage.getItem(DYNAMIC_ELO_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch (e) {
-    return {};
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const raw = localStorage.getItem(DYNAMIC_ELO_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch (e) {}
   }
+  if (!nodeEloMemoryCache) {
+    nodeEloMemoryCache = (defaultEloData && typeof defaultEloData === 'object') ? { ...defaultEloData } : {};
+  }
+  return nodeEloMemoryCache;
 }
 
 export function getDynamicElo(teamName, defaultElo = 1500) {
@@ -49,7 +53,6 @@ export function getDynamicElo(teamName, defaultElo = 1500) {
 }
 
 export function updateDynamicElo(sport, homeTeam, awayTeam, homeScore, awayScore) {
-  if (typeof window === 'undefined' || !localStorage) return;
   if (!homeTeam || !awayTeam || isNaN(homeScore) || isNaN(awayScore)) return;
 
   const store = getDynamicEloStore();
@@ -59,18 +62,17 @@ export function updateDynamicElo(sport, homeTeam, awayTeam, homeScore, awayScore
   const hElo = getDynamicElo(homeTeam, 1500);
   const aElo = getDynamicElo(awayTeam, 1500);
 
-  // K-Factors calibrados según volatilidad del deporte:
-  // Fútbol = 25, NFL = 20, MLB = 16 (temporada de 162 juegos)
-  let kFactor = 22;
-  if (sport === 'futbol') kFactor = 25;
-  else if (sport === 'nfl') kFactor = 20;
-  else if (sport === 'mlb') kFactor = 16;
+  // 1. Ventaja de Localía (Home Field Advantage) en puntos Elo
+  let hfa = 0;
+  if (sport === 'futbol') hfa = 65;       // ~0.35 goles esperados
+  else if (sport === 'nfl') hfa = 55;     // ~2.5 - 3.0 pts de spread
+  else if (sport === 'mlb') hfa = 25;     // ~54% win rate base de local
 
-  // Expected score
-  const expectedHome = 1 / (1 + Math.pow(10, (aElo - hElo) / 400));
+  // 2. Expected score considerando la ventaja de localía
+  const expectedHome = 1 / (1 + Math.pow(10, (aElo - (hElo + hfa)) / 400));
   const expectedAway = 1 - expectedHome;
 
-  // Actual score
+  // 3. Actual score
   let actualHome = 0.5;
   let actualAway = 0.5;
   if (homeScore > awayScore) {
@@ -81,16 +83,30 @@ export function updateDynamicElo(sport, homeTeam, awayTeam, homeScore, awayScore
     actualAway = 1.0;
   }
 
+  // 4. Margen de Victoria (Margin of Victory Multiplier) calibrado estilo FiveThirtyEight
+  const scoreDiff = Math.abs(homeScore - awayScore);
+  const movMultiplier = Math.min(2.5, Math.max(0.85, Math.log(scoreDiff + 1) * 0.95 + 0.35));
+
+  // 5. K-Factors calibrados según volatilidad del deporte:
+  let baseK = 22;
+  if (sport === 'futbol') baseK = 25;
+  else if (sport === 'nfl') baseK = 20;
+  else if (sport === 'mlb') baseK = 14;   // Temporada de 162 juegos
+
+  const kFactor = baseK * (scoreDiff > 0 ? movMultiplier : 1.0);
+
   const newHomeElo = Math.round(hElo + kFactor * (actualHome - expectedHome));
   const newAwayElo = Math.round(aElo + kFactor * (actualAway - expectedAway));
 
   store[hNorm] = newHomeElo;
   store[aNorm] = newAwayElo;
 
-  try {
-    localStorage.setItem(DYNAMIC_ELO_KEY, JSON.stringify(store));
-  } catch (e) {
-    console.warn("No se pudo guardar Elo dinámico en localStorage:", e);
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      localStorage.setItem(DYNAMIC_ELO_KEY, JSON.stringify(store));
+    } catch (e) {
+      console.warn("No se pudo guardar Elo dinámico en localStorage:", e);
+    }
   }
 
   return { homeElo: newHomeElo, awayElo: newAwayElo };
@@ -109,14 +125,26 @@ export function getHistory(sportFilter = null) {
 }
 
 export function getAllLessons(sportFilter = null) {
-  const data = localStorage.getItem(LESSONS_KEY);
-  if (!data) return [];
-  try {
-    const parsed = JSON.parse(data);
-    return sportFilter ? parsed.filter(l => (l.sport === sportFilter || (!l.sport && sportFilter === 'futbol'))) : parsed;
-  } catch (e) {
-    return [];
+  let lessons = [];
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const data = localStorage.getItem(LESSONS_KEY);
+      if (data) {
+        lessons = JSON.parse(data);
+      }
+    } catch (e) {
+      lessons = [];
+    }
   }
+
+  // Fallback isomórfico para Node.js (alertEngine) o si localStorage está vacío
+  if (!lessons || lessons.length === 0) {
+    lessons = Array.isArray(defaultLessons) ? defaultLessons : [];
+  }
+
+  return sportFilter 
+    ? lessons.filter(l => (l.sport === sportFilter || (!l.sport && sportFilter === 'futbol')))
+    : lessons;
 }
 
 function americanToDecimal(american) {
@@ -125,6 +153,20 @@ function americanToDecimal(american) {
   if (isNaN(val)) return null;
   if (val > 0) return ((val / 100) + 1).toFixed(2);
   return ((100 / Math.abs(val)) + 1).toFixed(2);
+}
+
+function extractOddsFromEspn(oddsObj) {
+  if (!oddsObj) return {};
+  const getDec = (val) => val ? americanToDecimal(val) : null;
+  return {
+    closingHome: getDec(oddsObj.moneyline?.home?.close?.odds || oddsObj.homeTeamOdds?.moneyLine || oddsObj.homeTeamOdds?.close?.odds),
+    closingAway: getDec(oddsObj.moneyline?.away?.close?.odds || oddsObj.awayTeamOdds?.moneyLine || oddsObj.awayTeamOdds?.close?.odds),
+    closingDraw: getDec(oddsObj.moneyline?.draw?.close?.odds || oddsObj.drawOdds?.moneyLine || oddsObj.drawOdds?.close?.odds),
+    closingSpreadHome: getDec(oddsObj.pointSpread?.home?.close?.odds),
+    closingSpreadAway: getDec(oddsObj.pointSpread?.away?.close?.odds),
+    closingOver: getDec(oddsObj.total?.over?.close?.odds),
+    closingUnder: getDec(oddsObj.total?.under?.close?.odds)
+  };
 }
 
 // Catálogo exhaustivo de alias y variaciones de nombres de equipos para cruces 100% infalibles
@@ -192,6 +234,20 @@ export const TEAM_ALIASES = [
   ['inter', 'inter milan', 'internazionale'],
   ['milan', 'ac milan'],
   ['juventus', 'juve'],
+  // Fútbol Femenil & Selecciones
+  ['rayadas', 'monterrey femenil', 'cf monterrey femenil'],
+  ['tigres femenil', 'tigres uanl femenil', 'amazonas'],
+  ['america femenil', 'club america femenil', 'aguilas femenil'],
+  ['chivas femenil', 'guadalajara femenil'],
+  ['pachuca femenil', 'tuzas'],
+  ['barcelona femenil', 'barca femeni', 'fc barcelona f'],
+  ['real madrid femenil', 'real madrid femenino'],
+  ['chelsea women', 'chelsea fc women'],
+  ['san diego wave', 'wave fc'],
+  ['gotham fc', 'ny/nj gotham fc'],
+  ['portland thorns', 'thorns fc'],
+  ['estados unidos', 'usa', 'united states', 'usmnt'],
+  ['mexico', 'méxico', 'miseleccionmx', 'el tri'],
   // MLB
   ['new york yankees', 'ny yankees', 'yankees'],
   ['new york mets', 'ny mets', 'mets'],
@@ -398,8 +454,6 @@ export function updatePredictionStatus(id, status, details = '', closingOddsVal 
 
     if (!closing && history[index].closingOdds) {
       closing = parseFloat(history[index].closingOdds);
-    } else if (!closing) {
-      closing = parseFloat(history[index].match?.market?.current || placed);
     }
 
     if (closing && placed > 0 && closing > 0) {
@@ -459,7 +513,11 @@ export function getLearnedAdjustmentsForMatch(homeTeam = '', awayTeam = '') {
       needsSave = true;
     }
   });
-  if (needsSave) localStorage.setItem(LESSONS_KEY, JSON.stringify(allLessons));
+  if (needsSave && typeof window !== 'undefined' && window.localStorage) {
+    try {
+      localStorage.setItem(LESSONS_KEY, JSON.stringify(allLessons));
+    } catch (e) {}
+  }
 
   const lessons = allLessons.filter(l => l.active !== false);
   let homePenalty = 0;
@@ -478,7 +536,7 @@ export function getLearnedAdjustmentsForMatch(homeTeam = '', awayTeam = '') {
   lessons.forEach(l => {
     const lTeam = l.team || '';
     const decay = getDecayFactor(l);
-    const effectivePenalty = (l.penaltyModifier || 0.05) * decay;
+    const effectivePenalty = (l.penaltyModifier || 0.04) * decay;
 
     if (isTeamMatch(homeTeam, lTeam)) {
       homePenalty += effectivePenalty;
@@ -490,9 +548,13 @@ export function getLearnedAdjustmentsForMatch(homeTeam = '', awayTeam = '') {
     }
   });
 
+  // Cap de seguridad estricto (máximo 3.5% o 0.035) para evitar sesgo de recencia desmedido
+  const boundedHomePenalty = Number(Math.min(homePenalty, 0.035).toFixed(3));
+  const boundedAwayPenalty = Number(Math.min(awayPenalty, 0.035).toFixed(3));
+
   return {
-    homePenalty: 0, // Desactivado para mantener matemáticas puras y objetivas (cero sesgo de recencia)
-    awayPenalty: 0,
+    homePenalty: boundedHomePenalty,
+    awayPenalty: boundedAwayPenalty,
     lessons: matchLessons
   };
 }
@@ -615,6 +677,26 @@ export async function autoVerifyResultsWithAPIs(sportFilter = null) {
   const completedGames = [];
 
   // 1. Descargar partidos completados de MLB con Linescore para F5
+  const mlbClosingOddsMap = {};
+  for (const dStr of recentEspnDates) {
+    try {
+      const resEspnMlb = await fetch(`https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=${dStr}`);
+      if (resEspnMlb.ok) {
+        const dataEspnMlb = await resEspnMlb.json();
+        dataEspnMlb.events?.forEach(ev => {
+          const comp = ev.competitions?.[0];
+          const home = comp?.competitors?.find(c => c.homeAway === 'home');
+          const away = comp?.competitors?.find(c => c.homeAway === 'away');
+          if (home && away && comp.odds?.[0]) {
+            const hName = home.team?.displayName || '';
+            const aName = away.team?.displayName || '';
+            mlbClosingOddsMap[`${normalizeTeamName(hName)}_${normalizeTeamName(aName)}`] = extractOddsFromEspn(comp.odds[0]);
+          }
+        });
+      }
+    } catch (e) {}
+  }
+
   try {
     const resMlb = await fetch(`https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=${startDateMlb}&endDate=${endDateMlb}&hydrate=linescore`);
     if (resMlb.ok) {
@@ -630,14 +712,20 @@ export async function autoVerifyResultsWithAPIs(sportFilter = null) {
               f5Away = innings.slice(0, 5).reduce((sum, inn) => sum + (inn.away?.runs || 0), 0);
             }
 
+            const hTeam = g.teams?.home?.team?.name || '';
+            const aTeam = g.teams?.away?.team?.name || '';
+            const mlbKey = `${normalizeTeamName(hTeam)}_${normalizeTeamName(aTeam)}`;
+            const mlbOdds = mlbClosingOddsMap[mlbKey] || {};
+
             completedGames.push({
               sport: 'mlb',
-              home: g.teams?.home?.team?.name || '',
+              home: hTeam,
               homeScore: parseInt(g.teams?.home?.score || 0, 10),
-              away: g.teams?.away?.team?.name || '',
+              away: aTeam,
               awayScore: parseInt(g.teams?.away?.score || 0, 10),
               f5HomeScore: f5Home,
-              f5AwayScore: f5Away
+              f5AwayScore: f5Away,
+              ...mlbOdds
             });
           }
         });
@@ -650,7 +738,9 @@ export async function autoVerifyResultsWithAPIs(sportFilter = null) {
   // 2. Descargar partidos completados de Fútbol (ESPN)
   const leagues = [
     'uefa.champions', 'uefa.europa', 'uefa.europa.conf',
+    'uefa.nations', 'concacaf.nations.league',
     'esp.1', 'eng.1', 'ita.1', 'ger.1', 'fra.1', 'mex.1',
+    'mex.w.1', 'usa.nwsl', 'esp.w.1', 'eng.w.1', 'uefa.wchampions',
     'conmebol.libertadores', 'conmebol.sudamericana',
     'usa.1', 'ksa.1', 'por.1', 'ned.1', 'sco.1', 'arg.1', 'bra.1'
   ];
@@ -668,9 +758,7 @@ export async function autoVerifyResultsWithAPIs(sportFilter = null) {
                 const home = comp.competitors?.find(c => c.homeAway === 'home');
                 const away = comp.competitors?.find(c => c.homeAway === 'away');
                 const oddsObj = comp.odds?.[0];
-                const closingHome = oddsObj?.homeTeamOdds?.moneyLine ? americanToDecimal(oddsObj.homeTeamOdds.moneyLine) : null;
-                const closingAway = oddsObj?.awayTeamOdds?.moneyLine ? americanToDecimal(oddsObj.awayTeamOdds.moneyLine) : null;
-                const closingDraw = oddsObj?.drawOdds?.moneyLine ? americanToDecimal(oddsObj.drawOdds.moneyLine) : null;
+                const odds = extractOddsFromEspn(oddsObj);
 
                 if (home && away) {
                   completedGames.push({
@@ -679,9 +767,7 @@ export async function autoVerifyResultsWithAPIs(sportFilter = null) {
                     homeScore: parseInt(home.score || 0, 10),
                     away: away.team?.displayName || '',
                     awayScore: parseInt(away.score || 0, 10),
-                    closingHome,
-                    closingAway,
-                    closingDraw
+                    ...odds
                   });
                 }
               }
@@ -706,8 +792,7 @@ export async function autoVerifyResultsWithAPIs(sportFilter = null) {
             const home = comp.competitors?.find(c => c.homeAway === 'home');
             const away = comp.competitors?.find(c => c.homeAway === 'away');
             const oddsObj = comp.odds?.[0];
-            const closingHome = oddsObj?.homeTeamOdds?.moneyLine ? americanToDecimal(oddsObj.homeTeamOdds.moneyLine) : null;
-            const closingAway = oddsObj?.awayTeamOdds?.moneyLine ? americanToDecimal(oddsObj.awayTeamOdds.moneyLine) : null;
+            const odds = extractOddsFromEspn(oddsObj);
 
             if (home && away) {
               completedGames.push({
@@ -716,8 +801,7 @@ export async function autoVerifyResultsWithAPIs(sportFilter = null) {
                 homeScore: parseInt(home.score || 0, 10),
                 away: away.team?.displayName || '',
                 awayScore: parseInt(away.score || 0, 10),
-                closingHome,
-                closingAway
+                ...odds
               });
             }
           }
@@ -761,13 +845,26 @@ export async function autoVerifyResultsWithAPIs(sportFilter = null) {
       let isWon = false;
       let resultDetails = "";
 
-      // Determinar cuota de cierre específica del pick para CLV
+      // Determinar cuota de cierre específica del pick para CLV real
       let matchClosingOdds = null;
-      if (pickStr.includes(itemHome.toLowerCase()) || pickStr.includes('local')) {
+      const isOver = pickStr.includes('over') || pickStr.includes('más de');
+      const isUnder = pickStr.includes('under') || pickStr.includes('menos de');
+      const isSpread = pickStr.includes('spread') || pickStr.includes('hándicap') || pickStr.includes('handicap') || pickStr.includes('cubre línea') || pickStr.includes('cubre linea') || pickStr.includes('runline') || pickStr.includes('+') || pickStr.includes('-');
+
+      const isHomeInPick = isTeamMatch(itemHome, pickStr) || pickStr.includes('local');
+      const isAwayInPick = isTeamMatch(itemAway, pickStr) || pickStr.includes('visita') || pickStr.includes('visitante');
+
+      if (isOver && matchFound.closingOver) {
+        matchClosingOdds = matchFound.closingOver;
+      } else if (isUnder && matchFound.closingUnder) {
+        matchClosingOdds = matchFound.closingUnder;
+      } else if (isSpread && (matchFound.closingSpreadHome || matchFound.closingSpreadAway)) {
+        matchClosingOdds = isHomeInPick ? matchFound.closingSpreadHome : matchFound.closingSpreadAway;
+      } else if (isHomeInPick && matchFound.closingHome) {
         matchClosingOdds = matchFound.closingHome;
-      } else if (pickStr.includes(itemAway.toLowerCase()) || pickStr.includes('visita') || pickStr.includes('visitante')) {
+      } else if (isAwayInPick && matchFound.closingAway) {
         matchClosingOdds = matchFound.closingAway;
-      } else if (pickStr.includes('empate') || pickStr.includes('draw')) {
+      } else if ((pickStr.includes('empate') || pickStr.includes('draw')) && matchFound.closingDraw) {
         matchClosingOdds = matchFound.closingDraw;
       }
 

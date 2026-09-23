@@ -9,13 +9,32 @@ import { calculateMlbProbabilities } from '../src/utils/sabermetrics.js';
 import { calculateNflProbabilities } from '../src/utils/gridiron.js';
 import { simulateSoccerMatch, simulateMlbMatch, simulateNflMatch, bayesianCalibrate } from '../src/utils/monteCarlo.js';
 import { evaluateEnsembleConsensus } from '../src/utils/ensemble.js';
+import { getLearnedAdjustmentsForMatch } from '../src/services/history.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Cargar variables de entorno locales de .env si no vienen inyectadas en el proceso
+try {
+  const envPath = path.resolve(__dirname, '../.env');
+  if (fs.existsSync(envPath)) {
+    const envContent = fs.readFileSync(envPath, 'utf-8');
+    envContent.split('\n').forEach(line => {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith('#') && trimmed.includes('=')) {
+        const [k, ...v] = trimmed.split('=');
+        const key = k.trim();
+        if (!process.env[key]) {
+          process.env[key] = v.join('=').trim();
+        }
+      }
+    });
+  }
+} catch (e) {}
+
 // 1. CREDENCIALES TELEGRAM
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8412345607:AAFKRWxxkMzX9KqPRZZg4csWzKdnFsZAPWY';
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '-1004410747027';
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 // 2. ARCHIVO DE MEMORIA ANTI-SPAM (DEDUPLICACIÓN)
 const cacheDir = process.env.VERCEL ? '/tmp' : __dirname;
@@ -107,11 +126,12 @@ export async function runAlertEngine(options = {}) {
       const diffHours = (new Date() - new Date(m.gameDate)) / (1000 * 60 * 60);
       if (diffHours > 4.5) return;
 
+      const learned = getLearnedAdjustmentsForMatch(m.home.name, m.away.name);
       const probs = calculateMatchProbabilities(
         m.home.xG, m.away.xG,
         m.home.elo, m.away.elo,
         m.home.daysRest, m.away.daysRest,
-        0, 0
+        learned.homePenalty, learned.awayPenalty
       );
 
       const hWin = parseFloat(probs.homeWin);
@@ -251,12 +271,13 @@ export async function runAlertEngine(options = {}) {
       const homePitcherWhip = m.home.pitcher?.whip || '1.30';
       const awayPitcherWhip = m.away.pitcher?.whip || '1.30';
 
+      const learned = getLearnedAdjustmentsForMatch(m.home.name, m.away.name);
       const sabers = calculateMlbProbabilities(
         m.home.ops || '0.730', awayPitcherWhip,
         m.away.ops || '0.710', homePitcherWhip,
         m.home.elo || 1500, m.away.elo || 1500,
         m.home.daysRest || 1, m.away.daysRest || 1,
-        0, 0,
+        learned.homePenalty, learned.awayPenalty,
         m.home.name
       );
 
@@ -339,10 +360,11 @@ export async function runAlertEngine(options = {}) {
       const awayEpa = m.away?.epaNet !== undefined ? m.away.epaNet : null;
       const windMph = m.weather?.windMph || 0;
 
+      const learned = getLearnedAdjustmentsForMatch(m.home.name, m.away.name);
       const nflProbs = calculateNflProbabilities(
         homeYpp, homeTo,
         awayYpp, awayTo,
-        0, 0,
+        learned.homePenalty, learned.awayPenalty,
         spread,
         homeEpa, awayEpa,
         totalLine,
@@ -402,8 +424,8 @@ export async function runAlertEngine(options = {}) {
           probs: nflProbs
         });
       }
-      // 3. Ventaja Cuantitativa contra el Spread (Local Cubre)
-      else if (homeCoverProb >= 54) {
+      // 3. Ventaja Cuantitativa contra el Spread (Local Cubre con Veto a Spreads Pesados > 7.5)
+      else if (homeCoverProb >= 57.0 && Math.abs(spread) <= 7.5) {
         const ev = Number(((homeCoverProb / 100 * 1.91 - 1) * 100).toFixed(1));
         rawOpportunities.push({
           id: `nfl-spread-h-${m.id}`,
@@ -417,16 +439,17 @@ export async function runAlertEngine(options = {}) {
           odds: '1.91',
           edgeVal: ev,
           edgeStr: `Prob. Cubrir: ${homeCoverProb.toFixed(0)}% | EV: +${ev}%`,
-          argument: `Monte Carlo proyecta margen local de ${expectedHomeLead.toFixed(1)} pts frente a línea de ${spreadFmt} de Las Vegas.`,
+          argument: `Monte Carlo proyecta margen local de ${expectedHomeLead.toFixed(1)} pts frente a línea de ${spreadFmt} de Las Vegas. Spread seguro (<= 7.5 pts).`,
           mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel, iterations: 10000 },
           match: m,
           probs: nflProbs
         });
       }
       // 4. Ventaja Cuantitativa contra el Spread (Underdog o Visitante Cubre)
-      else if (awayCoverProb >= 54) {
+      else if (awayCoverProb >= 56.5) {
         const underdogTeam = spread < 0 ? m.away.name : m.home.name;
         const underdogSpread = spread < 0 ? `+${Math.abs(spread)}` : `${-spread}`;
+        const isHeavySpread = Math.abs(spread) > 7.5;
         const ev = Number(((awayCoverProb / 100 * 1.91 - 1) * 100).toFixed(1));
         rawOpportunities.push({
           id: `nfl-spread-a-${m.id}`,
@@ -434,13 +457,15 @@ export async function runAlertEngine(options = {}) {
           league: 'NFL',
           game: `${m.home.name} vs ${m.away.name}`,
           gameDate: m.gameDate,
-          type: '🏈 VALOR EN PUNTOS UNDERDOG (NFL)',
+          type: isHeavySpread ? '🛡️ PROTECCIÓN UNDERDOG ANTE SPREAD PESADO (NFL)' : '🏈 VALOR EN PUNTOS UNDERDOG (NFL)',
           pick: `${underdogTeam} ${underdogSpread} (Hándicap Positivo)`,
           prob: `${awayCoverProb.toFixed(0)}%`,
           odds: '1.91',
           edgeVal: ev,
           edgeStr: `Prob. Cubrir: ${awayCoverProb.toFixed(0)}% | EV: +${ev}%`,
-          argument: `Las Vegas sobrevaloró la línea. Simulación otorga paridad en yardas por jugada y alto valor a los puntos del visitante.`,
+          argument: isHeavySpread
+            ? `Las Vegas infló en exceso al favorito (${spreadFmt} > 7.5 pts). Valor defensivo de alto calibre en Underdog para resistir Backdoor Covers.`
+            : `Las Vegas sobrevaloró la línea. Simulación otorga paridad en yardas por jugada y alto valor a los puntos del visitante.`,
           mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel, iterations: 10000 },
           match: m,
           probs: nflProbs

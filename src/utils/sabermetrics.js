@@ -124,6 +124,12 @@ export function calculateMlbProbabilities(
   homeExpectedRuns += (eloDiff / 2500);
   awayExpectedRuns -= (eloDiff / 2500);
 
+  // Modificador de Memoria de Lecciones Aprendidas (IA con Cap de Seguridad)
+  const hPen = parseFloat(homePenalty) || 0;
+  const aPen = parseFloat(awayPenalty) || 0;
+  if (hPen > 0) homeExpectedRuns *= (1 - Math.min(hPen, 0.04));
+  if (aPen > 0) awayExpectedRuns *= (1 - Math.min(aPen, 0.04));
+
   homeExpectedRuns = Math.max(1.0, homeExpectedRuns);
   awayExpectedRuns = Math.max(1.0, awayExpectedRuns);
 

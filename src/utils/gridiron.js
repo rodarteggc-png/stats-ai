@@ -139,14 +139,16 @@ export function evaluateNflSpreadValue(expectedHomeLead, vegasSpread) {
   const absVegas = Math.abs(vegasSpread);
   let keyAlert = null;
   let trapWarning = null;
+  let heavySpreadWarning = null;
+  let vetoFavoriteSpread = false;
 
-  // Detección de trampa de medio punto en 3 (el número más importante de la NFL)
+  // 1. Detección de trampa de medio punto en 3 y 7 (los números más cruciales de la NFL)
   if (absVegas === 3.5) {
-    if (vegasSpread < 0 && expectedHomeLead >= 2.5 && expectedHomeLead <= 4.2) {
+    if (vegasSpread < 0 && expectedHomeLead >= 2.0 && expectedHomeLead <= 4.2) {
       trapWarning = "⚠️ Trampa de Medio Punto en 3.5: Las Vegas infló al favorito. Gran valor cuantitativo en el Underdog (+3.5).";
     }
   } else if (absVegas === 7.5) {
-    if (vegasSpread < 0 && expectedHomeLead >= 6.5 && expectedHomeLead <= 8.2) {
+    if (vegasSpread < 0 && expectedHomeLead >= 6.0 && expectedHomeLead <= 8.2) {
       trapWarning = "⚠️ Trampa de Medio Punto en 7.5: Proyección cerrada en un touchdown. Gran valor en Underdog (+7.5).";
     }
   } else if (absVegas === 2.5) {
@@ -155,10 +157,20 @@ export function evaluateNflSpreadValue(expectedHomeLead, vegasSpread) {
     }
   }
 
+  // 2. Filtro de Seguridad Preventivo: Spreads Pesados (> 7.5 pts)
+  // En la NFL moderna, los favoritos pesados juegan prevent defense al final y sufren Backdoor Covers frecuentes.
+  if (absVegas > 7.5) {
+    vetoFavoriteSpread = true;
+    heavySpreadWarning = `⚠️ Veto Preventivo de Spread Pesado (${absVegas} pts > 7.5): Alto riesgo de Backdoor Cover en 4to cuarto. No apostar al favorito en hándicap abultado.`;
+  }
+
   return {
     marginDiff: Number(marginDiff.toFixed(1)),
     keyAlert,
-    trapWarning
+    trapWarning,
+    heavySpreadWarning,
+    vetoFavoriteSpread,
+    absVegas
   };
 }
 
@@ -192,6 +204,12 @@ export function calculateNflProbabilities(
   } else {
     predictedPointSpread = (yppDiff * 7) + (toDiff * 3) + homeFieldAdvantage;
   }
+
+  // Modificador de Memoria de Lecciones Aprendidas (IA con Cap de Seguridad)
+  const hPen = parseFloat(homePenalty) || 0;
+  const aPen = parseFloat(awayPenalty) || 0;
+  const penaltySpreadAdjustment = (Math.min(hPen, 0.04) - Math.min(aPen, 0.04)) * 30;
+  predictedPointSpread -= penaltySpreadAdjustment;
 
   // Convertir el Point Spread a Probabilidad de Victoria (Win Probability) vía Normal CDF (σ = 13.45)
   const homeWinProb = normalCdf(predictedPointSpread, 0, 13.45) * 100;
