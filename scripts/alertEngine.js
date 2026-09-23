@@ -108,9 +108,11 @@ function getFairOddsDecimal(probPct) {
 export async function runAlertEngine(options = {}) {
   const isDryRun = options.dryRun || process.argv.includes('--dry-run');
   const isVerbose = options.verbose || process.argv.includes('--verbose');
-  const maxPicksToSend = options.maxPicks || 5;
+  const maxPicksToSend = options.maxPicks || 6;
+  const rangeArg = process.argv.find(a => a.startsWith('--range='));
+  const dateRange = options.dateRange || (rangeArg ? rangeArg.split('=')[1] : 'fin_de_semana');
 
-  console.log(`[${new Date().toISOString()}] 🚀 Iniciando Escaneo Cuantitativo Stats-AI Pro...`);
+  console.log(`[${new Date().toISOString()}] 🚀 Iniciando Escaneo Cuantitativo Stats-AI Pro (Rango: ${dateRange})...`);
   if (isDryRun) console.log('⚠️ Modo Dry-Run activo: no se mandarán mensajes reales.');
 
   const sentCache = getSentAlertsCache();
@@ -118,7 +120,7 @@ export async function runAlertEngine(options = {}) {
 
   // ================= A. ESCANEO DE FÚTBOL =================
   try {
-    const soccerMatches = await fetchDailySchedule('futbol', 'hoy');
+    const soccerMatches = await fetchDailySchedule('futbol', dateRange);
     if (isVerbose) console.log(`⚽ Partidos de Fútbol descargados: ${soccerMatches.length}`);
 
     soccerMatches.forEach(m => {
@@ -260,7 +262,7 @@ export async function runAlertEngine(options = {}) {
 
   // ================= B. ESCANEO DE MLB =================
   try {
-    const mlbMatches = await fetchDailySchedule('mlb', 'hoy');
+    const mlbMatches = await fetchDailySchedule('mlb', dateRange);
     if (isVerbose) console.log(`⚾ Partidos de MLB descargados: ${mlbMatches.length}`);
 
     mlbMatches.forEach(m => {
@@ -342,7 +344,7 @@ export async function runAlertEngine(options = {}) {
 
   // ================= C. ESCANEO DE NFL =================
   try {
-    const nflMatches = await fetchDailySchedule('nfl', 'hoy');
+    const nflMatches = await fetchDailySchedule('nfl', dateRange);
     if (isVerbose) console.log(`🏈 Partidos de NFL descargados: ${nflMatches.length}`);
 
     nflMatches.forEach(m => {

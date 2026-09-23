@@ -207,6 +207,13 @@ function getDateRanges(dateRange) {
       espnDatesList.push(formatEspn(curr));
       curr.setDate(curr.getDate() + 1);
     }
+  } else if (dateRange === "semana") {
+    endDate.setDate(now.getDate() + 6);
+    const curr = new Date(startDate);
+    while (curr <= endDate) {
+      espnDatesList.push(formatEspn(curr));
+      curr.setDate(curr.getDate() + 1);
+    }
   } else {
     // "hoy" o predeterminado
     espnDatesList = [formatEspn(startDate)];

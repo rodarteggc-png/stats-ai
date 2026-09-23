@@ -31,7 +31,7 @@ export function evaluateEnsembleConsensus({
   prob = null,
   odds = null
 }) {
-  const sLower = (sport || '').toLowerCase();
+  const sLower = (sport || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const breakdown = [];
 
   // =========================================================================
