@@ -15,12 +15,15 @@ export default async function handler(req, res) {
       });
     }
 
-    const result = await runAlertEngine();
+    const force = req.query?.force === 'true' || req.query?.force === '1';
+    const result = await runAlertEngine({ force });
     return res.status(200).json({
       success: true,
       timestamp: new Date().toISOString(),
       sentCount: result.sentCount,
-      totalOpportunities: result.totalOpportunities
+      totalOpportunities: result.totalOpportunities,
+      forced: force,
+      chatTarget: process.env.TELEGRAM_CHAT_ID ? `${process.env.TELEGRAM_CHAT_ID.slice(0, 4)}...${process.env.TELEGRAM_CHAT_ID.slice(-4)}` : 'none'
     });
   } catch (error) {
     console.error('Error en api/scan:', error);

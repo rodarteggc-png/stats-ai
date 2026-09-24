@@ -74,13 +74,21 @@ async function sendTelegramMessage(text, dryRun = false) {
     return true;
   }
 
-  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+  const botToken = process.env.TELEGRAM_BOT_TOKEN || TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID || TELEGRAM_CHAT_ID;
+
+  if (!botToken || !chatId) {
+    console.error('Faltan credenciales de Telegram: TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID no definidos.');
+    return false;
+  }
+
+  const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        chat_id: TELEGRAM_CHAT_ID,
+        chat_id: chatId,
         text: text,
         parse_mode: 'Markdown',
         disable_web_page_preview: true
@@ -88,7 +96,7 @@ async function sendTelegramMessage(text, dryRun = false) {
     });
     const data = await res.json();
     if (!data.ok) {
-      console.error('Error enviando a Telegram:', data.description);
+      console.error(`Error enviando a Telegram (Chat: ${chatId}):`, data.description);
       return false;
     }
     return true;
@@ -108,6 +116,7 @@ function getFairOddsDecimal(probPct) {
 export async function runAlertEngine(options = {}) {
   const isDryRun = options.dryRun || process.argv.includes('--dry-run');
   const isVerbose = options.verbose || process.argv.includes('--verbose');
+  const isForce = options.force || process.argv.includes('--force');
   const maxPicksToSend = options.maxPicks || 6;
   const rangeArg = process.argv.find(a => a.startsWith('--range='));
   const dateRange = options.dateRange || (rangeArg ? rangeArg.split('=')[1] : 'fin_de_semana');
@@ -563,8 +572,8 @@ export async function runAlertEngine(options = {}) {
     return b.edgeVal - a.edgeVal;
   });
 
-  // 5. De ese Top, verificar cuáles NO se han enviado hoy
-  const toSend = topSlate.filter(pick => !sentCache[pick.id]);
+  // 5. De ese Top, verificar cuáles NO se han enviado hoy (a menos que se use force)
+  const toSend = isForce ? topSlate : topSlate.filter(pick => !sentCache[pick.id]);
 
   if (isVerbose) {
     console.log(`Top ${maxPicksToSend} de la jornada: ${topSlate.length}`);
@@ -573,7 +582,7 @@ export async function runAlertEngine(options = {}) {
 
   if (toSend.length === 0) {
     console.log('✅ Mercado analizado. Las mejores selecciones de la jornada ya fueron notificadas hoy. Cero spam.');
-    return { sentCount: 0, totalAnalyzed: rawOpportunities.length };
+    return { sentCount: 0, totalAnalyzed: rawOpportunities.length, totalOpportunities: approvedOpps.length };
   }
 
   console.log(`📢 Enviando ${toSend.length} nueva(s) selección(es) Élite con Consenso a Telegram...`);
