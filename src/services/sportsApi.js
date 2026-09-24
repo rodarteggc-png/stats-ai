@@ -200,6 +200,13 @@ function getDateRanges(dateRange) {
     startDate.setDate(now.getDate() + 1);
     endDate.setDate(now.getDate() + 1);
     espnDatesList = [formatEspn(startDate)];
+  } else if (dateRange === "hoy_y_manana") {
+    endDate.setDate(now.getDate() + 1);
+    const curr = new Date(startDate);
+    while (curr <= endDate) {
+      espnDatesList.push(formatEspn(curr));
+      curr.setDate(curr.getDate() + 1);
+    }
   } else if (dateRange === "fin_de_semana") {
     endDate.setDate(now.getDate() + 3);
     const curr = new Date(startDate);

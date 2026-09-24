@@ -112,6 +112,27 @@ function getFairOddsDecimal(probPct) {
   return (100 / p).toFixed(2);
 }
 
+/**
+ * Verifica si un partido está dentro de la ventana óptima de tiempo (ej. próximas 36 horas)
+ * y descarta partidos pasados o que comiencen con demasiada anticipación (riesgo de lesiones/clima).
+ */
+function isMatchWithinHorizon(gameDate, maxHoursAhead = 36) {
+  if (!gameDate) return true;
+  const now = Date.now();
+  const matchTime = new Date(gameDate).getTime();
+  if (isNaN(matchTime)) return true;
+
+  const hoursUntilGame = (matchTime - now) / (1000 * 60 * 60);
+
+  // Descartar si el partido ya inició hace más de 10 minutos
+  if (hoursUntilGame < -0.15) return false;
+
+  // Descartar si excede la ventana máxima de anticipación (ej. domingo en jueves)
+  if (maxHoursAhead && hoursUntilGame > maxHoursAhead) return false;
+
+  return true;
+}
+
 // 4. MOTOR PRINCIPAL DE EVALUACIÓN CON CONSENSO TRIPARTITO
 export async function runAlertEngine(options = {}) {
   const isDryRun = options.dryRun || process.argv.includes('--dry-run');
@@ -119,9 +140,10 @@ export async function runAlertEngine(options = {}) {
   const isForce = options.force || process.argv.includes('--force');
   const maxPicksToSend = options.maxPicks || 6;
   const rangeArg = process.argv.find(a => a.startsWith('--range='));
-  const dateRange = options.dateRange || (rangeArg ? rangeArg.split('=')[1] : 'fin_de_semana');
+  const dateRange = options.dateRange || (rangeArg ? rangeArg.split('=')[1] : 'hoy_y_manana');
+  const maxHoursAhead = options.maxHoursAhead !== undefined ? options.maxHoursAhead : 36;
 
-  console.log(`[${new Date().toISOString()}] 🚀 Iniciando Escaneo Cuantitativo Stats-AI Pro (Rango: ${dateRange})...`);
+  console.log(`[${new Date().toISOString()}] 🚀 Iniciando Escaneo Cuantitativo Stats-AI Pro (Rango: ${dateRange}, Horizonte: ${maxHoursAhead}h)...`);
   if (isDryRun) console.log('⚠️ Modo Dry-Run activo: no se mandarán mensajes reales.');
 
   const sentCache = getSentAlertsCache();
@@ -134,8 +156,7 @@ export async function runAlertEngine(options = {}) {
 
     soccerMatches.forEach(m => {
       if (m.isCompleted) return;
-      const diffHours = (new Date() - new Date(m.gameDate)) / (1000 * 60 * 60);
-      if (diffHours > 4.5) return;
+      if (!isMatchWithinHorizon(m.gameDate, maxHoursAhead)) return;
 
       const learned = getLearnedAdjustmentsForMatch(m.home.name, m.away.name);
       const probs = calculateMatchProbabilities(
@@ -276,8 +297,7 @@ export async function runAlertEngine(options = {}) {
 
     mlbMatches.forEach(m => {
       if (m.isCompleted) return;
-      const diffHours = (new Date() - new Date(m.gameDate)) / (1000 * 60 * 60);
-      if (diffHours > 4.5) return;
+      if (!isMatchWithinHorizon(m.gameDate, maxHoursAhead)) return;
 
       const homePitcherWhip = m.home.pitcher?.whip || '1.30';
       const awayPitcherWhip = m.away.pitcher?.whip || '1.30';
@@ -358,8 +378,7 @@ export async function runAlertEngine(options = {}) {
 
     nflMatches.forEach(m => {
       if (m.isCompleted) return;
-      const diffHours = (new Date() - new Date(m.gameDate)) / (1000 * 60 * 60);
-      if (diffHours > 4.5) return;
+      if (!isMatchWithinHorizon(m.gameDate, maxHoursAhead)) return;
 
       const spread = m.vegas?.spread !== undefined ? m.vegas.spread : -3.5;
       const totalLine = m.vegas?.overUnder !== undefined ? m.vegas.overUnder : 44.5;
@@ -592,7 +611,9 @@ export async function runAlertEngine(options = {}) {
     let timeStr = 'Hoy';
     try {
       const gDate = new Date(pick.gameDate);
-      timeStr = gDate.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Mexico_City' });
+      const dayFmt = gDate.toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'America/Mexico_City' });
+      const hourFmt = gDate.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Mexico_City' });
+      timeStr = `${dayFmt} • ${hourFmt}`;
     } catch (e) {}
 
     const stabilityLine = pick.mcStats 
@@ -611,7 +632,7 @@ export async function runAlertEngine(options = {}) {
       ``,
       `🏆 *${pick.sport}* | ${pick.league}`,
       `⚔️ *${pick.game}*`,
-      `⏰ *Hora:* ${timeStr} (CDMX)`,
+      `⏰ *Fecha y Hora:* ${timeStr} (CDMX)`,
       ``,
       `📌 *SELECCIÓN RECOMENDADA:*`,
       `👉 *${pick.pick}*`,
