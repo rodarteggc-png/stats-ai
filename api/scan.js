@@ -16,12 +16,15 @@ export default async function handler(req, res) {
     }
 
     const force = req.query?.force === 'true' || req.query?.force === '1';
-    const result = await runAlertEngine({ force });
+    const audit = req.query?.audit === 'true' || req.query?.audit === '1';
+    const result = await runAlertEngine({ force, audit });
     return res.status(200).json({
       success: true,
       timestamp: new Date().toISOString(),
       sentCount: result.sentCount,
       totalOpportunities: result.totalOpportunities,
+      auditSent: result.auditSent,
+      auditSummary: result.auditSummary,
       forced: force,
       chatTarget: process.env.TELEGRAM_CHAT_ID ? `${process.env.TELEGRAM_CHAT_ID.slice(0, 4)}...${process.env.TELEGRAM_CHAT_ID.slice(-4)}` : 'none'
     });

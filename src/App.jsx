@@ -87,25 +87,22 @@ export default function App() {
   const [saveActionMsg, setSaveActionMsg] = useState("");
   const [backgroundVerifiedBanner, setBackgroundVerifiedBanner] = useState(null);
 
-  // Background Auto-Resolver al cargar la app: consulta marcadores oficiales de ESPN y MLB Stats API
+  // Background Auto-Resolver & Sincronizador de Telegram al cargar la app
   useEffect(() => {
-    const allPending = getHistory().filter(item => item.status === 'pending');
-    if (allPending.length > 0) {
-      autoVerifyResultsWithAPIs(null).then(res => {
-        if (res && res.verifiedCount > 0) {
-          loadHistoryAndLessons();
-          setBackgroundVerifiedBanner({
-            verifiedCount: res.verifiedCount,
-            wonCount: res.wonCount,
-            lostCount: res.lostCount,
-            pushCount: res.pushCount,
-            message: res.message
-          });
-        }
-      }).catch(err => {
-        console.warn("Background auto-verify:", err);
-      });
-    }
+    autoVerifyResultsWithAPIs(null).then(res => {
+      loadHistoryAndLessons();
+      if (res && res.verifiedCount > 0) {
+        setBackgroundVerifiedBanner({
+          verifiedCount: res.verifiedCount,
+          wonCount: res.wonCount || 0,
+          lostCount: res.lostCount || 0,
+          pushCount: res.pushCount || 0,
+          message: res.message
+        });
+      }
+    }).catch(err => {
+      console.warn("Background auto-verify:", err);
+    });
   }, []);
 
   // Auto-registro de apuestas enviadas desde alertas de Telegram (1-Click Bet Register)

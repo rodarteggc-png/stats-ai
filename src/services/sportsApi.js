@@ -186,40 +186,45 @@ export function getMatchLineupStatus(gameDate, sport = 'futbol', homeMeta = null
   return { isImminent: false, confirmed: true, label: "Normal", color: "#94a3b8", xgModifier: 0 };
 }
 
-// Helper para convertir fechas al formato requerido
+// Helper para convertir fechas al formato requerido (anclado a America/Mexico_City)
 function getDateRanges(dateRange) {
-  const now = new Date();
+  const cdmxTodayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+  const baseDate = new Date(`${cdmxTodayStr}T12:00:00Z`);
   const formatIso = (d) => d.toISOString().slice(0, 10);
   const formatEspn = (d) => d.toISOString().slice(0, 10).replace(/-/g, '');
 
-  let startDate = new Date(now);
-  let endDate = new Date(now);
+  let startDate = new Date(baseDate);
+  let endDate = new Date(baseDate);
   let espnDatesList = [];
 
-  if (dateRange === "manana") {
-    startDate.setDate(now.getDate() + 1);
-    endDate.setDate(now.getDate() + 1);
+  if (dateRange === "ayer") {
+    startDate.setUTCDate(baseDate.getUTCDate() - 1);
+    endDate.setUTCDate(baseDate.getUTCDate() - 1);
+    espnDatesList = [formatEspn(startDate)];
+  } else if (dateRange === "manana") {
+    startDate.setUTCDate(baseDate.getUTCDate() + 1);
+    endDate.setUTCDate(baseDate.getUTCDate() + 1);
     espnDatesList = [formatEspn(startDate)];
   } else if (dateRange === "hoy_y_manana") {
-    endDate.setDate(now.getDate() + 1);
+    endDate.setUTCDate(baseDate.getUTCDate() + 1);
     const curr = new Date(startDate);
     while (curr <= endDate) {
       espnDatesList.push(formatEspn(curr));
-      curr.setDate(curr.getDate() + 1);
+      curr.setUTCDate(curr.getUTCDate() + 1);
     }
   } else if (dateRange === "fin_de_semana") {
-    endDate.setDate(now.getDate() + 3);
+    endDate.setUTCDate(baseDate.getUTCDate() + 3);
     const curr = new Date(startDate);
     while (curr <= endDate) {
       espnDatesList.push(formatEspn(curr));
-      curr.setDate(curr.getDate() + 1);
+      curr.setUTCDate(curr.getUTCDate() + 1);
     }
   } else if (dateRange === "semana") {
-    endDate.setDate(now.getDate() + 6);
+    endDate.setUTCDate(baseDate.getUTCDate() + 6);
     const curr = new Date(startDate);
     while (curr <= endDate) {
       espnDatesList.push(formatEspn(curr));
-      curr.setDate(curr.getDate() + 1);
+      curr.setUTCDate(curr.getUTCDate() + 1);
     }
   } else {
     // "hoy" o predeterminado
@@ -613,12 +618,24 @@ async function fetchRealMlbSchedule(dateRange) {
         const homeForm = hStanding?.streak ? `Racha: ${hStanding.streak} | L10: ${hStanding.lastTen}` : (homePct >= 0.55 ? "W W L W W" : "L W L L W");
         const awayForm = aStanding?.streak ? `Racha: ${aStanding.streak} | L10: ${aStanding.lastTen}` : (awayPct >= 0.55 ? "W W W L W" : "L L W L L");
 
+        const innings = g.linescore?.innings || [];
+        let f5HomeScore = null;
+        let f5AwayScore = null;
+        if (innings.length >= 5) {
+          f5HomeScore = innings.slice(0, 5).reduce((sum, inn) => sum + (inn.home?.runs || 0), 0);
+          f5AwayScore = innings.slice(0, 5).reduce((sum, inn) => sum + (inn.away?.runs || 0), 0);
+        }
+
         return {
           id: `mlb-${g.gamePk}`,
           sport: 'mlb',
           league: 'Major League Baseball (MLB)',
           gameDate: g.gameDate,
-          isCompleted: g.status?.abstractGameState === 'Final',
+          isCompleted: g.status?.abstractGameState === 'Final' || g.status?.detailedState === 'Final',
+          homeScore: homeTeam.score !== undefined ? parseInt(homeTeam.score, 10) : null,
+          awayScore: awayTeam.score !== undefined ? parseInt(awayTeam.score, 10) : null,
+          f5HomeScore,
+          f5AwayScore,
           home: {
             name: homeTeam.team.name,
             record: `${homeTeam.leagueRecord?.wins || 0}-${homeTeam.leagueRecord?.losses || 0}`,
@@ -952,6 +969,8 @@ async function fetchRealSoccerSchedule(dateRange) {
         league: leagueName,
         gameDate: ev.date,
         isCompleted: ev.status?.type?.completed === true,
+        homeScore: home.score !== undefined ? parseInt(home.score, 10) : null,
+        awayScore: away.score !== undefined ? parseInt(away.score, 10) : null,
         home: {
           name: home.team?.displayName || "Local",
           recentForm: homeForm.split('').join(' '),

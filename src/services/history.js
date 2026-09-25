@@ -647,16 +647,139 @@ export async function diagnoseFailureWithAI(predictionId, actualResult = '') {
 }
 
 /**
+ * Sincroniza el Cloud Ledger de Telegram (/api/audit) con la Memoria Local del navegador (localStorage)
+ * para unificar las alertas enviadas al grupo de Telegram, sus calificaciones oficiales y las lecciones aprendidas.
+ */
+export async function syncTelegramLedgerToHistory() {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return { syncedCount: 0, auditedCount: 0 };
+  }
+
+  try {
+    const res = await fetch('/api/audit');
+    if (!res.ok) return { syncedCount: 0, auditedCount: 0 };
+    const data = await res.json();
+    if (!data.success) return { syncedCount: 0, auditedCount: 0 };
+
+    const allTelegramPicks = [
+      ...(data.auditedPicks || []),
+      ...(data.pendingPicks || [])
+    ];
+
+    if (allTelegramPicks.length === 0) {
+      return { syncedCount: 0, auditedCount: 0 };
+    }
+
+    const history = getHistory();
+    let syncedCount = 0;
+    let auditedCount = 0;
+
+    for (const tp of allTelegramPicks) {
+      const sportKey = (tp.sport === 'Fútbol' || tp.sport === 'futbol')
+        ? 'futbol'
+        : (tp.sport || 'futbol').toLowerCase();
+      const homeName = tp.homeName || (tp.game ? tp.game.split(' vs ')[0] : 'Local');
+      const awayName = tp.awayName || (tp.game ? tp.game.split(' vs ')[1] : 'Visitante');
+
+      const existingIdx = history.findIndex(item =>
+        item.id === tp.id ||
+        (isTeamMatch(item.match?.home?.name || '', homeName) &&
+         isTeamMatch(item.match?.away?.name || '', awayName) &&
+         item.pick === tp.pick)
+      );
+
+      if (existingIdx !== -1) {
+        if (history[existingIdx].status === 'pending' && tp.status && tp.status !== 'pending') {
+          history[existingIdx].status = tp.status;
+          history[existingIdx].resultDetails = tp.resultDetails || tp.scoreDisplay || '';
+          if (tp.lessonText) {
+            history[existingIdx].diagnosis = tp.lessonText;
+            history[existingIdx].learnedRule = `Penalización activa (-6%) para ${tp.failedTeam || homeName}`;
+          }
+          auditedCount++;
+        }
+      } else {
+        const newEntry = {
+          id: tp.id || `tg-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          date: tp.gameDate || new Date(tp.timestamp || Date.now()).toISOString(),
+          match: {
+            id: tp.id,
+            sport: sportKey,
+            league: tp.league || tp.sport || 'Oficial',
+            home: { name: homeName, elo: getDynamicElo(homeName, 1500) },
+            away: { name: awayName, elo: getDynamicElo(awayName, 1500) },
+            market: { homeOdds: tp.odds, current: tp.odds }
+          },
+          probs: {
+            type: sportKey,
+            homeWin: parseFloat(tp.prob) || 65,
+            awayWin: 100 - (parseFloat(tp.prob) || 65)
+          },
+          analysis: tp.argument || 'Selección Élite despachada automáticamente al Grupo de Telegram (Consenso 3v1).',
+          pick: tp.pick,
+          status: tp.status || 'pending',
+          resultDetails: tp.resultDetails || (tp.scoreDisplay ? `Marcador: ${tp.scoreDisplay}` : ''),
+          diagnosis: tp.lessonText || null,
+          learnedRule: tp.failedTeam ? `Castigo activo (-6%) para ${tp.failedTeam}` : null,
+          sport: sportKey,
+          stakeUnits: (parseFloat(tp.stakeUnits) || 2.0).toFixed(1),
+          placedOdds: parseFloat(tp.odds || 1.90).toFixed(2),
+          closingOdds: null,
+          clvPct: null,
+          beatClosingLine: null,
+          bookmaker: '📲 Alerta Oficial Telegram'
+        };
+
+        history.unshift(newEntry);
+        syncedCount++;
+        if (tp.status && tp.status !== 'pending') auditedCount++;
+      }
+
+      if (tp.status === 'lost' && tp.failedTeam) {
+        saveTeamLesson({
+          id: `lesson-tg-${tp.id}`,
+          predictionId: tp.id,
+          date: new Date().toISOString(),
+          team: tp.failedTeam,
+          opponent: tp.opponentTeam || awayName,
+          sport: sportKey,
+          predictedPick: tp.pick,
+          actualResult: tp.scoreDisplay || tp.resultDetails || 'Fallo en selección de Telegram',
+          diagnosisText: tp.lessonText || `DIAGNÓSTICO: Fallo en ${tp.pick} (${tp.scoreDisplay}).\nLECCIÓN: Ajustar expectativa de ${tp.failedTeam}.\nAJUSTE: 6%`,
+          penaltyModifier: 0.03,
+          active: true
+        });
+      }
+    }
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(history.slice(0, 120)));
+    return { syncedCount, auditedCount, summary: data.summary };
+  } catch (err) {
+    console.warn('Aviso sincronizando Ledger de Telegram:', err.message);
+    return { syncedCount: 0, auditedCount: 0 };
+  }
+}
+
+/**
  * AUTO-VERIFICACIÓN CON APIS OFICIALES:
+ * - Sincronización automática con el Cloud Ledger de Telegram (/api/audit)
  * - MLB Stats API con linescore hidratado (soporte nativo para 9 innings y F5)
  * - ESPN Soccer & NFL Scoreboards
  * - Protección contra verificación indebida de Player Props con resultados de juego
  * - Actualización automática de Elo dinámico
  */
 export async function autoVerifyResultsWithAPIs(sportFilter = null) {
+  const tgSync = await syncTelegramLedgerToHistory();
   const history = getHistory(sportFilter);
   const pendingItems = history.filter(item => item.status === 'pending');
   if (pendingItems.length === 0) {
+    if (tgSync.syncedCount > 0 || tgSync.auditedCount > 0) {
+      return {
+        verifiedCount: tgSync.auditedCount,
+        diagnosedCount: 0,
+        message: `📲 Sincronizadas ${tgSync.syncedCount} alertas de Telegram (${tgSync.auditedCount} ya calificadas oficialmente).`
+      };
+    }
     return { verifiedCount: 0, diagnosedCount: 0, message: "No hay predicciones pendientes por verificar." };
   }
 
