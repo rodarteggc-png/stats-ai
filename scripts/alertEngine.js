@@ -145,7 +145,7 @@ function pruneCache(cache) {
     // Conservar pronósticos de los últimos 5 días (120 horas)
     .filter(item => !item.data.timestamp || (now - item.data.timestamp < 120 * 60 * 60 * 1000))
     .sort((a, b) => (b.data.timestamp || 0) - (a.data.timestamp || 0))
-    .slice(0, 40); // Máximo 40 pronósticos recientes para mantener ultraligero el Ledger
+    .slice(0, 65); // Hasta 65 pronósticos recientes (Top Telegram + Unánimes 3/3 del Portal/Radar)
 
   entries.forEach(({ id, data }) => {
     clean[id] = data;
@@ -877,11 +877,15 @@ export async function runDailyTelegramAudit(options = {}) {
 
   let auditSent = false;
   if (sendToTelegram && picksToReport.length > 0) {
-    const lines = picksToReport.map(p => {
+    const lines = picksToReport.slice(0, 20).map(p => {
       const icon = p.status === 'won' ? '✅' : (p.status === 'void' ? '➖' : '❌');
       const unitStr = p.status === 'void' ? '`0.00u (Push)`' : `\`${p.netUnits >= 0 ? '+' : ''}${Number(p.netUnits).toFixed(2)}u\``;
-      return `${icon} *${p.sport}:* ${p.game}\n   👉 _${p.pick}_ | \`${p.scoreDisplay}\` | ${unitStr}`;
+      const originTag = p.dispatchedToTelegram === false ? ' _(Radar/Portal 3/3)_' : '';
+      return `${icon} *${p.sport}:* ${p.game}${originTag}\n   👉 _${p.pick}_ | \`${p.scoreDisplay}\` | ${unitStr}`;
     });
+    if (picksToReport.length > 20) {
+      lines.push(`_...y ${picksToReport.length - 20} selección(es) 3/3 adicional(es) sincronizadas en el Portal Web._`);
+    }
 
     const penalizedTeams = Object.keys(runtimePenalties);
     const memoryLine = penalizedTeams.length > 0
@@ -889,12 +893,12 @@ export async function runDailyTelegramAudit(options = {}) {
       : `🧠 *Memoria Forense:* _Elo actualizado sin castigos requeridos._`;
 
     const pendingLine = pendingStillPlaying.length > 0
-      ? `\n⏳ *En espera de juego:* _${pendingStillPlaying.length} selección(es) programada(s) para hoy._`
+      ? `\n⏳ *En espera de juego:* _${pendingStillPlaying.length} selección(es) programada(s) en Memoria._`
       : '';
 
     const reportMsg = [
       `📊 *CORTE DE CAJA OFICIAL — AUDITORÍA STATS-AI PRO* 📊`,
-      `🗓️ *Verificación Oficial de Alertas Enviadas a Telegram*`,
+      `🗓️ *Verificación Oficial (Telegram + Unánimes 3/3 del Portal)*`,
       ``,
       ...lines,
       ``,
@@ -1003,21 +1007,58 @@ export async function runAlertEngine(options = {}) {
     runtimePenalties: auditResult.runtimePenalties
   });
 
-  // De ese Top, verificar cuáles NO se han enviado hoy (a menos que se use force)
-  const toSend = isForce ? topSlate : topSlate.filter(pick => !sentCache[pick.id]);
+  // De ese Top, verificar cuáles NO se han enviado hoy a Telegram (a menos que se use force)
+  const toSend = isForce
+    ? topSlate
+    : topSlate.filter(pick => !sentCache[pick.id] || sentCache[pick.id].dispatchedToTelegram === false);
+
+  // Además, identificar TODAS las oportunidades con Unanimidad 3/3 (incluyendo las que no entraron al Top 6 de Telegram)
+  // para guardarlas automáticamente en la Memoria de Auditoría y calificarlas contra resultados oficiales
+  const allUnanimousOpps = approvedOpps.filter(opp => opp.consensus && opp.consensus.votesPassed === 3);
+  let autoSavedUnanimousCount = 0;
+
+  for (const uPick of allUnanimousOpps) {
+    if (!sentCache[uPick.id]) {
+      sentCache[uPick.id] = {
+        id: uPick.id,
+        sport: uPick.sport,
+        league: uPick.league,
+        type: uPick.type,
+        game: uPick.game,
+        gameDate: uPick.gameDate,
+        pick: uPick.pick,
+        prob: uPick.prob,
+        odds: uPick.odds,
+        stakeUnits: parseFloat(uPick.consensus?.recommendedStake) || 2.0,
+        homeName: uPick.match?.home?.name,
+        awayName: uPick.match?.away?.name,
+        argument: uPick.argument,
+        votesPassed: 3,
+        source: 'radar_3v3',
+        dispatchedToTelegram: false,
+        status: 'pending',
+        audited: false,
+        reportedInTelegram: false,
+        timestamp: Date.now()
+      };
+      autoSavedUnanimousCount++;
+    }
+  }
 
   if (isVerbose) {
     console.log(`Top ${maxPicksToSend} de la jornada: ${topSlate.length}`);
-    console.log(`Pendientes por enviar (no duplicadas): ${toSend.length}`);
+    console.log(`Unánimes 3/3 totales detectadas: ${allUnanimousOpps.length} (${autoSavedUnanimousCount} nuevas en Memoria)`);
+    console.log(`Pendientes por enviar a Telegram (no duplicadas): ${toSend.length}`);
   }
 
   if (toSend.length === 0) {
-    if (!isDryRun && auditResult.auditSent) {
+    if (!isDryRun && (auditResult.auditSent || autoSavedUnanimousCount > 0)) {
       await saveCloudLedger(sentCache);
     }
     console.log('✅ Mercado analizado. Las mejores selecciones de la jornada ya fueron notificadas hoy. Cero spam.');
     return {
       sentCount: 0,
+      autoSavedUnanimousCount,
       totalAnalyzed: rawOpportunities.length,
       totalOpportunities: approvedOpps.length,
       auditSummary: auditResult.summary,
@@ -1071,6 +1112,7 @@ export async function runAlertEngine(options = {}) {
     if (ok) {
       sentCount++;
       sentCache[pick.id] = {
+        ...(sentCache[pick.id] || {}),
         id: pick.id,
         sport: pick.sport,
         league: pick.league,
@@ -1084,26 +1126,86 @@ export async function runAlertEngine(options = {}) {
         homeName: pick.match?.home?.name,
         awayName: pick.match?.away?.name,
         argument: pick.argument,
-        status: 'pending',
-        audited: false,
-        reportedInTelegram: false,
+        votesPassed: pick.consensus?.votesPassed || 3,
+        source: 'telegram',
+        dispatchedToTelegram: true,
+        status: sentCache[pick.id]?.status || 'pending',
+        audited: sentCache[pick.id]?.audited || false,
+        reportedInTelegram: sentCache[pick.id]?.reportedInTelegram || false,
         timestamp: Date.now()
       };
     }
   }
 
-  if (!isDryRun && (sentCount > 0 || auditResult.auditSent)) {
+  if (!isDryRun && (sentCount > 0 || auditResult.auditSent || autoSavedUnanimousCount > 0)) {
     await saveCloudLedger(sentCache);
   }
 
-  console.log(`✅ Proceso finalizado con éxito. ${sentCount} alertas enviadas a Telegram.`);
+  console.log(`✅ Proceso finalizado con éxito. ${sentCount} alertas enviadas a Telegram y ${autoSavedUnanimousCount} unánimes adicionales en Memoria.`);
   return {
     sentCount,
+    autoSavedUnanimousCount,
     totalAnalyzed: rawOpportunities.length,
     totalOpportunities: approvedOpps.length,
     auditSummary: auditResult.summary,
     auditSent: auditResult.auditSent
   };
+}
+
+/**
+ * 6. REGISTRO EN NUBE DE SELECCIONES UNÁNIMES (3/3) GENERADAS EN EL PORTAL WEB
+ * Permite que cualquier apuesta con votación 3/3 detectada en el Radar o Simulador del Portal
+ * quede respaldada en el Cloud Ledger para auditoría oficial.
+ */
+export async function registerPortalUnanimousPicks(picks = []) {
+  if (!Array.isArray(picks) || picks.length === 0) return { registeredCount: 0 };
+  const sentCache = await loadCloudLedger();
+  let registeredCount = 0;
+
+  for (const p of picks) {
+    if (!p || !p.pick) continue;
+    const homeName = p.homeName || p.match?.home?.name || 'Local';
+    const awayName = p.awayName || p.match?.away?.name || 'Visitante';
+    const id = p.id || `portal-3v3-${homeName.toLowerCase().replace(/[^a-z0-9]/g, '')}-${awayName.toLowerCase().replace(/[^a-z0-9]/g, '')}-${p.pick.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 18)}`;
+
+    // Verificar si ya existe por ID o por mismo partido + pick
+    const alreadyExists = Boolean(sentCache[id]) || Object.values(sentCache).some(entry =>
+      entry && typeof entry === 'object' && entry.pick === p.pick &&
+      isTeamMatch(entry.homeName || '', homeName) && isTeamMatch(entry.awayName || '', awayName)
+    );
+
+    if (!alreadyExists) {
+      sentCache[id] = {
+        id,
+        sport: p.sport || 'Deporte',
+        league: p.league || p.sport || 'Portal Web',
+        type: p.type || '🗳️ UNANIMIDAD 3/3 PORTAL',
+        game: `${homeName} vs ${awayName}`,
+        gameDate: p.gameDate || new Date().toISOString(),
+        pick: p.pick,
+        prob: p.prob || '65%',
+        odds: p.odds || '1.90',
+        stakeUnits: parseFloat(p.stakeUnits) || 1.5,
+        homeName,
+        awayName,
+        argument: p.argument || p.reason || 'Unanimidad 3/3 detectada automáticamente en el Portal Web.',
+        votesPassed: 3,
+        source: 'portal_3v3',
+        dispatchedToTelegram: false,
+        status: 'pending',
+        audited: false,
+        reportedInTelegram: false,
+        timestamp: Date.now()
+      };
+      registeredCount++;
+    }
+  }
+
+  if (registeredCount > 0) {
+    await saveCloudLedger(sentCache);
+  }
+
+  return { registeredCount };
 }
 
 // Ejecución directa por CLI si se invoca con `node scripts/alertEngine.js`

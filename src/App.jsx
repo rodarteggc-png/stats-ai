@@ -12,6 +12,7 @@ import {
   getHistory, 
   savePrediction, 
   saveRadarOpportunities,
+  autoSaveUnanimousPicks,
   saveParleyToHistory,
   updatePredictionStatus, 
   getStats, 
@@ -966,7 +967,18 @@ export default function App() {
         return pB - pA;
       });
 
-      setRadarResults(opportunities.slice(0, 16)); 
+      const displayedOpps = opportunities.slice(0, 16);
+      setRadarResults(displayedOpps);
+
+      // Auto-guardar en Memoria de Auditoría (Local + Nube) todas las apuestas con Unanimidad 3/3
+      const autoSaved = autoSaveUnanimousPicks(opportunities, activeSport);
+      if (autoSaved.savedCount > 0) {
+        loadHistoryAndLessons();
+        setSaveActionMsg(`🧠 Memoria de Auditoría Activa: ${autoSaved.savedCount} selección(es) con Unanimidad 3/3 se guardaron automáticamente para calificación oficial.`);
+        setTimeout(() => setSaveActionMsg(""), 7000);
+      } else if (autoSaved.totalUnanimous > 0) {
+        loadHistoryAndLessons();
+      }
 
     } catch (err) {
       console.error("Error corriendo radar:", err);
@@ -1164,13 +1176,60 @@ export default function App() {
       
       const tweets = llmText.split('---').map(t => t.trim()).filter(t => t.length > 0);
 
-      savePrediction(matchData, mathProbs, tweets[0], recommendedPick, activeSport);
+      // Evaluar Consenso Tripartito 3v1 y Kelly Stake también en el Simulador Manual
+      let simMcStats = { stability: 65, risk: 'Medio' };
+      try {
+        if (activeSport === 'futbol') {
+          const mc = simulateSoccerMatch(matchData.home?.xG, matchData.away?.xG);
+          simMcStats = { stability: mc.stabilityScore, risk: mc.riskLevel };
+        } else if (activeSport === 'mlb') {
+          const mc = simulateMlbMatch(matchData.home?.pitcher?.whip, matchData.away?.pitcher?.whip, matchData.home?.ops, matchData.away?.ops);
+          simMcStats = { stability: mc.f5Stability, risk: mc.bullpenRisk };
+        } else if (activeSport === 'nfl') {
+          const spread = matchData.vegas?.spread !== undefined ? matchData.vegas.spread : -3.5;
+          const total = matchData.vegas?.overUnder !== undefined ? matchData.vegas.overUnder : 44.5;
+          const wind = matchData.weather?.windMph || 0;
+          const mc = simulateNflMatch(matchData.home?.ypp || 5.2, spread, total, wind);
+          simMcStats = { stability: mc.stabilityScore, risk: mc.riskLevel };
+        }
+      } catch (e) {}
+
+      const topProbVal = Math.max(parseFloat(mathProbs.probs?.homeWin || 50), parseFloat(mathProbs.probs?.awayWin || 50));
+      const simOdds = matchData.market?.current || matchData.market?.homeOdds || getFairOddsDecimal(topProbVal);
+      const simConsensus = evaluateEnsembleConsensus({
+        sport: activeSport,
+        match: matchData,
+        probs: mathProbs.probs || {},
+        mcStats: simMcStats,
+        pickType: 'SIMULADOR MANUAL',
+        edgeVal: 5.5,
+        prob: `${topProbVal.toFixed(0)}%`,
+        odds: simOdds
+      });
+
+      const simStake = simConsensus?.kellyData?.units || parseFloat(simConsensus?.recommendedStake) || "1.0";
+
+      if (simConsensus?.votesPassed === 3 || simConsensus?.isUnanimous) {
+        autoSaveUnanimousPicks([{
+          match: matchData,
+          tier: 1,
+          type: '🗳️ UNANIMIDAD 3/3 SIMULADOR',
+          pick: recommendedPick,
+          reason: tweets[0],
+          prob: `${topProbVal.toFixed(0)}%`,
+          odds: simOdds,
+          consensus: simConsensus
+        }], activeSport);
+      } else {
+        savePrediction(matchData, mathProbs, tweets[0], recommendedPick, activeSport, simOdds, simStake);
+      }
       loadHistoryAndLessons();
 
       setAnalysisResult({ 
         match: matchData, 
         mathProbs, 
         tweets, 
+        consensus: simConsensus,
         learnedLessons: learned.lessons,
         style: { bg: backgroundColor, accent: accentColor } 
       });
@@ -1788,11 +1847,17 @@ export default function App() {
                       </div>
 
                       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                        <button 
-                          onClick={() => handleSaveSingleOpp(res)}
-                          style={{ padding: "6px 14px", background: "#1e293b", border: "1px solid #10b981", color: "#10b981", borderRadius: 6, fontSize: 12, fontWeight: 800, cursor: "pointer", display: "flex", alignItems: "center", gap: 5 }}>
-                          💾 Guardar Pick
-                        </button>
+                        {res.consensus?.isUnanimous ? (
+                          <span style={{ padding: "6px 12px", background: "#064e3b", border: "1px solid #10b981", color: "#a7f3d0", borderRadius: 6, fontSize: 11, fontWeight: 800, display: "flex", alignItems: "center", gap: 5 }}>
+                            ✅ Auto-Guardado en Auditoría (3/3)
+                          </span>
+                        ) : (
+                          <button 
+                            onClick={() => handleSaveSingleOpp(res)}
+                            style={{ padding: "6px 14px", background: "#1e293b", border: "1px solid #10b981", color: "#10b981", borderRadius: 6, fontSize: 12, fontWeight: 800, cursor: "pointer", display: "flex", alignItems: "center", gap: 5 }}>
+                            💾 Guardar Pick
+                          </button>
+                        )}
                         <button 
                           onClick={() => launchSimulatorWith(`${res.match.home.name} vs ${res.match.away.name}`)}
                           style={{ padding: "6px 14px", background: "transparent", border: "1px solid #3b82f6", color: "#3b82f6", borderRadius: 6, fontSize: 12, fontWeight: 800, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>

@@ -296,20 +296,25 @@ export function isTeamMatch(t1, t2) {
 /**
  * Salva una predicción con PAYLOAD MINIFICADO y protección contra cuota de almacenamiento
  */
-export function savePrediction(matchData, probabilities, aiAnalysis, recommendedPick = '', sport = 'futbol', customOdds = null, stakeUnits = "1.0") {
+export function savePrediction(matchData, probabilities, aiAnalysis, recommendedPick = '', sport = 'futbol', customOdds = null, stakeUnits = "1.0", customBookmaker = null) {
   const history = getHistory();
 
   const homeName = (matchData?.home?.name || '').toLowerCase();
   const awayName = (matchData?.away?.name || '').toLowerCase();
   const pickText = (recommendedPick || '').trim();
+  const recentCutoff = Date.now() - (36 * 60 * 60 * 1000);
 
-  // Prevenir duplicados en apuestas pendientes del mismo partido y pick
-  const isDuplicate = history.some(item => 
-    item.status === 'pending' &&
-    (item.match?.home?.name || '').toLowerCase() === homeName &&
-    (item.match?.away?.name || '').toLowerCase() === awayName &&
-    item.pick === pickText
-  );
+  // Prevenir duplicados del mismo partido y pick (pendientes o ya calificados en las últimas 36 horas)
+  const isDuplicate = history.some(item => {
+    const samePick = (item.pick || '').trim().toLowerCase() === pickText.toLowerCase();
+    if (!samePick) return false;
+    const sameTeams =
+      ((item.match?.home?.name || '').toLowerCase() === homeName && (item.match?.away?.name || '').toLowerCase() === awayName) ||
+      (isTeamMatch(item.match?.home?.name || '', homeName) && isTeamMatch(item.match?.away?.name || '', awayName));
+    if (!sameTeams) return false;
+    const itemTime = new Date(item.date || 0).getTime();
+    return item.status === 'pending' || (itemTime > recentCutoff);
+  });
   if (isDuplicate) return null;
 
   // Determinar cuota inicial a la que se toma la apuesta (Placed Odds) para cálculo de CLV
@@ -378,7 +383,7 @@ export function savePrediction(matchData, probabilities, aiAnalysis, recommended
     closingOdds: null,
     clvPct: null,
     beatClosingLine: null,
-    bookmaker: matchData?.market?.bookmaker || matchData?.market?.provider || "Línea Consenso"
+    bookmaker: customBookmaker || matchData?.market?.bookmaker || matchData?.market?.provider || "Línea Consenso"
   };
 
   history.unshift(newEntry);
@@ -406,10 +411,71 @@ export function savePrediction(matchData, probabilities, aiAnalysis, recommended
   return newEntry;
 }
 
+/**
+ * Guarda de forma 100% automática en Memoria de Auditoría (Local + Cloud Ledger)
+ * todas las oportunidades que alcancen Unanimidad 3/3 del Tribunal de Consenso.
+ */
+export function autoSaveUnanimousPicks(opportunities = [], sport = 'futbol') {
+  const unanimousOpps = opportunities.filter(opp =>
+    opp && opp.tier !== 3 && (opp.consensus?.votesPassed === 3 || opp.consensus?.isUnanimous === true)
+  );
+
+  let savedCount = 0;
+  const cloudPayload = [];
+
+  unanimousOpps.forEach(opp => {
+    const kellyUnits = opp.consensus?.kellyData?.units || parseFloat(opp.consensus?.recommendedStake) || opp.stakeUnits || "1.5";
+    const stakeStr = (parseFloat(kellyUnits) > 0 ? parseFloat(kellyUnits) : 1.5).toFixed(1);
+
+    const saved = savePrediction(
+      opp.match,
+      { probs: { homeWin: parseFloat(opp.prob) || 60 } },
+      `[UNANIMIDAD 3/3 AUTO] ${opp.reason || 'Consenso perfecto de los 3 motores matemáticos'}`,
+      opp.pick,
+      sport,
+      opp.odds,
+      stakeStr,
+      "🗳️ Unanimidad 3/3 (Auto-Audit)"
+    );
+
+    if (saved) savedCount++;
+
+    cloudPayload.push({
+      sport,
+      league: opp.match?.league || sport.toUpperCase(),
+      type: opp.type || '🗳️ UNANIMIDAD 3/3 PORTAL',
+      homeName: opp.match?.home?.name || 'Local',
+      awayName: opp.match?.away?.name || 'Visitante',
+      gameDate: opp.match?.gameDate || new Date().toISOString(),
+      pick: opp.pick,
+      prob: opp.prob,
+      odds: opp.odds,
+      stakeUnits: stakeStr,
+      reason: opp.reason
+    });
+  });
+
+  // Respaldar asíncronamente en el Cloud Ledger (/api/audit) para que el servidor también las califique
+  if (typeof window !== 'undefined' && cloudPayload.length > 0) {
+    fetch('/api/audit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ picks: cloudPayload })
+    }).catch(() => {});
+  }
+
+  return {
+    savedCount,
+    totalUnanimous: unanimousOpps.length
+  };
+}
+
 export function saveRadarOpportunities(opportunities = [], sport = 'futbol') {
   let count = 0;
   opportunities.forEach(opp => {
     if (opp.tier === 3) return; // Filtrar descartes de Tier 3
+    const kellyUnits = opp.consensus?.kellyData?.units || parseFloat(opp.consensus?.recommendedStake) || opp.stakeUnits || "1.0";
+    const stakeStr = (parseFloat(kellyUnits) > 0 ? parseFloat(kellyUnits) : 1.0).toFixed(1);
     const saved = savePrediction(
       opp.match,
       { probs: { homeWin: parseFloat(opp.prob) || 50 } },
@@ -417,7 +483,7 @@ export function saveRadarOpportunities(opportunities = [], sport = 'futbol') {
       opp.pick,
       sport,
       opp.odds,
-      opp.stakeUnits || "1.0"
+      stakeStr
     );
     if (saved) count++;
   });
@@ -727,7 +793,11 @@ export async function syncTelegramLedgerToHistory() {
           closingOdds: null,
           clvPct: null,
           beatClosingLine: null,
-          bookmaker: '📲 Alerta Oficial Telegram'
+          bookmaker: tp.source === 'portal_3v3'
+            ? '🗳️ Unanimidad 3/3 (Portal)'
+            : (tp.source === 'radar_3v3' || tp.dispatchedToTelegram === false)
+              ? '🗳️ Unanimidad 3/3 (Radar Auto)'
+              : '📲 Alerta Oficial Telegram'
         };
 
         history.unshift(newEntry);
