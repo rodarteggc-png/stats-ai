@@ -7,7 +7,7 @@ import { simulateSoccerMatch, simulateMlbMatch, simulateNflMatch, bayesianCalibr
 import { evaluateEnsembleConsensus } from "./utils/ensemble";
 import { calculateKellyStake } from "./utils/kelly";
 import { generateDailyMlbProps } from "./utils/mlbProps";
-import { fetchMatchData, fetchDailySchedule, fetchNflWeekSchedule, checkOddsApiUsage, clearOddsCache } from "./services/sportsApi";
+import { fetchMatchData, fetchDailySchedule, fetchNflWeekSchedule, checkOddsApiUsage, clearOddsCache, getOddsApiKeys } from "./services/sportsApi";
 import { 
   getHistory, 
   savePrediction, 
@@ -69,13 +69,13 @@ export default function App() {
 
   // Settings State
   const [showSettings, setShowSettings] = useState(false);
-  const [oddsApiKey, setOddsApiKey] = useState(localStorage.getItem('fstats_odds_api_key') || '');
+  const [oddsApiKey, setOddsApiKey] = useState(() => getOddsApiKeys().join('\n'));
   const [oddsRemaining, setOddsRemaining] = useState(() => {
     const val = localStorage.getItem('fstats_odds_remaining');
     return val !== null ? parseInt(val, 10) : null;
   });
   const [oddsCapacity, setOddsCapacity] = useState(() => {
-    const count = parseInt(localStorage.getItem('fstats_odds_keys_count') || '1', 10);
+    const count = getOddsApiKeys().length || 1;
     return Math.max(1, count) * 500;
   });
   const [keyDetails, setKeyDetails] = useState([]);
@@ -89,6 +89,7 @@ export default function App() {
 
   // Background Auto-Resolver & Sincronizador de Telegram al cargar la app
   useEffect(() => {
+    checkOddsApiUsage().catch(() => {});
     autoVerifyResultsWithAPIs(null).then(res => {
       loadHistoryAndLessons();
       if (res && res.verifiedCount > 0) {

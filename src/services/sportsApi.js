@@ -250,18 +250,36 @@ function americanToDecimal(american) {
 
 // ================= CACHÉ PERSISTENTE (3 HORAS) Y POOL DE LLAVES =================
 const ODDS_CACHE_TTL_MS = 3 * 60 * 60 * 1000; // 3 Horas exactas
+const BUILTIN_ODDS_API_KEYS = [
+  '2cf22cbdc223414dccab14aac31334ba'
+];
 
 export function getOddsApiKeys() {
-  let raw = '';
-  if (typeof process !== 'undefined' && process.env && (process.env.ODDS_API_KEYS || process.env.ODDS_API_KEY)) {
-    raw = (process.env.ODDS_API_KEYS || process.env.ODDS_API_KEY || '').trim();
-  } else if (typeof window !== 'undefined' && window.localStorage) {
-    raw = localStorage.getItem('fstats_odds_api_key') || '';
+  const rawList = [];
+
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const localRaw = localStorage.getItem('fstats_odds_api_key') || '';
+      rawList.push(...localRaw.split(/[\n,;]+/));
+    } catch (e) {}
   }
-  return raw
-    .split(/[\n,;]+/)
-    .map(k => k.trim())
-    .filter(k => k.length > 5);
+
+  if (typeof process !== 'undefined' && process.env && (process.env.ODDS_API_KEYS || process.env.ODDS_API_KEY)) {
+    const envRaw = (process.env.ODDS_API_KEYS || process.env.ODDS_API_KEY || '').trim();
+    rawList.push(...envRaw.split(/[\n,;]+/));
+  }
+
+  rawList.push(...BUILTIN_ODDS_API_KEYS);
+
+  const uniqueKeys = [...new Set(rawList.map(k => k.trim()).filter(k => k.length > 5))];
+
+  if (typeof window !== 'undefined' && window.localStorage && uniqueKeys.length > 0) {
+    try {
+      localStorage.setItem('fstats_odds_api_key', uniqueKeys.join('\n'));
+    } catch (e) {}
+  }
+
+  return uniqueKeys;
 }
 
 function getCachedOdds(sportKey) {
@@ -305,7 +323,8 @@ export function clearOddsCache() {
 export async function checkOddsApiUsage(providedRawKeys = null) {
   let keys = [];
   if (providedRawKeys) {
-    keys = providedRawKeys.split(/[\n,;]+/).map(k => k.trim()).filter(k => k.length > 5);
+    const providedList = providedRawKeys.split(/[\n,;]+/).map(k => k.trim()).filter(k => k.length > 5);
+    keys = [...new Set([...providedList, ...BUILTIN_ODDS_API_KEYS])];
   } else {
     keys = getOddsApiKeys();
   }
@@ -335,12 +354,14 @@ export async function checkOddsApiUsage(providedRawKeys = null) {
     }
   }
 
-  localStorage.setItem('fstats_odds_remaining', totalRemaining.toString());
-  localStorage.setItem('fstats_odds_used', totalUsed.toString());
-  localStorage.setItem('fstats_odds_keys_count', keys.length.toString());
-  localStorage.setItem('fstats_odds_last_updated', new Date().toISOString());
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      localStorage.setItem('fstats_odds_remaining', totalRemaining.toString());
+      localStorage.setItem('fstats_odds_used', totalUsed.toString());
+      localStorage.setItem('fstats_odds_keys_count', keys.length.toString());
+      localStorage.setItem('fstats_odds_last_updated', new Date().toISOString());
+    } catch (e) {}
 
-  if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('fstats_odds_usage_updated', {
       detail: { remaining: totalRemaining, used: totalUsed, keyDetails, totalCapacity: keys.length * 500 }
     }));
@@ -382,16 +403,16 @@ async function fetchTheOdds(sportKey) {
 
       const remaining = res.headers.get('x-requests-remaining');
       const used = res.headers.get('x-requests-used');
-      if (remaining !== null) {
-        localStorage.setItem('fstats_odds_remaining', remaining);
-        if (used !== null) localStorage.setItem('fstats_odds_used', used);
-        localStorage.setItem('fstats_odds_last_updated', new Date().toISOString());
+      if (remaining !== null && typeof window !== 'undefined' && window.localStorage) {
+        try {
+          localStorage.setItem('fstats_odds_remaining', remaining);
+          if (used !== null) localStorage.setItem('fstats_odds_used', used);
+          localStorage.setItem('fstats_odds_last_updated', new Date().toISOString());
+        } catch (e) {}
 
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('fstats_odds_usage_updated', {
-            detail: { remaining: parseInt(remaining, 10), used: parseInt(used || 0, 10) }
-          }));
-        }
+        window.dispatchEvent(new CustomEvent('fstats_odds_usage_updated', {
+          detail: { remaining: parseInt(remaining, 10), used: parseInt(used || 0, 10) }
+        }));
       }
 
       const data = await res.json();
