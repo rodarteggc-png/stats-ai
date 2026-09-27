@@ -50,22 +50,21 @@ export function calculateSpreadCoverProbability(expectedHomeLead, vegasHomeSprea
   // P(Local Cubre) = P(Margen > -vegasHomeSpread) = 1 - Φ((-spread - lead) / σ) = Φ((lead + spread) / σ)
   let homeCoverProb = normalCdf(lead + spread, 0, sigma);
 
-  // Calibración fina empírica en números clave (clusters discontinuos de 3 y 7)
+  // Calibración fina empírica en números clave (clusters discontinuos de 3 y 7 tanto para favorito local como visitante)
   const absSpread = Math.abs(spread);
-  if (absSpread === 3.5 && spread < 0) {
-    // Favorito local -3.5 vs Underdog visita +3.5: Si margen proyectado ronda 3 puntos, el underdog retiene valor masivo
-    if (lead >= 2.0 && lead <= 4.2) {
-      homeCoverProb = Math.max(0.38, homeCoverProb - 0.04);
-    }
-  } else if (absSpread === 7.5 && spread < 0) {
-    if (lead >= 6.0 && lead <= 8.2) {
-      homeCoverProb = Math.max(0.40, homeCoverProb - 0.035);
-    }
-  } else if (absSpread === 2.5 && spread < 0) {
-    // Favorito local -2.5 (por debajo de 3): un gol de campo cubre
-    if (lead >= 2.6) {
-      homeCoverProb = Math.min(0.68, homeCoverProb + 0.035);
-    }
+  const favMargin = spread < 0 ? lead : -lead;
+  if (absSpread === 3.5 && favMargin <= 3.8) {
+    // Underdog +3.5 tiene el colchón del número clave 3 (15.2% de los juegos terminan por 3)
+    if (spread < 0) homeCoverProb = Math.max(0.35, homeCoverProb - 0.04);
+    else homeCoverProb = Math.min(0.75, homeCoverProb + 0.04);
+  } else if (absSpread === 7.5 && favMargin <= 7.8) {
+    // Underdog +7.5 tiene el colchón del touchdown (7 puntos)
+    if (spread < 0) homeCoverProb = Math.max(0.38, homeCoverProb - 0.035);
+    else homeCoverProb = Math.min(0.74, homeCoverProb + 0.035);
+  } else if (absSpread === 2.5 && favMargin >= 2.6) {
+    // Favorito -2.5 (por debajo de 3): un gol de campo cubre
+    if (spread < 0) homeCoverProb = Math.min(0.70, homeCoverProb + 0.035);
+    else homeCoverProb = Math.max(0.30, homeCoverProb - 0.035);
   }
 
   const resultProb = forHome ? homeCoverProb : (1 - homeCoverProb);
@@ -145,24 +144,24 @@ export function evaluateNflSpreadValue(expectedHomeLead, vegasSpread) {
   // 1. Detección de trampa de medio punto en 3 y 7 (tanto para favorito local como visitante)
   const favExpectedMargin = vegasSpread < 0 ? expectedHomeLead : -expectedHomeLead;
   if (absVegas === 3.5) {
-    if (favExpectedMargin >= 1.5 && favExpectedMargin <= 4.2) {
+    if (favExpectedMargin <= 3.6) {
       trapWarning = "⚠️ Trampa de Medio Punto en 3.5: Las Vegas infló al favorito. Gran valor cuantitativo en el Underdog (+3.5).";
     }
   } else if (absVegas === 7.5) {
-    if (favExpectedMargin >= 5.5 && favExpectedMargin <= 8.2) {
-      trapWarning = "⚠️ Trampa de Medio Punto en 7.5: Proyección cerrada en un touchdown. Gran valor en Underdog (+7.5).";
+    if (favExpectedMargin <= 7.6) {
+      trapWarning = "⚠️ Trampa de Medio Punto en 7.5: Proyección cerrada dentro de un touchdown. Gran valor en Underdog (+7.5).";
     }
   } else if (absVegas === 2.5) {
-    if (favExpectedMargin >= 2.8) {
+    if (favExpectedMargin >= 2.6) {
       keyAlert = "💎 Oportunidad Clave: Favorito en -2.5 (por debajo del número 3). Gran valor en cubrir.";
     }
   }
 
-  // 2. Filtro de Seguridad Preventivo: Spreads Pesados (> 7.5 pts)
+  // 2. Filtro de Seguridad Preventivo: Spreads Pesados (>= 7.5 pts)
   // En la NFL moderna, los favoritos pesados juegan prevent defense al final y sufren Backdoor Covers frecuentes.
-  if (absVegas > 7.5) {
+  if (absVegas >= 7.5) {
     vetoFavoriteSpread = true;
-    heavySpreadWarning = `⚠️ Veto Preventivo de Spread Pesado (${absVegas} pts > 7.5): Alto riesgo de Backdoor Cover en 4to cuarto. No apostar al favorito en hándicap abultado.`;
+    heavySpreadWarning = `⚠️ Veto Preventivo de Spread Pesado (${absVegas} pts >= 7.5): Alto riesgo de Backdoor Cover en 4to cuarto. No apostar al favorito en hándicap abultado.`;
   }
 
   return {

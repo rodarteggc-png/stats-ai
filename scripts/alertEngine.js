@@ -763,58 +763,54 @@ export function buildOpportunitiesAndTopSlate({
     const homeCoverProb = mcNfl.calibratedHomeCover;
     const awayCoverProb = mcNfl.calibratedAwayCover;
 
-    if (keyEval.trapWarning && absSpread <= 10.0) {
-      const isHomeUnderdog = spread > 0;
-      const underdogTeam = isHomeUnderdog ? m.home.name : m.away.name;
-      const underdogCoverProb = isHomeUnderdog ? homeCoverProb : awayCoverProb;
+    const isHomeUnderdog = spread > 0;
+    const underdogTeam = isHomeUnderdog ? m.home.name : m.away.name;
+    const underdogCoverProb = isHomeUnderdog ? homeCoverProb : awayCoverProb;
+    const isHomeFav = spread < 0;
+    const favTeam = isHomeFav ? m.home.name : m.away.name;
+    const favSpreadFmt = isHomeFav ? homeSpreadFmt : awaySpreadFmt;
+    const favCoverProb = isHomeFav ? homeCoverProb : awayCoverProb;
+
+    if (keyEval.trapWarning && absSpread <= 10.0 && underdogCoverProb >= 55.5) {
       const ev = Number((underdogCoverProb - 52.4).toFixed(1));
-      if (underdogCoverProb >= 55.5) {
-        rawOpportunities.push({
-          id: `nfl-trap-${m.id}`,
-          sport: 'NFL',
-          league: 'NFL',
-          game: `${m.home.name} vs ${m.away.name}`,
-          gameDate: m.gameDate,
-          type: '🏈 PROTECCIÓN NÚMERO CLAVE (SHARP)',
-          pick: `${underdogTeam} +${absSpread} (Hándicap Positivo)`,
-          prob: `${underdogCoverProb.toFixed(0)}%`,
-          odds: '1.91',
-          edgeVal: Math.max(ev, 4.5),
-          edgeStr: `Colchón Clave (+${absSpread}) | Edge: +${ev}%`,
-          argument: `${keyEval.trapWarning} El modelo proyecta margen cerrado, protegiendo a ${underdogTeam} con +${absSpread} puntos.`,
-          mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel, iterations: 10000 },
-          match: m,
-          probs: nflProbs
-        });
-      }
-    } else if (keyEval.keyAlert) {
-      const isHomeFav = spread < 0;
-      const favTeam = isHomeFav ? m.home.name : m.away.name;
-      const favSpreadFmt = isHomeFav ? homeSpreadFmt : awaySpreadFmt;
-      const favCoverProb = isHomeFav ? homeCoverProb : awayCoverProb;
+      rawOpportunities.push({
+        id: `nfl-trap-${m.id}`,
+        sport: 'NFL',
+        league: 'NFL',
+        game: `${m.home.name} vs ${m.away.name}`,
+        gameDate: m.gameDate,
+        type: '🏈 PROTECCIÓN NÚMERO CLAVE (SHARP)',
+        pick: `${underdogTeam} +${absSpread} (Hándicap Positivo)`,
+        prob: `${underdogCoverProb.toFixed(0)}%`,
+        odds: '1.91',
+        edgeVal: Math.max(ev, 4.5),
+        edgeStr: `Colchón Clave (+${absSpread}) | Edge: +${ev}%`,
+        argument: `${keyEval.trapWarning} El modelo proyecta margen cerrado, protegiendo a ${underdogTeam} con +${absSpread} puntos.`,
+        mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel, iterations: 10000 },
+        match: m,
+        probs: nflProbs
+      });
+    } else if (keyEval.keyAlert && favCoverProb >= 55.5) {
       const ev = Number((favCoverProb - 52.4).toFixed(1));
-      if (favCoverProb >= 56.0) {
-        rawOpportunities.push({
-          id: `nfl-key-${m.id}`,
-          sport: 'NFL',
-          league: 'NFL',
-          game: `${m.home.name} vs ${m.away.name}`,
-          gameDate: m.gameDate,
-          type: '💎 NÚMERO CLAVE FAVORABLE (-2.5)',
-          pick: `${favTeam} ${favSpreadFmt} (Cubre Línea)`,
-          prob: `${favCoverProb.toFixed(0)}%`,
-          odds: '1.91',
-          edgeVal: Math.max(ev, 4.5),
-          edgeStr: `Línea por debajo de 3 | Edge: +${ev}%`,
-          argument: `${keyEval.keyAlert} Proyección favorable para ${favTeam} superando el gol de campo clave.`,
-          mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel, iterations: 10000 },
-          match: m,
-          probs: nflProbs
-        });
-      }
-    } else if (homeCoverProb >= 57.0 && ((spread < 0 && absSpread <= 7.0) || (spread > 0 && absSpread <= 10.0))) {
+      rawOpportunities.push({
+        id: `nfl-key-${m.id}`,
+        sport: 'NFL',
+        league: 'NFL',
+        game: `${m.home.name} vs ${m.away.name}`,
+        gameDate: m.gameDate,
+        type: '💎 NÚMERO CLAVE FAVORABLE (-2.5)',
+        pick: `${favTeam} ${favSpreadFmt} (Cubre Línea)`,
+        prob: `${favCoverProb.toFixed(0)}%`,
+        odds: '1.91',
+        edgeVal: Math.max(ev, 4.5),
+        edgeStr: `Línea por debajo de 3 | Edge: +${ev}%`,
+        argument: `${keyEval.keyAlert} Proyección favorable para ${favTeam} superando el gol de campo clave.`,
+        mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel, iterations: 10000 },
+        match: m,
+        probs: nflProbs
+      });
+    } else if (homeCoverProb >= 55.5 && ((spread < 0 && absSpread <= 7.0) || (spread > 0 && absSpread <= 10.0))) {
       const ev = Number((homeCoverProb - 52.4).toFixed(1));
-      const isHomeUnderdog = spread > 0;
       rawOpportunities.push({
         id: `nfl-spread-h-${m.id}`,
         sport: 'NFL',
@@ -825,14 +821,14 @@ export function buildOpportunitiesAndTopSlate({
         pick: `${m.home.name} ${homeSpreadFmt} (${isHomeUnderdog ? 'Hándicap Positivo' : 'Cubre Línea'})`,
         prob: `${homeCoverProb.toFixed(0)}%`,
         odds: '1.91',
-        edgeVal: ev,
+        edgeVal: Math.max(4.0, ev),
         edgeStr: `Prob. Cubrir: ${homeCoverProb.toFixed(0)}% | Edge: +${ev}%`,
         argument: `Monte Carlo proyecta margen local de ${expectedHomeLead.toFixed(1)} pts frente a línea de ${homeSpreadFmt} de Las Vegas.`,
         mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel, iterations: 10000 },
         match: m,
         probs: nflProbs
       });
-    } else if (awayCoverProb >= 57.0 && ((spread > 0 && absSpread <= 7.0) || (spread < 0 && absSpread <= 10.0))) {
+    } else if (awayCoverProb >= 55.5 && ((spread > 0 && absSpread <= 7.0) || (spread < 0 && absSpread <= 10.0))) {
       const ev = Number((awayCoverProb - 52.4).toFixed(1));
       const isAwayUnderdog = spread < 0;
       rawOpportunities.push({
@@ -845,7 +841,7 @@ export function buildOpportunitiesAndTopSlate({
         pick: `${m.away.name} ${awaySpreadFmt} (${isAwayUnderdog ? 'Hándicap Positivo' : 'Cubre Línea'})`,
         prob: `${awayCoverProb.toFixed(0)}%`,
         odds: '1.91',
-        edgeVal: ev,
+        edgeVal: Math.max(4.0, ev),
         edgeStr: `Prob. Cubrir: ${awayCoverProb.toFixed(0)}% | Edge: +${ev}%`,
         argument: isAwayUnderdog
           ? `Defensa y eficiencia EPA respaldan a ${m.away.name} con colchón de puntos (${awaySpreadFmt}) ante la línea de Las Vegas.`
@@ -857,7 +853,7 @@ export function buildOpportunitiesAndTopSlate({
     }
 
     const totalsEval = nflProbs.totalsEvaluation;
-    if (totalsEval && totalsEval.isValue && parseFloat(totalsEval.edge) >= 6.5) {
+    if (totalsEval && totalsEval.isValue && parseFloat(totalsEval.edge) >= 5.5) {
       const tProb = totalsEval.isUnder ? totalsEval.underProb : totalsEval.overProb;
       rawOpportunities.push({
         id: `nfl-tot-${m.id}`,

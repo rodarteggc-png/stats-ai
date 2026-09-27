@@ -224,6 +224,7 @@ export function evaluateEnsembleConsensus({
 
     const matchingTrap = lessons.find(l => {
       if (l.active === false) return false;
+      if (l.sport && sport && l.sport !== sport) return false;
       const combinedText = [
         l.diagnosisText || '',
         l.lesson || '',
@@ -243,6 +244,16 @@ export function evaluateEnsembleConsensus({
       ));
 
       if (!matchesHome && !matchesAway) return false;
+
+      // Si la lección fue por fallar como favorito pesado (-Pts) y hoy el pick es Hándicap Positivo (+Pts), no vetar
+      const isProtectedDogPick = (
+        pTypeUpper.includes('UNDERDOG') ||
+        pTypeUpper.includes('HÁNDICAP POSITIVO') ||
+        pTypeUpper.includes('NÚMERO CLAVE') ||
+        pTypeUpper.includes('DOBLE OPORTUNIDAD')
+      );
+      const lessonWasHeavyFav = (l.predictedPick || '').includes('-') || combinedText.includes('favorito');
+      if (isProtectedDogPick && lessonWasHeavyFav) return false;
 
       const hasTrapKeyword = (
         combinedText.includes('trampa') ||

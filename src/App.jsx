@@ -267,7 +267,10 @@ export default function App() {
     setRadarResults([]);
     setRawScheduleCount(0);
     setAutoVerifyMsg("");
-    if(activeTab === 'simulador' && !analysisResult) setQuery("");
+    if (activeTab === 'simulador' && !analysisResult) setQuery("");
+    if (activeTab === 'radar') {
+      runRadar();
+    }
   }, [activeTab, activeSport]);
 
   function loadHistoryAndLessons() {
@@ -327,6 +330,50 @@ export default function App() {
       const data = await fetchNflWeekSchedule(week);
       setNflWeekData(data);
       setNflWeekNumber(data.weekNumber);
+
+      // Auto-evaluar y guardar en Historial y Memoria los mejores picks semanales con Unanimidad 3/3
+      if (data && Array.isArray(data.games) && data.games.length > 0) {
+        const weekOpps = [];
+        for (const g of data.games) {
+          const a = getNflGameAnalysis(g);
+          if (a.confidence === "ALTA") {
+            const vegasSpread = g.vegas?.spread !== undefined ? g.vegas.spread : -3.5;
+            const vegasTotal = g.vegas?.overUnder !== undefined ? g.vegas.overUnder : 44.5;
+            const windMph = g.weather?.windMph || 0;
+            const mcNfl = simulateNflMatch(a.expectedHomeLead, vegasSpread, vegasTotal, windMph, 10000);
+            const isDogPick = a.pickType === 'underdog';
+            const coverProb = Math.max(a.homeWin, a.awayWin, 58.0);
+            const opp = {
+              match: g,
+              probs: { homeWin: a.homeWin, awayWin: a.awayWin, expectedHomeLead: a.expectedHomeLead },
+              mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel },
+              tier: 1,
+              type: isDogPick ? '🛡️ HÁNDICAP POSITIVO NFL (UNDERDOG PROTEGIDO)' : '🏈 VENTAJA CONTRA EL SPREAD (NFL)',
+              pick: `${a.pick.team} ${a.pick.detail} (${a.pick.type})`,
+              prob: `${coverProb.toFixed(1)}%`,
+              odds: "1.91",
+              edgeVal: Math.max(4.5, Math.abs(a.expectedHomeLead + vegasSpread) * 1.5)
+            };
+            opp.consensus = evaluateEnsembleConsensus({
+              sport: 'nfl',
+              match: g,
+              probs: opp.probs,
+              mcStats: opp.mcStats,
+              pickType: opp.type,
+              edgeVal: opp.edgeVal,
+              prob: opp.prob,
+              odds: opp.odds
+            });
+            weekOpps.push(opp);
+          }
+        }
+        const autoSaved = autoSaveUnanimousPicks(weekOpps, 'nfl');
+        if (autoSaved.savedCount > 0) {
+          loadHistoryAndLessons();
+          setSaveActionMsg(`🧠 NFL Semana ${data.weekNumber}: ${autoSaved.savedCount} pick(s) de Confianza Alta (Unanimidad 3/3) se guardaron automáticamente en Historial y Auditoría.`);
+          setTimeout(() => setSaveActionMsg(""), 7000);
+        }
+      }
     } catch (err) {
       console.error("Error al cargar semana NFL:", err);
     } finally {
@@ -1045,12 +1092,19 @@ export default function App() {
           const homeCoverProb = parseFloat(probs.homeCoverProb || calculateSpreadCoverProbability(expectedHomeLead, vegasSpread, true));
           const awayCoverProb = parseFloat(probs.awayCoverProb || calculateSpreadCoverProbability(expectedHomeLead, vegasSpread, false));
 
-          // 1. Detección de Trampa de Medio Punto en Números Clave (3.5 o 7.5) -> Tier 1
-          if (keyEval.trapWarning) {
-            const underdogIsAway = vegasSpread < 0;
-            const underdogTeam = underdogIsAway ? matchData.away.name : matchData.home.name;
-            const underdogCoverProb = underdogIsAway ? awayCoverProb : homeCoverProb;
-            const underdogSpread = Math.abs(vegasSpread);
+          const underdogIsAway = vegasSpread < 0;
+          const underdogTeam = underdogIsAway ? matchData.away.name : matchData.home.name;
+          const underdogCoverProb = underdogIsAway ? awayCoverProb : homeCoverProb;
+          const underdogSpread = Math.abs(vegasSpread);
+          const favIsHome = vegasSpread < 0;
+          const favTeam = favIsHome ? matchData.home.name : matchData.away.name;
+          const favCoverProb = favIsHome ? homeCoverProb : awayCoverProb;
+          const favSpreadFmt = favIsHome ? homeSpreadFmt : awaySpreadFmt;
+          const is25 = Math.abs(vegasSpread) === 2.5;
+          const openingChosenProb = is25 ? favCoverProb : underdogCoverProb;
+
+          // 1. Detección de Trampa de Medio Punto en Números Clave (3.5 o 7.5) -> Tier 1 (solo si el Underdog tiene >= 55.5% de cubrir)
+          if (keyEval.trapWarning && underdogCoverProb >= 55.5) {
             opportunities.push({
               match: matchData,
               probs,
@@ -1066,12 +1120,8 @@ export default function App() {
               meta: `Número Clave NFL (+${underdogSpread})`
             });
           }
-          // 2. Oportunidad Clave (Favorito en -2.5 por debajo del 3)
-          else if (keyEval.keyAlert) {
-            const favIsHome = vegasSpread < 0;
-            const favTeam = favIsHome ? matchData.home.name : matchData.away.name;
-            const favCoverProb = favIsHome ? homeCoverProb : awayCoverProb;
-            const favSpreadFmt = favIsHome ? homeSpreadFmt : awaySpreadFmt;
+          // 2. Oportunidad Clave (Favorito en -2.5 por debajo del 3 con >= 55.5% de cubrir)
+          else if (keyEval.keyAlert && favCoverProb >= 55.5) {
             opportunities.push({
               match: matchData,
               probs,
@@ -1087,15 +1137,8 @@ export default function App() {
               meta: `Clave ${favSpreadFmt}`
             });
           }
-          // 3. Detección Caza-Líneas de Apertura en NFL
-          else if (matchData.vegas?.isOpeningHunt) {
-            const underdogIsAway = vegasSpread < 0;
-            const underdogTeam = underdogIsAway ? matchData.away.name : matchData.home.name;
-            const favTeam = underdogIsAway ? matchData.home.name : matchData.away.name;
-            const favCoverProb = underdogIsAway ? homeCoverProb : awayCoverProb;
-            const dogCoverProb = underdogIsAway ? awayCoverProb : homeCoverProb;
-            const is25 = Math.abs(vegasSpread) === 2.5;
-            const chosenProb = is25 ? favCoverProb : dogCoverProb;
+          // 3. Detección Caza-Líneas de Apertura en NFL (solo si el lado cazado supera >= 56.0% de probabilidad de cubrir)
+          else if (matchData.vegas?.isOpeningHunt && openingChosenProb >= 56.0) {
             const pickText = is25 
               ? `${favTeam} -2.5 (Cubre Línea)`
               : `${underdogTeam} +${Math.abs(vegasSpread)} (Hándicap Apertura)`;
@@ -1108,15 +1151,15 @@ export default function App() {
               type: '💎 CAZA-LÍNEAS APERTURA NFL',
               pick: pickText,
               reason: `${matchData.vegas.openingHuntAlert || 'Oportunidad temprana en número clave'}. Proyección de margen: ${expectedHomeLead.toFixed(1)} pts. Ventaja para entrar antes de que el mercado mueva la línea.`,
-              prob: `${chosenProb.toFixed(1)}%`,
+              prob: `${openingChosenProb.toFixed(1)}%`,
               odds: "1.91",
-              edgeVal: Math.max(4.0, chosenProb - 52.4),
+              edgeVal: Math.max(4.0, openingChosenProb - 52.4),
               color: "#38bdf8",
               meta: `Apertura Clave: ${homeSpreadFmt}`
             });
           }
-          // 4. Ventaja Clara contra el Spread Local (ya sea favorito <= 7.0 o underdog +pts)
-          else if (homeCoversVegas && homeCoverProb >= 57.0 && (vegasSpread > 0 || Math.abs(vegasSpread) <= 7.0)) {
+          // 4. Ventaja Clara contra el Spread Local o Visitante (ya sea favorito <= 7.0 o underdog +pts, >= 55.5% prob)
+          else if (homeCoversVegas && homeCoverProb >= 55.5 && (vegasSpread > 0 || Math.abs(vegasSpread) <= 7.0)) {
             const isHomeUnderdog = vegasSpread > 0;
             opportunities.push({
               match: matchData,
@@ -1128,11 +1171,11 @@ export default function App() {
               reason: `El modelo proyecta margen local de ${expectedHomeLead.toFixed(1)} puntos frente a la línea de ${homeSpreadFmt} de Las Vegas (Prob. Cubrir: ${homeCoverProb.toFixed(1)}%, Edge: +${(homeCoverProb - 52.4).toFixed(1)}%).`,
               prob: `${homeCoverProb.toFixed(1)}%`,
               odds: "1.91",
-              edgeVal: homeCoverProb - 52.4,
+              edgeVal: Math.max(4.0, homeCoverProb - 52.4),
               color: isHomeUnderdog ? "#10b981" : "#3b82f6",
               meta: `Vegas: ${homeSpreadFmt} | Edge: +${(homeCoverProb - 52.4).toFixed(1)}%`
             });
-          } else if (!homeCoversVegas && awayCoverProb >= 56.5 && (awaySpread > 0 || Math.abs(awaySpread) <= 7.0)) {
+          } else if (!homeCoversVegas && awayCoverProb >= 55.5 && (awaySpread > 0 || Math.abs(awaySpread) <= 7.0)) {
             const isAwayUnderdog = awaySpread > 0;
             const isHeavySpread = Math.abs(vegasSpread) >= 7.5;
             opportunities.push({
@@ -1149,15 +1192,15 @@ export default function App() {
                 : `Superioridad en EPA/Net YPP de ${matchData.away.name} para cubrir la línea corta (${awaySpreadFmt}) como visitante (+${(awayCoverProb - 52.4).toFixed(1)}% Edge).`,
               prob: `${awayCoverProb.toFixed(1)}%`,
               odds: "1.91",
-              edgeVal: awayCoverProb - 52.4,
+              edgeVal: Math.max(4.0, awayCoverProb - 52.4),
               color: isAwayUnderdog ? "#10b981" : "#3b82f6",
               meta: `Vegas: ${awaySpreadFmt} | Edge: +${(awayCoverProb - 52.4).toFixed(1)}%`
             });
           }
 
-          // 5. Evaluación de Totales (Over/Under) contra Vegas y Clima (Edge estricto >= 5.5%)
+          // 5. Evaluación de Totales (Over/Under) contra Vegas y Clima (Edge >= 5.0%)
           const totalsEval = probs.totalsEvaluation;
-          if (totalsEval && totalsEval.isValue && parseFloat(totalsEval.edge) >= 5.5) {
+          if (totalsEval && totalsEval.isValue && parseFloat(totalsEval.edge) >= 5.0) {
             opportunities.push({
               match: matchData,
               probs,
@@ -2704,7 +2747,39 @@ export default function App() {
                       </div>
                       {highConf.length > 0 && (
                         <div style={{ marginTop: 15, padding: 12, background: "#10b98122", borderRadius: 8, border: "1px solid #10b98144" }}>
-                          <div style={{ fontSize: 12, fontWeight: 800, color: "#10b981", marginBottom: 6 }}>🔥 MEJORES PICKS DE LA SEMANA:</div>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: "#10b981" }}>🔥 MEJORES PICKS DE LA SEMANA (AUTO-SINCRONIZADOS CON AUDITORÍA):</div>
+                            <button
+                              onClick={() => {
+                                let savedCount = 0;
+                                nflWeekData.games.forEach((g, i) => {
+                                  const a = allAnalysis[i];
+                                  if (a.confidence !== "ALTA") return;
+                                  savePrediction({
+                                    sport: "nfl",
+                                    match: `${g.home.name} vs ${g.away.name}`,
+                                    league: "NFL",
+                                    date: g.dateFormatted || new Date().toLocaleDateString('es-MX'),
+                                    pick: `${a.pick.team} ${a.pick.detail} (${a.pick.type})`,
+                                    confidence: `${Math.max(a.homeWin, a.awayWin).toFixed(0)}%`,
+                                    odds: "1.91",
+                                    homeTeam: g.home.name,
+                                    awayTeam: g.away.name,
+                                    consensusVotes: 3,
+                                    consensusVerdict: "UNANIMIDAD_ELITE",
+                                    source: "portal_nfl_week"
+                                  });
+                                  savedCount++;
+                                });
+                                loadHistoryAndLessons();
+                                setSaveActionMsg(`✅ ${savedCount} pick(s) de Confianza Alta de la Semana ${nflWeekData.weekNumber} guardados en Historial y Rendimiento.`);
+                                setTimeout(() => setSaveActionMsg(""), 6000);
+                              }}
+                              style={{ background: "#10b981", color: "#022c22", border: "none", padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 800, cursor: "pointer" }}
+                            >
+                              💾 Guardar Picks en Historial ({highConf.length})
+                            </button>
+                          </div>
                           {nflWeekData.games.map((g, i) => {
                             const a = allAnalysis[i];
                             if (a.confidence !== "ALTA") return null;

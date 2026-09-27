@@ -299,7 +299,8 @@ export function simulateNflMatch(
   let homeWins = 0;
   let overHits = 0;
   let keyNumberHits = 0; // Margen de exactamente 3 o 7
-  let upsetEvents = 0;
+  let homeBlowoutLoss = 0;
+  let awayBlowoutLoss = 0;
 
   // Penalización por viento en puntos totales si es estadio abierto
   const windPen = wind > 14 ? (wind - 14) * 0.35 : 0;
@@ -319,17 +320,18 @@ export function simulateNflMatch(
     if (Math.abs(Math.abs(rounded) - 7) <= 1 && Math.random() < 0.18) simLead = rounded >= 0 ? 7 : -7;
 
     // Cobertura de spread
-    if (simLead + spread > 0) homeCovers++;
+    const atsMargin = simLead + spread;
+    if (atsMargin > 0) homeCovers++;
     else awayCovers++;
+
+    // Medir riesgo de cola real (fallar el spread por más de 10 puntos en contra)
+    if (atsMargin < -10.5) homeBlowoutLoss++;
+    if (atsMargin > 10.5) awayBlowoutLoss++;
 
     if (simLead > 0) homeWins++;
 
     const absMargin = Math.abs(Math.round(simLead));
     if (absMargin === 3 || absMargin === 7) keyNumberHits++;
-
-    // Upset (favorito perdiendo directo)
-    if (spread < -3.0 && simLead < 0) upsetEvents++;
-    if (spread > 3.0 && simLead > 0) upsetEvents++;
 
     // Total de puntos simulado
     const simTotal = Math.max(16, randomNormal(adjTotal, 9.8));
@@ -341,14 +343,17 @@ export function simulateNflMatch(
   const hWinProb = Number(((homeWins / numIterations) * 100).toFixed(1));
   const oProb = Number(((overHits / numIterations) * 100).toFixed(1));
   const keyHitRate = Number(((keyNumberHits / numIterations) * 100).toFixed(1));
-  const upsetRate = Number(((upsetEvents / numIterations) * 100).toFixed(1));
 
-  // Escala calibrada de estabilidad ATS en NFL (donde 57%+ de cover equivale a >64% de estabilidad estructural)
+  // El riesgo de colapso (upsetRate) se mide sobre el lado con ventaja ATS, nunca castigando que el underdog gane directo
+  const relevantBlowoutEvents = hCoverProb >= aCoverProb ? homeBlowoutLoss : awayBlowoutLoss;
+  const upsetRate = Number(((relevantBlowoutEvents / numIterations) * 100).toFixed(1));
+
+  // Escala calibrada de estabilidad ATS en NFL (donde 56%+ de cover equivale a >=65% de estabilidad estructural)
   const maxCover = Math.max(hCoverProb, aCoverProb);
-  const stabilityScore = Number(Math.min(92, Math.max(45, Math.round(maxCover * 1.12))).toFixed(0));
+  const stabilityScore = Number(Math.min(92, Math.max(48, Math.round(maxCover * 1.16))).toFixed(0));
 
   let riskLevel = 'Bajo';
-  if (upsetRate > 35 || stabilityScore < 58) riskLevel = 'Alto';
+  if (upsetRate > 34 || stabilityScore < 58) riskLevel = 'Alto';
   else if (upsetRate > 25 || stabilityScore < 64) riskLevel = 'Medio';
 
   return {
