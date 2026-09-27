@@ -1281,6 +1281,9 @@ export async function runAlertEngine(options = {}) {
   if (isVerbose) {
     console.log(`Top ${maxPicksToSend} de la jornada: ${topSlate.length}`);
     console.log(`Unánimes 3/3 totales detectadas: ${allUnanimousOpps.length} (${autoSavedUnanimousCount} nuevas en Memoria)`);
+    allUnanimousOpps.forEach((u, idx) => {
+      console.log(`  [${idx + 1}] ${u.sport} (${u.league}) | ${u.game} -> ${u.pick} (${u.type}) | Prob: ${u.prob} | Cuota: ${u.odds} | ${u.edgeStr}`);
+    });
     console.log(`Pendientes por enviar a Telegram (no duplicadas): ${toSend.length}`);
   }
 
