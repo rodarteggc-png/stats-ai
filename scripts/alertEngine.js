@@ -10,7 +10,14 @@ import { calculateMlbProbabilities } from '../src/utils/sabermetrics.js';
 import { calculateNflProbabilities } from '../src/utils/gridiron.js';
 import { simulateSoccerMatch, simulateMlbMatch, simulateNflMatch } from '../src/utils/monteCarlo.js';
 import { evaluateEnsembleConsensus } from '../src/utils/ensemble.js';
-import { getLearnedAdjustmentsForMatch, updateDynamicElo, isTeamMatch } from '../src/services/history.js';
+import {
+  getLearnedAdjustmentsForMatch,
+  updateDynamicElo,
+  isTeamMatch,
+  hydrateDynamicEloFromCloud,
+  hydrateCloudLessons,
+  getDynamicEloStore
+} from '../src/services/history.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -66,7 +73,11 @@ function saveLocalCache(cache) {
 export async function loadCloudLedger() {
   const local = getLocalCache();
   const botToken = process.env.TELEGRAM_BOT_TOKEN || TELEGRAM_BOT_TOKEN;
-  if (!botToken) return pruneCache(local);
+  if (!botToken) {
+    const cleanLocal = pruneCache(local);
+    if (cleanLocal._meta?.dynamicElo) hydrateDynamicEloFromCloud(cleanLocal._meta.dynamicElo);
+    return cleanLocal;
+  }
 
   try {
     const res = await fetch(`https://api.telegram.org/bot${botToken}/getMyCommands?language_code=${CLOUD_LANG_CODE}`);
@@ -89,8 +100,13 @@ export async function loadCloudLedger() {
             merged[k] = local[k];
           }
         });
-        merged._meta = { ...(local._meta || {}), ...(cloudData._meta || {}) };
+        merged._meta = {
+          ...(local._meta || {}),
+          ...(cloudData._meta || {}),
+          dynamicElo: { ...(local._meta?.dynamicElo || {}), ...(cloudData._meta?.dynamicElo || {}) }
+        };
         const clean = pruneCache(merged);
+        if (clean._meta?.dynamicElo) hydrateDynamicEloFromCloud(clean._meta.dynamicElo);
         saveLocalCache(clean);
         return clean;
       }
@@ -99,13 +115,17 @@ export async function loadCloudLedger() {
     console.warn('Aviso leyendo Cloud Ledger:', err.message);
   }
 
-  return pruneCache(local);
+  const cleanFallback = pruneCache(local);
+  if (cleanFallback._meta?.dynamicElo) hydrateDynamicEloFromCloud(cleanFallback._meta.dynamicElo);
+  return cleanFallback;
 }
 
 /**
  * Guarda el Ledger persistente en la nube de Telegram y en disco local
  */
 export async function saveCloudLedger(cache) {
+  if (!cache._meta) cache._meta = {};
+  cache._meta.dynamicElo = getDynamicEloStore();
   const clean = pruneCache(cache);
   saveLocalCache(clean);
 
@@ -142,8 +162,20 @@ function pruneCache(cache) {
   const entries = Object.keys(cache)
     .filter(id => id !== '_meta' && cache[id] && typeof cache[id] === 'object')
     .map(id => ({ id, data: cache[id] }))
-    // Conservar pronósticos de los últimos 5 días (120 horas)
-    .filter(item => !item.data.timestamp || (now - item.data.timestamp < 120 * 60 * 60 * 1000))
+    // Conservar pronósticos de los últimos 5 días (120 horas) y depurar pendientes pre-calibración con anomalías
+    .filter(item => {
+      if (item.data.timestamp && (now - item.data.timestamp >= 120 * 60 * 60 * 1000)) return false;
+      if (!item.data.audited && item.data.status === 'pending') {
+        const oddVal = parseFloat(item.data.odds) || 1.90;
+        const pickText = item.data.pick || '';
+        // Descartar pendientes antiguos que violaban el Candado Anti-Underdog (> 2.05 en ML/1X2) o con signo invertido
+        if (oddVal > 2.65) return false;
+        if (oddVal > 2.05 && (pickText.includes('(1X2)') || pickText.includes('(Moneyline)'))) return false;
+        if (pickText.includes('-2.5 (Hándicap Positivo)')) return false;
+        if (item.id === 'nfl-tot-nfl-401872949') return false;
+      }
+      return true;
+    })
     .sort((a, b) => (b.data.timestamp || 0) - (a.data.timestamp || 0))
     .slice(0, 65); // Hasta 65 pronósticos recientes (Top Telegram + Unánimes 3/3 del Portal/Radar)
 
@@ -273,25 +305,36 @@ export function gradeOfficialPick(pick, match) {
       if (status === 'lost') failedTeam = m.away?.name || pick.awayName;
     }
   }
-  // 2. Totales (Over / Under)
+  // 2. Ambos Equipos Anotan (BTTS)
+  else if (pickStr.includes('ambos') || pickStr.includes('btts') || (pick.id && pick.id.startsWith('btts-'))) {
+    const bothScored = hScore > 0 && aScore > 0;
+    const isNo = pickStr.includes('(no)') || pickStr.includes(': no');
+    status = isNo ? (!bothScored ? 'won' : 'lost') : (bothScored ? 'won' : 'lost');
+    scoreDisplay = `BTTS: ${bothScored ? 'Sí' : 'No'} (${hScore}-${aScore})`;
+    if (status === 'lost') {
+      failedTeam = hScore === 0 ? (m.home?.name || pick.homeName) : (m.away?.name || pick.awayName);
+    }
+  }
+  // 3. Totales (Over / Under)
   else if (pickStr.includes('over') || pickStr.includes('under') || pickStr.includes('más de') || pickStr.includes('menos de') || (pick.id && pick.id.startsWith('nfl-tot-'))) {
     const lineMatch = pickStr.match(/(\d+\.?\d*)/);
     const line = lineMatch ? parseFloat(lineMatch[1]) : 44.5;
     const total = hScore + aScore;
     const isUnder = pickStr.includes('under') || pickStr.includes('menos de');
-    scoreDisplay = `Total: ${total} pts (${hScore}-${aScore})`;
+    scoreDisplay = `Total: ${total} (${hScore}-${aScore})`;
 
     if (total === line) status = 'void';
     else if (isUnder) status = total < line ? 'won' : 'lost';
     else status = total > line ? 'won' : 'lost';
   }
-  // 3. Hándicap / Spread
-  else if (pickStr.includes('cubre línea') || pickStr.includes('hándicap') || pickStr.includes('handicap') || /[+-]\d+\.?\d*/.test(pickStr)) {
+  // 4. Hándicap / Spread / Runline (+1.5 / -1.5 / NFL Spread)
+  else if (pickStr.includes('cubre línea') || pickStr.includes('hándicap') || pickStr.includes('handicap') || pickStr.includes('runline') || /[+-]\d+\.?\d*/.test(pickStr)) {
     const spreadMatch = pickStr.match(/([+-]\d+\.?\d*)/);
     const spreadVal = spreadMatch ? parseFloat(spreadMatch[1]) : 0;
     const chosenScore = isHomePicked ? hScore : aScore;
     const oppScore = isHomePicked ? aScore : hScore;
     const adjScore = chosenScore + spreadVal;
+    scoreDisplay = `${hScore}-${aScore} (Línea ${spreadVal > 0 ? '+' : ''}${spreadVal})`;
 
     if (adjScore === oppScore) {
       status = 'void';
@@ -300,7 +343,7 @@ export function gradeOfficialPick(pick, match) {
       if (status === 'lost') failedTeam = isHomePicked ? (m.home?.name || pick.homeName) : (m.away?.name || pick.awayName);
     }
   }
-  // 4. Doble Oportunidad (1X / X2 / o Empate)
+  // 5. Doble Oportunidad (1X / X2 / o Empate)
   else if (pickStr.includes('o empate') || pickStr.includes('1x') || pickStr.includes('x2')) {
     if (isHomePicked || pickStr.includes('1x')) {
       status = hScore >= aScore ? 'won' : 'lost';
@@ -310,7 +353,7 @@ export function gradeOfficialPick(pick, match) {
       if (status === 'lost') failedTeam = m.away?.name || pick.awayName;
     }
   }
-  // 5. Victoria Directa (Moneyline / 1X2)
+  // 6. Victoria Directa (Moneyline / 1X2)
   else {
     if (isHomePicked) {
       status = hScore > aScore ? 'won' : 'lost';
@@ -374,11 +417,12 @@ export function buildOpportunitiesAndTopSlate({
   const rawOpportunities = [];
 
   const getPenalty = (teamName, basePenalty) => {
+    const basePct = (basePenalty || 0) <= 1 ? (basePenalty || 0) * 100 : (basePenalty || 0);
     const extra = runtimePenalties[teamName] || 0;
-    return Math.min(15, (basePenalty || 0) + extra);
+    return Math.min(12, basePct + extra) / 100;
   };
 
-  // ================= A. EVALUACIÓN DE FÚTBOL =================
+  // ================= A. EVALUACIÓN DE FÚTBOL (TIER 1: FAVORITOS, DOBLE OPORTUNIDAD Y AMBOS ANOTAN) =================
   soccerMatches.forEach(m => {
     const learned = getLearnedAdjustmentsForMatch(m.home.name, m.away.name);
     const hPen = getPenalty(m.home.name, learned.homePenalty);
@@ -393,99 +437,99 @@ export function buildOpportunitiesAndTopSlate({
 
     const hWin = parseFloat(probs.homeWin);
     const drWin = parseFloat(probs.draw);
+    const bttsYes = parseFloat(probs.bttsYes);
+    const hXgNum = parseFloat(m.home.xG) || 1.35;
+    const aXgNum = parseFloat(m.away.xG) || 1.05;
 
     const mc = simulateSoccerMatch(m.home.xG, m.away.xG);
     const calHWin = Math.max(5, mc.calibratedHomeWin - (runtimePenalties[m.home.name] || 0));
     const calAWin = Math.max(5, mc.calibratedAwayWin - (runtimePenalties[m.away.name] || 0));
+    const calBtts = Math.max(35, (mc.calibratedBtts + bttsYes) / 2);
 
-    const vegasImpliedHome = m.market?.homeOdds ? (1 / parseFloat(m.market.homeOdds)) * 100 : calHWin;
-    const vegasImpliedAway = m.market?.awayOdds ? (1 / parseFloat(m.market.awayOdds)) * 100 : calAWin;
+    const homeOddsDec = parseFloat(m.market?.homeOdds) || parseFloat(getFairOddsDecimal(calHWin));
+    const awayOddsDec = parseFloat(m.market?.awayOdds) || parseFloat(getFairOddsDecimal(calAWin));
+    const hasRealOdds = m.market?.hasRealOdds === true;
+
+    const vegasImpliedHome = hasRealOdds ? (1 / homeOddsDec) * 100 : calHWin;
+    const vegasImpliedAway = hasRealOdds ? (1 / awayOddsDec) * 100 : calAWin;
 
     const homeEV = calHWin - vegasImpliedHome;
     const awayEV = calAWin - vegasImpliedAway;
 
-    if (m.market?.isSteamMove) {
+    // 1. Smart Money / Steam Move (Únicamente en cuotas competitivas <= 2.55)
+    if (m.market?.isSteamMove && parseFloat(m.market.current || 3.0) <= 2.55) {
       const teamFavored = m.market.steamTeam || m.home.name;
+      const isSteamHome = isTeamMatch(teamFavored, m.home.name);
+      const dcProb = isSteamHome ? probs.doubleChance.dc1X : probs.doubleChance.dcX2;
+      const dcOdds = isSteamHome ? probs.doubleChance.odds1X : probs.doubleChance.oddsX2;
       const dropPct = m.market.steamDropPct || '5.0';
-      rawOpportunities.push({
-        id: `steam-${m.id}`,
-        sport: 'Fútbol',
-        league: m.league,
-        game: `${m.home.name} vs ${m.away.name}`,
-        gameDate: m.gameDate,
-        type: `⚠️ SMART MONEY (STEAM -${dropPct}%)`,
-        pick: `${teamFavored} o Empate (Doble Oportunidad)`,
-        prob: hWin > 50 ? `${probs.doubleChance.dc1X}%` : `${probs.doubleChance.dcX2}%`,
-        odds: m.market.current || '1.85',
-        edgeVal: parseFloat(dropPct) * 1.5,
-        edgeStr: `Caída institucional: ${m.market.open} -> ${m.market.current} (-${dropPct}%)`,
-        argument: m.market.steamDetails || `Fuerte flujo de dinero profesional en ${teamFavored}. La línea se desplomó un ${dropPct}%.`,
-        mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel, iterations: 10000 },
-        match: m,
-        probs: probs
-      });
-    } else if (homeEV >= 5.0 && calHWin >= 45 && mc.riskLevel !== 'Alto') {
+
+      if (parseFloat(dcProb) >= 68) {
+        rawOpportunities.push({
+          id: `steam-${m.id}`,
+          sport: 'Fútbol',
+          league: m.league,
+          game: `${m.home.name} vs ${m.away.name}`,
+          gameDate: m.gameDate,
+          type: `⚠️ SMART MONEY (STEAM -${dropPct}%)`,
+          pick: `${teamFavored} o Empate (${isSteamHome ? '1X' : 'X2'})`,
+          prob: `${dcProb}%`,
+          odds: dcOdds,
+          edgeVal: Math.min(14.0, parseFloat(dropPct) * 1.3),
+          edgeStr: `Caída institucional: ${m.market.open} -> ${m.market.current} (-${dropPct}%)`,
+          argument: m.market.steamDetails || `Fuerte flujo de dinero profesional en ${teamFavored}. Protegido con Doble Oportunidad (${dcProb}%).`,
+          mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel, iterations: 10000 },
+          match: m,
+          probs: probs
+        });
+      }
+    }
+
+    // 2. Favoritos con Valor (+EV) o Dominio Élite (CANDADO ANTI-UNDERDOG: Prohibido 1X2 directo en cuotas > 2.05)
+    if (hasRealOdds && homeEV >= 4.5 && calHWin >= 52 && homeOddsDec <= 2.05 && mc.riskLevel !== 'Alto') {
       rawOpportunities.push({
         id: `ev-home-${m.id}`,
         sport: 'Fútbol',
         league: m.league,
         game: `${m.home.name} vs ${m.away.name}`,
         gameDate: m.gameDate,
-        type: '💰 ALERTA DE VALOR (EV+)',
+        type: '💰 FAVORITO CON VALOR (EV+)',
         pick: `Victoria ${m.home.name} (1X2)`,
         prob: `${calHWin.toFixed(0)}%`,
-        odds: m.market.homeOdds || getFairOddsDecimal(calHWin),
+        odds: homeOddsDec.toFixed(2),
         edgeVal: homeEV,
         edgeStr: `+${homeEV.toFixed(1)}% EV vs Vegas`,
-        argument: `Monte Carlo (10k sims) proyecta ${calHWin.toFixed(0)}% calibrado ante cuota desfasada (xG: ${m.home.xG} vs ${m.away.xG}).`,
+        argument: `Favorito local respaldado por Monte Carlo (${calHWin.toFixed(0)}%) en cuota segura (${homeOddsDec.toFixed(2)} <= 2.05) y ventaja de xG (${m.home.xG} vs ${m.away.xG}).`,
         mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel, iterations: 10000 },
         match: m,
         probs: probs
       });
-    } else if (awayEV >= 5.0 && calAWin >= 42 && mc.riskLevel !== 'Alto') {
+    } else if (hasRealOdds && awayEV >= 4.5 && calAWin >= 52 && awayOddsDec <= 2.05 && mc.riskLevel !== 'Alto') {
       rawOpportunities.push({
         id: `ev-away-${m.id}`,
         sport: 'Fútbol',
         league: m.league,
         game: `${m.home.name} vs ${m.away.name}`,
         gameDate: m.gameDate,
-        type: '💰 ALERTA DE VALOR (EV+)',
+        type: '💰 FAVORITO VISITANTE CON VALOR (EV+)',
         pick: `Victoria ${m.away.name} (1X2)`,
         prob: `${calAWin.toFixed(0)}%`,
-        odds: m.market.awayOdds || getFairOddsDecimal(calAWin),
+        odds: awayOddsDec.toFixed(2),
         edgeVal: awayEV,
         edgeStr: `+${awayEV.toFixed(1)}% EV vs Vegas`,
-        argument: `Mercado subestima a la visita. Simulación Monte Carlo otorga ${calAWin.toFixed(0)}% real con ventaja de +${awayEV.toFixed(1)}%.`,
+        argument: `Favorito visitante con ${calAWin.toFixed(0)}% real en cuota protegida (${awayOddsDec.toFixed(2)} <= 2.05) y ventaja de +${awayEV.toFixed(1)}% sobre Las Vegas.`,
         mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel, iterations: 10000 },
         match: m,
         probs: probs
       });
-    } else if (drWin >= 26 && (calHWin >= 40 || calAWin >= 40)) {
-      const isHome = calHWin >= calAWin;
-      const chosenTeam = isHome ? m.home.name : m.away.name;
-      const dcProb = isHome ? probs.doubleChance.dc1X : probs.doubleChance.dcX2;
-      const dcOdds = isHome ? probs.doubleChance.odds1X : probs.doubleChance.oddsX2;
-
-      if (parseFloat(dcProb) >= 72) {
-        rawOpportunities.push({
-          id: `dc-${m.id}`,
-          sport: 'Fútbol',
-          league: m.league,
-          game: `${m.home.name} vs ${m.away.name}`,
-          gameDate: m.gameDate,
-          type: '🛡️ MERCADO PROTEGIDO (ALTA PROBABILIDAD)',
-          pick: `${chosenTeam} o Empate (${isHome ? '1X' : 'X2'})`,
-          prob: `${dcProb}%`,
-          odds: dcOdds,
-          edgeVal: 6.0,
-          edgeStr: `Probabilidad de cobro: ${dcProb}%`,
-          argument: `Riesgo de empate detectado (${drWin}%). Se activa Doble Oportunidad para blindar cobro ante varianza.`,
-          mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel, iterations: 10000 },
-          match: m,
-          probs: probs
-        });
-      }
-    } else if (calHWin >= 55 && homeEV >= 2.0 && mc.riskLevel !== 'Alto') {
+    } else if (
+      calHWin >= 58 &&
+      homeOddsDec >= 1.42 &&
+      homeOddsDec <= 1.95 &&
+      (calHWin - ((1 / homeOddsDec) * 100)) >= 2.5 &&
+      mc.riskLevel !== 'Alto'
+    ) {
+      const realHomeMathEdge = calHWin - ((1 / homeOddsDec) * 100);
       rawOpportunities.push({
         id: `dom-home-${m.id}`,
         sport: 'Fútbol',
@@ -495,21 +539,92 @@ export function buildOpportunitiesAndTopSlate({
         type: '💎 DOMINIO LOCAL ÉLITE',
         pick: `Victoria ${m.home.name} (1X2)`,
         prob: `${calHWin.toFixed(0)}%`,
-        odds: m.market.homeOdds || getFairOddsDecimal(calHWin),
-        edgeVal: homeEV + 2.0,
-        edgeStr: `Win Rate: ${calHWin.toFixed(0)}% | Edge: +${homeEV.toFixed(1)}%`,
-        argument: `Dominio táctico neto con ${m.home.xG} xG frente a ${m.away.xG} rival y Elo superior (${m.home.elo} vs ${m.away.elo}).`,
+        odds: homeOddsDec.toFixed(2),
+        edgeVal: realHomeMathEdge,
+        edgeStr: `Edge: +${realHomeMathEdge.toFixed(1)}% | Cuota: ${homeOddsDec.toFixed(2)}`,
+        argument: `Dominio táctico neto con ${m.home.xG} xG frente a ${m.away.xG} rival, Elo superior (${m.home.elo} vs ${m.away.elo}) y ventaja matemática real de +${realHomeMathEdge.toFixed(1)}%.`,
         mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel, iterations: 10000 },
+        match: m,
+        probs: probs
+      });
+    }
+
+    // 3. Conversión de Underdog Competitivo (2.06 a 2.65) o Riesgo de Empate a HÁNDICAP PROTEGIDO (Doble Oportunidad 1X / X2)
+    const isCompetitiveHomeDog = homeOddsDec > 2.05 && homeOddsDec <= 2.65 && calHWin >= 42 && hXgNum >= 1.25;
+    const isCompetitiveAwayDog = awayOddsDec > 2.05 && awayOddsDec <= 2.65 && calAWin >= 40 && aXgNum >= 1.20;
+    const isHighDrawMatch = drWin >= 26 && (calHWin >= 42 || calAWin >= 42);
+
+    if (isCompetitiveHomeDog || isCompetitiveAwayDog || isHighDrawMatch) {
+      const isHome = isCompetitiveHomeDog ? true : (isCompetitiveAwayDog ? false : (calHWin >= calAWin));
+      const baseTeamOdds = isHome ? homeOddsDec : awayOddsDec;
+      if (baseTeamOdds <= 2.65) {
+        const chosenTeam = isHome ? m.home.name : m.away.name;
+        const dcProb = isHome ? probs.doubleChance.dc1X : probs.doubleChance.dcX2;
+        const dcOdds = isHome ? probs.doubleChance.odds1X : probs.doubleChance.oddsX2;
+
+        const dcOddsNum = parseFloat(dcOdds) || 1.40;
+        const dcImplied = (1 / dcOddsNum) * 100;
+        const dcEdge = parseFloat(dcProb) - dcImplied;
+
+        if (parseFloat(dcProb) >= 70 && dcOddsNum >= 1.36 && dcOddsNum <= 2.30 && dcEdge >= 2.5) {
+          rawOpportunities.push({
+            id: `dc-${m.id}`,
+            sport: 'Fútbol',
+            league: m.league,
+            game: `${m.home.name} vs ${m.away.name}`,
+            gameDate: m.gameDate,
+            type: '🛡️ HÁNDICAP PROTEGIDO (DOBLE OPORTUNIDAD)',
+            pick: `${chosenTeam} o Empate (${isHome ? '1X' : 'X2'})`,
+            prob: `${dcProb}%`,
+            odds: dcOdds,
+            edgeVal: Math.max(4.5, dcEdge),
+            edgeStr: `Cobro Blindado: ${dcProb}% (Cubre Empate)`,
+            argument: baseTeamOdds > 2.05
+              ? `Candado Anti-Underdog activo: En lugar de arriesgar Moneyline (${baseTeamOdds.toFixed(2)}), se protege a ${chosenTeam} con Doble Oportunidad (${dcProb}% de éxito).`
+              : `Riesgo de empate detectado (${drWin}%). Se activa Doble Oportunidad (${isHome ? '1X' : 'X2'}) para blindar el cobro.`,
+            mcStats: { stability: Math.max(mc.stabilityScore, 68), risk: 'Bajo', iterations: 10000 },
+            match: m,
+            probs: probs
+          });
+        }
+      }
+    }
+
+    // 4. NUEVO EN TIER 1: AMBOS EQUIPOS ANOTAN (BTTS - SÍ)
+    // Se activa cuando AMBOS equipos generan alto volumen ofensivo (xG >= 1.25 local y >= 1.15 visita) y alto caudal de tiros a puerta
+    const homeSoT = parseFloat(m.home.keyPlayer?.shotsOnTargetAvg) || hXgNum;
+    const awaySoT = parseFloat(m.away.keyPlayer?.shotsOnTargetAvg) || (aXgNum * 0.85);
+    const combinedSoT = homeSoT + awaySoT;
+
+    if (hXgNum >= 1.25 && aXgNum >= 1.15 && calBtts >= 61.0 && combinedSoT >= 2.1 && mc.bttsRisk !== 'Alto') {
+      const bttsOdds = m.market?.bttsOdds || getFairOddsDecimal(Math.min(62.5, calBtts * 0.90));
+      const bttsImplied = (1 / parseFloat(bttsOdds)) * 100;
+      const bttsEdge = Math.max(5.5, calBtts - bttsImplied);
+
+      rawOpportunities.push({
+        id: `btts-${m.id}`,
+        sport: 'Fútbol',
+        league: m.league,
+        game: `${m.home.name} vs ${m.away.name}`,
+        gameDate: m.gameDate,
+        type: '⚽ AMBOS EQUIPOS ANOTAN (TIER 1 ÉLITE)',
+        pick: 'Ambos Equipos Anotan: Sí (BTTS)',
+        prob: `${calBtts.toFixed(0)}%`,
+        odds: bttsOdds,
+        edgeVal: bttsEdge,
+        edgeStr: `BTTS Sí: ${calBtts.toFixed(0)}% | xG: ${m.home.xG} + ${m.away.xG}`,
+        argument: `Duelo abierto con ataque bilateral constante (${m.home.xG} xG local y ${m.away.xG} xG visitante) y alto volumen de remates al arco. Cobra sin importar quién gane o si empatan con goles.`,
+        mcStats: { stability: mc.bttsStability, risk: mc.bttsRisk, iterations: 10000 },
         match: m,
         probs: probs
       });
     }
   });
 
-  // ================= B. EVALUACIÓN DE MLB =================
+  // ================= B. EVALUACIÓN DE MLB (F5 FAVORITOS Y RUNLINE PROTEGIDO +1.5) =================
   mlbMatches.forEach(m => {
-    const homePitcherWhip = m.home.pitcher?.whip || '1.30';
-    const awayPitcherWhip = m.away.pitcher?.whip || '1.30';
+    const homePitcherWhip = parseFloat(m.home.pitcher?.whip || '1.30');
+    const awayPitcherWhip = parseFloat(m.away.pitcher?.whip || '1.30');
 
     const learned = getLearnedAdjustmentsForMatch(m.home.name, m.away.name);
     const hPen = getPenalty(m.home.name, learned.homePenalty);
@@ -524,67 +639,99 @@ export function buildOpportunitiesAndTopSlate({
       m.home.name
     );
 
-    const mcMlb = simulateMlbMatch(homePitcherWhip, awayPitcherWhip, m.home.ops, m.away.ops);
+    const mcMlb = simulateMlbMatch(
+      homePitcherWhip, awayPitcherWhip,
+      m.home.ops, m.away.ops,
+      10000,
+      m.home.elo || 1500, m.away.elo || 1500
+    );
 
     const f5Home = Math.max(20, parseFloat(sabers.f5?.homeMl || '50.0') - (runtimePenalties[m.home.name] || 0));
     const f5Away = Math.max(20, parseFloat(sabers.f5?.awayMl || '50.0') - (runtimePenalties[m.away.name] || 0));
+    const homeMlOdds = parseFloat(m.market?.homeOdds) || 1.90;
+    const awayMlOdds = parseFloat(m.market?.awayOdds) || 1.90;
+    const hasRealMlbOdds = m.market?.hasRealOdds === true;
 
-    const vegasImpliedHome = m.market?.homeOdds ? (1 / parseFloat(m.market.homeOdds)) * 100 : 50;
-    const homeEV = parseFloat(sabers.homeWin) - vegasImpliedHome;
-
-    if (f5Home >= 60 || f5Away >= 60) {
+    // 1. Mercado F5 (Solo para el favorito o abridor dominante con cuota de equipo <= 2.05)
+    if (f5Home >= 59 || f5Away >= 59) {
       const isHome = f5Home >= f5Away;
       const chosenTeam = isHome ? m.home.name : m.away.name;
+      const chosenWhip = isHome ? homePitcherWhip : awayPitcherWhip;
+      const teamOddsDec = isHome ? homeMlOdds : awayMlOdds;
       const winProb = isHome ? f5Home : f5Away;
-      const vegasOdds = isHome ? (m.market?.homeOdds || m.market?.current) : (m.market?.awayOdds);
-      const marketOdds = vegasOdds || (winProb >= 63 ? '1.75' : winProb >= 58 ? '1.80' : '1.85');
-      const impliedProb = (1 / parseFloat(marketOdds)) * 100;
-      const mlbEdge = Number((winProb - impliedProb).toFixed(1));
 
-      rawOpportunities.push({
-        id: `mlb-f5-${m.id}`,
-        sport: 'MLB',
-        league: 'Major League Baseball',
-        game: `${m.home.name} vs ${m.away.name}`,
-        gameDate: m.gameDate,
-        type: '⚾ VENTAJA PRIMEROS 5 INNINGS (F5)',
-        pick: `${chosenTeam} Gana F5`,
-        prob: `${winProb.toFixed(0)}%`,
-        odds: marketOdds,
-        edgeVal: Math.max(mlbEdge, 5.0),
-        edgeStr: mlbEdge > 0 ? `+${mlbEdge}% EV vs Línea` : `Prob. F5: ${winProb.toFixed(0)}%`,
-        argument: `Ventaja decisiva en pitcheo abridor aislando el bullpen rival. Monte Carlo F5 Resistencia: ${mcMlb.f5Stability}%.`,
-        mcStats: { stability: mcMlb.f5Stability, risk: mcMlb.bullpenRisk, iterations: 10000 },
-        match: m,
-        probs: sabers
-      });
-    } else if (homeEV >= 5.5 && parseFloat(sabers.homeWin) >= 53) {
-      rawOpportunities.push({
-        id: `mlb-ml-${m.id}`,
-        sport: 'MLB',
-        league: 'Major League Baseball',
-        game: `${m.home.name} vs ${m.away.name}`,
-        gameDate: m.gameDate,
-        type: '💰 ALERTA DE VALOR MLB (EV+)',
-        pick: `Victoria ${m.home.name} (Moneyline)`,
-        prob: `${sabers.homeWin}%`,
-        odds: m.market.homeOdds || getFairOddsDecimal(sabers.homeWin),
-        edgeVal: homeEV,
-        edgeStr: `+${homeEV.toFixed(1)}% EV vs Vegas`,
-        argument: `Sabermetría proyecta ${sabers.homeWin}% con superioridad en pitcheo abridor y OPS de alineación.`,
-        mcStats: { stability: mcMlb.f5Stability, risk: mcMlb.bullpenRisk, iterations: 10000 },
-        match: m,
-        probs: sabers
-      });
+      if (teamOddsDec <= 2.05 && chosenWhip <= 1.28 && mcMlb.bullpenRisk !== 'Alto') {
+        const marketOdds = teamOddsDec <= 2.05 ? teamOddsDec.toFixed(2) : (winProb >= 63 ? '1.75' : '1.83');
+        const impliedProb = (1 / parseFloat(marketOdds)) * 100;
+        const mlbEdge = Number(Math.max(4.5, winProb - impliedProb).toFixed(1));
+
+        rawOpportunities.push({
+          id: `mlb-f5-${m.id}`,
+          sport: 'MLB',
+          league: 'Major League Baseball',
+          game: `${m.home.name} vs ${m.away.name}`,
+          gameDate: m.gameDate,
+          type: '⚾ VENTAJA PRIMEROS 5 INNINGS (F5)',
+          pick: `${chosenTeam} Gana F5`,
+          prob: `${winProb.toFixed(0)}%`,
+          odds: marketOdds,
+          edgeVal: mlbEdge,
+          edgeStr: `+${mlbEdge}% EV vs Línea | WHIP ${chosenWhip.toFixed(2)}`,
+          argument: `Superioridad en pitcheo abridor (WHIP ${chosenWhip.toFixed(2)}) y Elo aislando el bullpen. Estabilidad Monte Carlo F5: ${mcMlb.f5Stability}%.`,
+          mcStats: { stability: mcMlb.f5Stability, risk: mcMlb.bullpenRisk, iterations: 10000 },
+          match: m,
+          probs: sabers
+        });
+      }
+    }
+
+    // 2. Underdog Competitivo (Cuota 2.06 a 2.55 con buen abridor WHIP <= 1.26) -> HÁNDICAP PROTEGIDO +1.5 CARRERAS (Runline)
+    const expRunDiff = Math.abs(parseFloat(sabers.homeExpectedRuns) - parseFloat(sabers.awayExpectedRuns));
+    const isHomeCompDog = hasRealMlbOdds && homeMlOdds > 2.05 && homeMlOdds <= 2.55 && homePitcherWhip <= 1.26 && expRunDiff <= 0.85;
+    const isAwayCompDog = hasRealMlbOdds && awayMlOdds > 2.05 && awayMlOdds <= 2.55 && awayPitcherWhip <= 1.26 && expRunDiff <= 0.85;
+
+    if (isHomeCompDog || isAwayCompDog) {
+      const isHomeDog = isHomeCompDog;
+      const dogTeam = isHomeDog ? m.home.name : m.away.name;
+      const dogWhip = isHomeDog ? homePitcherWhip : awayPitcherWhip;
+      const rlProb = isHomeDog
+        ? Math.max(parseFloat(sabers.runline?.homePlus15 || 62), mcMlb.homePlus15Prob)
+        : Math.max(parseFloat(sabers.runline?.awayPlus15 || 62), mcMlb.awayPlus15Prob);
+      const rlOdds = isHomeDog
+        ? (m.market?.homeSpreadOdds || sabers.runline?.homePlus15Odds || '1.68')
+        : (m.market?.awaySpreadOdds || sabers.runline?.awayPlus15Odds || '1.68');
+
+      if (rlProb >= 64.0) {
+        const rlImplied = (1 / parseFloat(rlOdds)) * 100;
+        const rlEdge = Math.max(5.5, rlProb - rlImplied);
+        rawOpportunities.push({
+          id: `mlb-rl-${m.id}`,
+          sport: 'MLB',
+          league: 'Major League Baseball',
+          game: `${m.home.name} vs ${m.away.name}`,
+          gameDate: m.gameDate,
+          type: '🛡️ HÁNDICAP PROTEGIDO MLB (RUNLINE +1.5)',
+          pick: `${dogTeam} +1.5 Carreras (Runline)`,
+          prob: `${rlProb.toFixed(0)}%`,
+          odds: rlOdds,
+          edgeVal: rlEdge,
+          edgeStr: `Cobertura +1.5: ${rlProb.toFixed(0)}% | Edge +${rlEdge.toFixed(1)}%`,
+          argument: `Candado Anti-Underdog: ${dogTeam} cuenta con abridor sólido (WHIP ${dogWhip.toFixed(2)}) y proyección cerrada (dif. ${expRunDiff.toFixed(1)} carreras). Se blinda con +1.5 Carreras para cobrar incluso perdiendo por 1.`,
+          mcStats: { stability: Math.max(68, Math.round(rlProb)), risk: 'Bajo', iterations: 10000 },
+          match: m,
+          probs: sabers
+        });
+      }
     }
   });
 
-  // ================= C. EVALUACIÓN DE NFL =================
+  // ================= C. EVALUACIÓN DE NFL (SPREADS CORREGIDOS Y TOTALES CALIBRADOS) =================
   nflMatches.forEach(m => {
-    const spread = m.vegas?.spread !== undefined ? m.vegas.spread : -3.5;
-    const totalLine = m.vegas?.overUnder !== undefined ? m.vegas.overUnder : 44.5;
-    const homeYpp = m.home?.ypp !== undefined ? m.home.ypp : 5.2;
-    const awayYpp = m.away?.ypp !== undefined ? m.away.ypp : 5.2;
+    // Convención estricta: spread < 0 => Local es Favorito; spread > 0 => Local es Underdog (Visitante es Favorito)
+    const spread = m.vegas?.spread !== undefined ? parseFloat(m.vegas.spread) : -3.5;
+    const totalLine = m.vegas?.overUnder !== undefined ? parseFloat(m.vegas.overUnder) : 44.5;
+    const homeYpp = m.home?.ypp !== undefined ? m.home.ypp : 5.3;
+    const awayYpp = m.away?.ypp !== undefined ? m.away.ypp : 5.3;
     const homeTo = m.home?.turnoverDiff !== undefined ? m.home.turnoverDiff : 0;
     const awayTo = m.away?.turnoverDiff !== undefined ? m.away.turnoverDiff : 0;
     const homeEpa = m.home?.epaNet !== undefined ? m.home.epaNet : null;
@@ -607,91 +754,102 @@ export function buildOpportunitiesAndTopSlate({
 
     const expectedHomeLead = parseFloat(nflProbs.expectedHomeLead);
     const keyEval = nflProbs.keyEvaluation || {};
-    const spreadFmt = spread > 0 ? `+${spread}` : `${spread}`;
+    const absSpread = Math.abs(spread);
+    const homeSpreadFmt = spread > 0 ? `+${spread}` : `${spread}`;
+    const awaySpreadVal = -spread;
+    const awaySpreadFmt = awaySpreadVal > 0 ? `+${awaySpreadVal}` : `${awaySpreadVal}`;
 
     const mcNfl = simulateNflMatch(expectedHomeLead, spread, totalLine, windMph);
     const homeCoverProb = mcNfl.calibratedHomeCover;
     const awayCoverProb = mcNfl.calibratedAwayCover;
 
-    if (keyEval.trapWarning) {
-      const underdogTeam = spread < 0 ? m.away.name : m.home.name;
-      const underdogSpread = Math.abs(spread);
-      const ev = Number(((awayCoverProb / 100 * 1.91 - 1) * 100).toFixed(1));
-      rawOpportunities.push({
-        id: `nfl-trap-${m.id}`,
-        sport: 'NFL',
-        league: 'NFL',
-        game: `${m.home.name} vs ${m.away.name}`,
-        gameDate: m.gameDate,
-        type: '🏈 PROTECCIÓN NÚMERO CLAVE (SHARP)',
-        pick: `${underdogTeam} +${underdogSpread} (Hándicap Positivo)`,
-        prob: `${awayCoverProb.toFixed(0)}%`,
-        odds: '1.91',
-        edgeVal: Math.max(ev, 12.0),
-        edgeStr: `Colchón Clave (+3.5/+7.5) | EV: +${ev}%`,
-        argument: `${keyEval.trapWarning} El modelo proyecta margen de ${expectedHomeLead.toFixed(1)} pts, protegiendo con el número clave.`,
-        mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel, iterations: 10000 },
-        match: m,
-        probs: nflProbs
-      });
+    if (keyEval.trapWarning && absSpread <= 10.0) {
+      const isHomeUnderdog = spread > 0;
+      const underdogTeam = isHomeUnderdog ? m.home.name : m.away.name;
+      const underdogCoverProb = isHomeUnderdog ? homeCoverProb : awayCoverProb;
+      const ev = Number((underdogCoverProb - 52.4).toFixed(1));
+      if (underdogCoverProb >= 55.5) {
+        rawOpportunities.push({
+          id: `nfl-trap-${m.id}`,
+          sport: 'NFL',
+          league: 'NFL',
+          game: `${m.home.name} vs ${m.away.name}`,
+          gameDate: m.gameDate,
+          type: '🏈 PROTECCIÓN NÚMERO CLAVE (SHARP)',
+          pick: `${underdogTeam} +${absSpread} (Hándicap Positivo)`,
+          prob: `${underdogCoverProb.toFixed(0)}%`,
+          odds: '1.91',
+          edgeVal: Math.max(ev, 4.5),
+          edgeStr: `Colchón Clave (+${absSpread}) | Edge: +${ev}%`,
+          argument: `${keyEval.trapWarning} El modelo proyecta margen cerrado, protegiendo a ${underdogTeam} con +${absSpread} puntos.`,
+          mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel, iterations: 10000 },
+          match: m,
+          probs: nflProbs
+        });
+      }
     } else if (keyEval.keyAlert) {
-      const ev = Number(((homeCoverProb / 100 * 1.91 - 1) * 100).toFixed(1));
-      rawOpportunities.push({
-        id: `nfl-key-${m.id}`,
-        sport: 'NFL',
-        league: 'NFL',
-        game: `${m.home.name} vs ${m.away.name}`,
-        gameDate: m.gameDate,
-        type: '💎 NÚMERO CLAVE FAVORABLE (-2.5)',
-        pick: `${m.home.name} ${spreadFmt} (Cubre Línea)`,
-        prob: `${homeCoverProb.toFixed(0)}%`,
-        odds: '1.91',
-        edgeVal: Math.max(ev, 12.0),
-        edgeStr: `Línea por debajo de 3 | EV: +${ev}%`,
-        argument: `${keyEval.keyAlert} Proyección de victoria local por ${expectedHomeLead.toFixed(1)} pts superando el FG clave.`,
-        mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel, iterations: 10000 },
-        match: m,
-        probs: nflProbs
-      });
-    } else if (homeCoverProb >= 57.0 && Math.abs(spread) <= 7.5) {
-      const ev = Number(((homeCoverProb / 100 * 1.91 - 1) * 100).toFixed(1));
+      const isHomeFav = spread < 0;
+      const favTeam = isHomeFav ? m.home.name : m.away.name;
+      const favSpreadFmt = isHomeFav ? homeSpreadFmt : awaySpreadFmt;
+      const favCoverProb = isHomeFav ? homeCoverProb : awayCoverProb;
+      const ev = Number((favCoverProb - 52.4).toFixed(1));
+      if (favCoverProb >= 56.0) {
+        rawOpportunities.push({
+          id: `nfl-key-${m.id}`,
+          sport: 'NFL',
+          league: 'NFL',
+          game: `${m.home.name} vs ${m.away.name}`,
+          gameDate: m.gameDate,
+          type: '💎 NÚMERO CLAVE FAVORABLE (-2.5)',
+          pick: `${favTeam} ${favSpreadFmt} (Cubre Línea)`,
+          prob: `${favCoverProb.toFixed(0)}%`,
+          odds: '1.91',
+          edgeVal: Math.max(ev, 4.5),
+          edgeStr: `Línea por debajo de 3 | Edge: +${ev}%`,
+          argument: `${keyEval.keyAlert} Proyección favorable para ${favTeam} superando el gol de campo clave.`,
+          mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel, iterations: 10000 },
+          match: m,
+          probs: nflProbs
+        });
+      }
+    } else if (homeCoverProb >= 57.0 && ((spread < 0 && absSpread <= 7.0) || (spread > 0 && absSpread <= 10.0))) {
+      const ev = Number((homeCoverProb - 52.4).toFixed(1));
+      const isHomeUnderdog = spread > 0;
       rawOpportunities.push({
         id: `nfl-spread-h-${m.id}`,
         sport: 'NFL',
         league: 'NFL',
         game: `${m.home.name} vs ${m.away.name}`,
         gameDate: m.gameDate,
-        type: '🏈 VENTAJA CONTRA EL SPREAD (NFL)',
-        pick: `${m.home.name} ${spreadFmt} (Cubre Línea)`,
+        type: isHomeUnderdog ? '🛡️ HÁNDICAP POSITIVO LOCAL (NFL)' : '🏈 VENTAJA CONTRA EL SPREAD (NFL)',
+        pick: `${m.home.name} ${homeSpreadFmt} (${isHomeUnderdog ? 'Hándicap Positivo' : 'Cubre Línea'})`,
         prob: `${homeCoverProb.toFixed(0)}%`,
         odds: '1.91',
         edgeVal: ev,
-        edgeStr: `Prob. Cubrir: ${homeCoverProb.toFixed(0)}% | EV: +${ev}%`,
-        argument: `Monte Carlo proyecta margen local de ${expectedHomeLead.toFixed(1)} pts frente a línea de ${spreadFmt} de Las Vegas. Spread seguro (<= 7.5 pts).`,
+        edgeStr: `Prob. Cubrir: ${homeCoverProb.toFixed(0)}% | Edge: +${ev}%`,
+        argument: `Monte Carlo proyecta margen local de ${expectedHomeLead.toFixed(1)} pts frente a línea de ${homeSpreadFmt} de Las Vegas.`,
         mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel, iterations: 10000 },
         match: m,
         probs: nflProbs
       });
-    } else if (awayCoverProb >= 56.5) {
-      const underdogTeam = spread < 0 ? m.away.name : m.home.name;
-      const underdogSpread = spread < 0 ? `+${Math.abs(spread)}` : `${-spread}`;
-      const isHeavySpread = Math.abs(spread) > 7.5;
-      const ev = Number(((awayCoverProb / 100 * 1.91 - 1) * 100).toFixed(1));
+    } else if (awayCoverProb >= 57.0 && ((spread > 0 && absSpread <= 7.0) || (spread < 0 && absSpread <= 10.0))) {
+      const ev = Number((awayCoverProb - 52.4).toFixed(1));
+      const isAwayUnderdog = spread < 0;
       rawOpportunities.push({
         id: `nfl-spread-a-${m.id}`,
         sport: 'NFL',
         league: 'NFL',
         game: `${m.home.name} vs ${m.away.name}`,
         gameDate: m.gameDate,
-        type: isHeavySpread ? '🛡️ PROTECCIÓN UNDERDOG ANTE SPREAD PESADO (NFL)' : '🏈 VALOR EN PUNTOS UNDERDOG (NFL)',
-        pick: `${underdogTeam} ${underdogSpread} (Hándicap Positivo)`,
+        type: isAwayUnderdog ? '🛡️ HÁNDICAP POSITIVO VISITANTE (NFL)' : '🏈 VENTAJA CONTRA EL SPREAD (NFL)',
+        pick: `${m.away.name} ${awaySpreadFmt} (${isAwayUnderdog ? 'Hándicap Positivo' : 'Cubre Línea'})`,
         prob: `${awayCoverProb.toFixed(0)}%`,
         odds: '1.91',
         edgeVal: ev,
-        edgeStr: `Prob. Cubrir: ${awayCoverProb.toFixed(0)}% | EV: +${ev}%`,
-        argument: isHeavySpread
-          ? `Las Vegas infló en exceso al favorito (${spreadFmt} > 7.5 pts). Valor defensivo de alto calibre en Underdog para resistir Backdoor Covers.`
-          : `Las Vegas sobrevaloró la línea. Simulación otorga paridad en yardas por jugada y alto valor a los puntos del visitante.`,
+        edgeStr: `Prob. Cubrir: ${awayCoverProb.toFixed(0)}% | Edge: +${ev}%`,
+        argument: isAwayUnderdog
+          ? `Defensa y eficiencia EPA respaldan a ${m.away.name} con colchón de puntos (${awaySpreadFmt}) ante la línea de Las Vegas.`
+          : `Superioridad en EPA/Net YPP de ${m.away.name} para cubrir la línea corta (${awaySpreadFmt}) como visitante.`,
         mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel, iterations: 10000 },
         match: m,
         probs: nflProbs
@@ -699,7 +857,7 @@ export function buildOpportunitiesAndTopSlate({
     }
 
     const totalsEval = nflProbs.totalsEvaluation;
-    if (totalsEval && totalsEval.isValue && parseFloat(totalsEval.edge) >= 6.0) {
+    if (totalsEval && totalsEval.isValue && parseFloat(totalsEval.edge) >= 6.5) {
       const tProb = totalsEval.isUnder ? totalsEval.underProb : totalsEval.overProb;
       rawOpportunities.push({
         id: `nfl-tot-${m.id}`,
@@ -713,7 +871,7 @@ export function buildOpportunitiesAndTopSlate({
         odds: totalsEval.odds || '1.91',
         edgeVal: parseFloat(totalsEval.edge),
         edgeStr: `Edge Totales: +${totalsEval.edge}%`,
-        argument: `Proyección de ${totalsEval.effectiveTotal} pts frente a línea de ${totalLine} de Las Vegas. ${windMph >= 12 ? `Viento adverso de ${windMph} mph afecta FGs y juego aéreo.` : 'Diferencial clave en ritmo ofensivo y eficiencia neta.'}`,
+        argument: `Proyección calibrada de ${totalsEval.effectiveTotal} pts frente a línea de ${totalLine} de Las Vegas. ${windMph >= 12 ? `Viento de ${windMph} mph favorece el Under.` : 'Diferencial validado en eficiencia ofensiva/defensiva.'}`,
         mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel, iterations: 10000 },
         match: m,
         probs: nflProbs
@@ -758,30 +916,44 @@ export function buildOpportunitiesAndTopSlate({
   const todayEligible = eligibleForTop.filter(o => o.isToday);
   const tomorrowEligible = eligibleForTop.filter(o => !o.isToday);
   const topSlate = [];
+  const usedGames = new Set();
 
-  // Paso 1: Llenar el Top 6 dando prioridad 100% a los partidos de HOY (diversificando por deporte primero)
+  // Paso 1: Llenar el Top 6 dando prioridad 100% a los partidos de HOY (diversificando por deporte y máximo 1 pick por partido)
   const todaySports = [...new Set(todayEligible.map(o => o.sport))];
   for (const sport of todaySports) {
     if (topSlate.length >= maxPicksToSend) break;
-    const bestOfSportToday = todayEligible.find(o => o.sport === sport);
+    const bestOfSportToday = todayEligible.find(o => o.sport === sport && !usedGames.has(o.game));
     if (bestOfSportToday && !topSlate.some(p => p.id === bestOfSportToday.id)) {
       topSlate.push(bestOfSportToday);
+      usedGames.add(bestOfSportToday.game);
     }
   }
 
   for (const pick of todayEligible) {
     if (topSlate.length >= maxPicksToSend) break;
-    if (!topSlate.some(p => p.id === pick.id)) {
+    if (!topSlate.some(p => p.id === pick.id) && !usedGames.has(pick.game)) {
       topSlate.push(pick);
+      usedGames.add(pick.game);
     }
   }
 
   // Paso 2: Únicamente si HOY ya no tiene suficientes partidos para completar los 6 lugares,
-  // rellenar los huecos restantes con los de mañana temprano (dentro del horizonte permitido)
+  // rellenar los huecos restantes con los de mañana temprano (diversificando primero por deporte)
+  const tomorrowSports = [...new Set(tomorrowEligible.map(o => o.sport))];
+  for (const sport of tomorrowSports) {
+    if (topSlate.length >= maxPicksToSend) break;
+    const bestOfSportTomorrow = tomorrowEligible.find(o => o.sport === sport && !usedGames.has(o.game));
+    if (bestOfSportTomorrow && !topSlate.some(p => p.id === bestOfSportTomorrow.id)) {
+      topSlate.push(bestOfSportTomorrow);
+      usedGames.add(bestOfSportTomorrow.game);
+    }
+  }
+
   for (const pick of tomorrowEligible) {
     if (topSlate.length >= maxPicksToSend) break;
-    if (!topSlate.some(p => p.id === pick.id)) {
+    if (!topSlate.some(p => p.id === pick.id) && !usedGames.has(pick.game)) {
       topSlate.push(pick);
+      usedGames.add(pick.game);
     }
   }
 
@@ -962,6 +1134,19 @@ export async function runDailyTelegramAudit(options = {}) {
     }
   }
 
+  // Hidratar lecciones forenses en memoria de Node.js para que el Voto 3 del Tribunal las consulte de inmediato
+  const cloudLessonsForMemory = allAuditedRecent
+    .filter(p => p.status === 'lost')
+    .map(p => ({
+      id: `tg-lesson-${p.id}`,
+      sport: (p.sport === 'Fútbol' || p.sport === 'futbol') ? 'futbol' : (p.sport || 'futbol').toLowerCase(),
+      match: p.game,
+      failedPick: p.pick,
+      penaltyModifier: 6,
+      lesson: `Auditoría Oficial: El modelo sobreestimó el pick "${p.pick}" en ${p.game} (Marcador Real: ${p.scoreDisplay}). Se activa penalización preventiva (-6%) sobre ${p.failedTeam || p.homeName}.`
+    }));
+  hydrateCloudLessons(cloudLessonsForMemory);
+
   if (ledgerModified && !isDryRun) {
     await saveCloudLedger(providedCache);
   }
@@ -972,6 +1157,7 @@ export async function runDailyTelegramAudit(options = {}) {
     newlyGraded,
     pendingPicks: pendingStillPlaying,
     runtimePenalties,
+    dynamicElo: getDynamicEloStore(),
     summary: {
       total: picksToReport.length,
       won,

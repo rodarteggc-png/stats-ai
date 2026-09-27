@@ -56,19 +56,22 @@ export function bayesianCalibrate(rawProb, sampleConfidence = 0.82, priorBaselin
  * Modela goles con inyección estocástica de tarjetas rojas y varianza de penales.
  */
 export function simulateSoccerMatch(homeXg, awayXg, iterations = 10000) {
+  const numIterations = (typeof iterations === 'number' && iterations > 0) ? iterations : 10000;
   const hLambda = Math.max(0.2, parseFloat(homeXg) || 1.35);
   const aLambda = Math.max(0.2, parseFloat(awayXg) || 1.05);
 
   let homeWins = 0;
   let draws = 0;
   let awayWins = 0;
+  let over15 = 0;
   let over25 = 0;
+  let over35 = 0;
   let btts = 0;
   let collapseEvents = 0; // Ocasiones en que el favorito proyectado no gana por eventos de varianza
 
   const isHomeFav = hLambda >= aLambda;
 
-  for (let i = 0; i < iterations; i++) {
+  for (let i = 0; i < numIterations; i++) {
     let curHLambda = hLambda;
     let curALambda = aLambda;
 
@@ -90,44 +93,63 @@ export function simulateSoccerMatch(homeXg, awayXg, iterations = 10000) {
 
     const hGoals = randomPoisson(curHLambda);
     const aGoals = randomPoisson(curALambda);
+    const totalGoals = hGoals + aGoals;
 
     if (hGoals > aGoals) homeWins++;
     else if (hGoals === aGoals) draws++;
     else awayWins++;
 
-    if (hGoals + aGoals > 2.5) over25++;
+    if (totalGoals > 1.5) over15++;
+    if (totalGoals > 2.5) over25++;
+    if (totalGoals > 3.5) over35++;
     if (hGoals > 0 && aGoals > 0) btts++;
 
-    // Medir colapso del favorito
-    if (isHomeFav && hGoals <= aGoals) collapseEvents++;
-    if (!isHomeFav && aGoals <= hGoals) collapseEvents++;
+    // Medir colapso real del favorito (derrota directa = 1.0, empate = 0.45)
+    if (isHomeFav) {
+      if (hGoals < aGoals) collapseEvents += 1.0;
+      else if (hGoals === aGoals) collapseEvents += 0.45;
+    } else {
+      if (aGoals < hGoals) collapseEvents += 1.0;
+      else if (aGoals === hGoals) collapseEvents += 0.45;
+    }
   }
 
-  const hProb = Number(((homeWins / iterations) * 100).toFixed(1));
-  const dProb = Number(((draws / iterations) * 100).toFixed(1));
-  const aProb = Number(((awayWins / iterations) * 100).toFixed(1));
-  const o25Prob = Number(((over25 / iterations) * 100).toFixed(1));
-  const bttsProb = Number(((btts / iterations) * 100).toFixed(1));
-  const collapseRate = Number(((collapseEvents / iterations) * 100).toFixed(1));
+  const hProb = Number(((homeWins / numIterations) * 100).toFixed(1));
+  const dProb = Number(((draws / numIterations) * 100).toFixed(1));
+  const aProb = Number(((awayWins / numIterations) * 100).toFixed(1));
+  const o15Prob = Number(((over15 / numIterations) * 100).toFixed(1));
+  const o25Prob = Number(((over25 / numIterations) * 100).toFixed(1));
+  const o35Prob = Number(((over35 / numIterations) * 100).toFixed(1));
+  const bttsProb = Number(((btts / numIterations) * 100).toFixed(1));
+  const collapseRate = Number(((collapseEvents / numIterations) * 100).toFixed(1));
 
   // Puntuación de Estabilidad (0 a 100)
   const maxWin = Math.max(hProb, aProb);
   const stabilityScore = Number(Math.max(30, Math.min(95, maxWin + (100 - dProb) * 0.2)).toFixed(0));
+
+  // Estabilidad específica para Ambos Anotan (BTTS) cuando ambos equipos atacan
+  const bttsStability = Number(Math.max(40, Math.min(92, bttsProb * 1.12)).toFixed(0));
+  const bttsRisk = bttsStability >= 68 ? 'Bajo' : (bttsStability >= 58 ? 'Medio' : 'Alto');
 
   let riskLevel = 'Bajo';
   if (stabilityScore < 55 || collapseRate > 42) riskLevel = 'Alto';
   else if (stabilityScore < 68 || collapseRate > 32) riskLevel = 'Medio';
 
   return {
-    iterations,
+    iterations: numIterations,
     homeWinProb: hProb,
     drawProb: dProb,
     awayWinProb: aProb,
+    over15Prob: o15Prob,
     over25Prob: o25Prob,
+    over35Prob: o35Prob,
     bttsProb: bttsProb,
     calibratedHomeWin: bayesianCalibrate(hProb, 0.85, 45),
     calibratedAwayWin: bayesianCalibrate(aProb, 0.85, 30),
+    calibratedBtts: bayesianCalibrate(bttsProb, 0.88, 52),
     stabilityScore,
+    bttsStability,
+    bttsRisk,
     riskLevel,
     collapseRate,
     tailRiskAlert: collapseRate > 35 
@@ -138,29 +160,35 @@ export function simulateSoccerMatch(homeXg, awayXg, iterations = 10000) {
 
 /**
  * 2. SIMULACIÓN MONTE CARLO PARA BÉISBOL MLB (10,000 Iteraciones)
- * Aísla la estabilidad de Primeros 5 Innings (F5) vs Colapsos del Bullpen en Innings 6-9.
+ * Aísla la estabilidad real de Primeros 5 Innings (F5), Hándicap +1.5 (Runline) y Colapsos del Bullpen en Innings 6-9.
  */
 export function simulateMlbMatch(
   homeStarterWhip, awayStarterWhip,
   homeOps, awayOps,
-  iterations = 10000
+  iterations = 10000,
+  homeElo = 1500,
+  awayElo = 1500
 ) {
+  const numIterations = (typeof iterations === 'number' && iterations > 0) ? iterations : 10000;
   const hWhip = parseFloat(homeStarterWhip) || 1.30;
   const aWhip = parseFloat(awayStarterWhip) || 1.30;
   const hOps = parseFloat(homeOps) || 0.730;
   const aOps = parseFloat(awayOps) || 0.710;
+  const eloDiff = (parseFloat(homeElo) || 1500) - (parseFloat(awayElo) || 1500);
 
-  // Tasas de carreras esperadas por cada 5 innings
-  const hF5Expected = Math.max(0.5, (hOps * 3.6) + ((aWhip - 1.20) * 1.5));
-  const aF5Expected = Math.max(0.5, (aOps * 3.6) + ((hWhip - 1.20) * 1.5));
+  // Tasas de carreras esperadas por cada 5 innings (incluyendo diferencial de Elo y localía)
+  const hF5Expected = Math.max(0.5, (hOps * 3.55 * aWhip * 0.78) + 0.10 + (eloDiff / 4000));
+  const aF5Expected = Math.max(0.5, (aOps * 3.55 * hWhip * 0.78) - (eloDiff / 4000));
 
   let f5HomeWins = 0;
   let f5Ties = 0;
   let f5AwayWins = 0;
   let fullHomeWins = 0;
+  let homePlus15Covers = 0;
+  let awayPlus15Covers = 0;
   let bullpenFlips = 0; // Ocasiones en que el ganador de F5 se cae por culpa del relevo
 
-  for (let i = 0; i < iterations; i++) {
+  for (let i = 0; i < numIterations; i++) {
     // Simular F5 con abridores
     const hF5 = randomPoisson(hF5Expected);
     const aF5 = randomPoisson(aF5Expected);
@@ -181,32 +209,62 @@ export function simulateMlbMatch(
     const aTotal = aF5 + aBullpen;
 
     const f5Leader = hF5 > aF5 ? 'home' : (aF5 > hF5 ? 'away' : 'tie');
-    const fullWinner = hTotal > aTotal ? 'home' : (aTotal > hTotal ? 'away' : (Math.random() > 0.5 ? 'home' : 'away'));
+    let fullWinner;
+    let finalH = hTotal;
+    let finalA = aTotal;
+    if (hTotal > aTotal) {
+      fullWinner = 'home';
+    } else if (aTotal > hTotal) {
+      fullWinner = 'away';
+    } else {
+      // Extra innings (normalmente se define por 1 carrera con corredor fantasma en 2da)
+      if (Math.random() < 0.535) {
+        fullWinner = 'home';
+        finalH += 1;
+      } else {
+        fullWinner = 'away';
+        finalA += 1;
+      }
+    }
 
     if (fullWinner === 'home') fullHomeWins++;
+    if ((finalH + 1.5) > finalA) homePlus15Covers++;
+    if ((finalA + 1.5) > finalH) awayPlus15Covers++;
 
     // Detectar si el bullpen arruinó la ventaja de F5
     if (f5Leader === 'home' && fullWinner === 'away') bullpenFlips++;
     if (f5Leader === 'away' && fullWinner === 'home') bullpenFlips++;
   }
 
-  const f5HomeProb = Number(((f5HomeWins / iterations) * 100).toFixed(1));
-  const f5AwayProb = Number(((f5AwayWins / iterations) * 100).toFixed(1));
-  const fullHomeProb = Number(((fullHomeWins / iterations) * 100).toFixed(1));
-  const flipRate = Number(((bullpenFlips / iterations) * 100).toFixed(1));
+  const f5HomeProb = Number(((f5HomeWins / numIterations) * 100).toFixed(1));
+  const f5AwayProb = Number(((f5AwayWins / numIterations) * 100).toFixed(1));
+  const f5ResolvedTotal = Math.max(1, f5HomeWins + f5AwayWins);
+  const f5HomeMlSim = (f5HomeWins / f5ResolvedTotal) * 100;
+  const f5AwayMlSim = (f5AwayWins / f5ResolvedTotal) * 100;
+  const maxF5MlSim = Math.max(f5HomeMlSim, f5AwayMlSim);
+  const maxF5NoLossPct = (Math.max(f5HomeWins + f5Ties, f5AwayWins + f5Ties) / numIterations) * 100;
+
+  const fullHomeProb = Number(((fullHomeWins / numIterations) * 100).toFixed(1));
+  const homePlus15Prob = Number(((homePlus15Covers / numIterations) * 100).toFixed(1));
+  const awayPlus15Prob = Number(((awayPlus15Covers / numIterations) * 100).toFixed(1));
+  const flipRate = Number(((bullpenFlips / numIterations) * 100).toFixed(1));
+
+  // Estabilidad F5 Real: Basada en la ventaja monticular real (no solo en 100 - flipRate)
+  const f5Stability = Number(Math.max(45, Math.min(92, (maxF5MlSim * 0.65) + (maxF5NoLossPct * 0.42) - (flipRate * 0.25))).toFixed(0));
 
   let bullpenRisk = 'Bajo';
-  if (flipRate > 22) bullpenRisk = 'Alto';
-  else if (flipRate > 15) bullpenRisk = 'Medio';
-
-  const f5Stability = Number((100 - flipRate).toFixed(0));
+  if (f5Stability < 58 || flipRate > 22) bullpenRisk = 'Alto';
+  else if (f5Stability < 68 || flipRate > 16) bullpenRisk = 'Medio';
 
   return {
-    iterations,
+    iterations: numIterations,
     f5HomeWinProb: f5HomeProb,
     f5AwayWinProb: f5AwayProb,
     fullHomeWinProb: fullHomeProb,
-    calibratedF5Home: bayesianCalibrate(f5HomeProb, 0.84, 50),
+    homePlus15Prob,
+    awayPlus15Prob,
+    calibratedF5Home: bayesianCalibrate(f5HomeMlSim, 0.84, 50),
+    calibratedF5Away: bayesianCalibrate(f5AwayMlSim, 0.84, 50),
     calibratedFullHome: bayesianCalibrate(fullHomeProb, 0.80, 50),
     bullpenFlipRate: flipRate,
     bullpenRisk,
@@ -228,7 +286,10 @@ export function simulateNflMatch(
   windMph = 0,
   iterations = 10000
 ) {
-  const lead = parseFloat(expectedHomeLead) || 0;
+  const numIterations = (typeof iterations === 'number' && iterations > 0) ? iterations : 10000;
+  const lead = (typeof iterations === 'object' && iterations?.expectedHomeLead !== undefined)
+    ? parseFloat(iterations.expectedHomeLead)
+    : (parseFloat(expectedHomeLead) || 0);
   const spread = parseFloat(vegasSpread) || -3.5;
   const total = parseFloat(vegasTotal) || 44.5;
   const wind = parseFloat(windMph) || 0;
@@ -244,7 +305,7 @@ export function simulateNflMatch(
   const windPen = wind > 14 ? (wind - 14) * 0.35 : 0;
   const adjTotal = Math.max(30, total - windPen);
 
-  for (let i = 0; i < iterations; i++) {
+  for (let i = 0; i < numIterations; i++) {
     // Varianza 1: Diferencial de puntos con distribución Normal NFL (σ = 13.45)
     let simLead = randomNormal(lead, 13.45);
 
@@ -252,10 +313,10 @@ export function simulateNflMatch(
     const toSwing = (Math.random() - 0.5) * 2.2; // Rango de turnover swing
     simLead += toSwing * 3.5;
 
-    // Cluster empírico en números clave de la NFL (Atracción matemática hacia 3 y 7)
+    // Cluster empírico en números clave de la NFL (Atracción matemática simétrica hacia ±3 y ±7)
     const rounded = Math.round(simLead);
-    if (Math.abs(rounded - 3) <= 1 && Math.random() < 0.20) simLead = rounded >= 0 ? 3 : -3;
-    if (Math.abs(rounded - 7) <= 1 && Math.random() < 0.18) simLead = rounded >= 0 ? 7 : -7;
+    if (Math.abs(Math.abs(rounded) - 3) <= 1 && Math.random() < 0.20) simLead = rounded >= 0 ? 3 : -3;
+    if (Math.abs(Math.abs(rounded) - 7) <= 1 && Math.random() < 0.18) simLead = rounded >= 0 ? 7 : -7;
 
     // Cobertura de spread
     if (simLead + spread > 0) homeCovers++;
@@ -275,21 +336,23 @@ export function simulateNflMatch(
     if (simTotal > total) overHits++;
   }
 
-  const hCoverProb = Number(((homeCovers / iterations) * 100).toFixed(1));
-  const aCoverProb = Number(((awayCovers / iterations) * 100).toFixed(1));
-  const hWinProb = Number(((homeWins / iterations) * 100).toFixed(1));
-  const oProb = Number(((overHits / iterations) * 100).toFixed(1));
-  const keyHitRate = Number(((keyNumberHits / iterations) * 100).toFixed(1));
-  const upsetRate = Number(((upsetEvents / iterations) * 100).toFixed(1));
+  const hCoverProb = Number(((homeCovers / numIterations) * 100).toFixed(1));
+  const aCoverProb = Number(((awayCovers / numIterations) * 100).toFixed(1));
+  const hWinProb = Number(((homeWins / numIterations) * 100).toFixed(1));
+  const oProb = Number(((overHits / numIterations) * 100).toFixed(1));
+  const keyHitRate = Number(((keyNumberHits / numIterations) * 100).toFixed(1));
+  const upsetRate = Number(((upsetEvents / numIterations) * 100).toFixed(1));
 
-  const stabilityScore = Number(Math.max(hCoverProb, aCoverProb).toFixed(0));
+  // Escala calibrada de estabilidad ATS en NFL (donde 57%+ de cover equivale a >64% de estabilidad estructural)
+  const maxCover = Math.max(hCoverProb, aCoverProb);
+  const stabilityScore = Number(Math.min(92, Math.max(45, Math.round(maxCover * 1.12))).toFixed(0));
 
   let riskLevel = 'Bajo';
-  if (upsetRate > 35 || stabilityScore < 54) riskLevel = 'Alto';
-  else if (upsetRate > 25 || stabilityScore < 60) riskLevel = 'Medio';
+  if (upsetRate > 35 || stabilityScore < 58) riskLevel = 'Alto';
+  else if (upsetRate > 25 || stabilityScore < 64) riskLevel = 'Medio';
 
   return {
-    iterations,
+    iterations: numIterations,
     homeCoverProb: hCoverProb,
     awayCoverProb: aCoverProb,
     homeWinProb: hWinProb,

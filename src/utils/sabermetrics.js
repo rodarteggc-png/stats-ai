@@ -125,10 +125,12 @@ export function calculateMlbProbabilities(
   awayExpectedRuns -= (eloDiff / 2500);
 
   // Modificador de Memoria de Lecciones Aprendidas (IA con Cap de Seguridad)
-  const hPen = parseFloat(homePenalty) || 0;
-  const aPen = parseFloat(awayPenalty) || 0;
-  if (hPen > 0) homeExpectedRuns *= (1 - Math.min(hPen, 0.04));
-  if (aPen > 0) awayExpectedRuns *= (1 - Math.min(aPen, 0.04));
+  const rawHPen = parseFloat(homePenalty) || 0;
+  const rawAPen = parseFloat(awayPenalty) || 0;
+  const hPen = rawHPen > 1 ? rawHPen / 100 : rawHPen;
+  const aPen = rawAPen > 1 ? rawAPen / 100 : rawAPen;
+  if (hPen > 0) homeExpectedRuns *= (1 - Math.min(hPen, 0.08));
+  if (aPen > 0) awayExpectedRuns *= (1 - Math.min(aPen, 0.08));
 
   homeExpectedRuns = Math.max(1.0, homeExpectedRuns);
   awayExpectedRuns = Math.max(1.0, awayExpectedRuns);
@@ -149,11 +151,20 @@ export function calculateMlbProbabilities(
   }
 
   // 2. CÁLCULO DEL MERCADO F5 (FIRST 5 INNINGS - PRIMERAS 5 ENTRADAS)
-  // En F5 el abridor lanza el 100% de los innings (5/9 del total) y NO participa el bullpen
+  // En F5 el abridor lanza el 100% de los innings (5/9 del total) y NO participa el bullpen,
+  // pero SÍ influyen la fuerza del equipo (Elo) y los castigos de memoria histórica.
   const f5Factor = (5 / 9);
   let homeF5Runs = parseFloat(homeOps) * parseFloat(awayPitcherWhip) * mlbRunFactor * f5Factor;
   let awayF5Runs = parseFloat(awayOps) * parseFloat(homePitcherWhip) * mlbRunFactor * f5Factor;
   homeF5Runs += 0.10; // Ventaja local en F5
+
+  // Integrar diferencial de Elo en F5 (evita inflar abridores de equipos débiles ante rivales élite)
+  homeF5Runs += (eloDiff / 4000);
+  awayF5Runs -= (eloDiff / 4000);
+
+  // Integrar penalizaciones de Memoria Forense en F5
+  if (hPen > 0) homeF5Runs *= (1 - Math.min(hPen, 0.08));
+  if (aPen > 0) awayF5Runs *= (1 - Math.min(aPen, 0.08));
 
   homeF5Runs = Math.max(0.5, homeF5Runs);
   awayF5Runs = Math.max(0.5, awayF5Runs);
@@ -187,6 +198,11 @@ export function calculateMlbProbabilities(
   for (let k = 0; k <= 4; k++) under45Prob += poissonProbability(parseFloat(f5TotalRuns), k);
   const over45Prob = 1 - under45Prob;
 
+  const homeMinus15Pct = (fullGameMatrix.homeMinus15 * 100).toFixed(1);
+  const awayPlus15Pct = (fullGameMatrix.awayPlus15 * 100).toFixed(1);
+  const awayMinus15Pct = (fullGameMatrix.awayMinus15 * 100).toFixed(1);
+  const homePlus15Pct = (fullGameMatrix.homePlus15 * 100).toFixed(1);
+
   return {
     homeWin: (fullGameMatrix.homeWinFinal * 100).toFixed(1),
     awayWin: (fullGameMatrix.awayWinFinal * 100).toFixed(1),
@@ -201,10 +217,14 @@ export function calculateMlbProbabilities(
     awayExpectedRuns: awayExpectedRuns.toFixed(1),
     // Runline (+/- 1.5)
     runline: {
-      homeMinus15: (fullGameMatrix.homeMinus15 * 100).toFixed(1),
-      awayPlus15: (fullGameMatrix.awayPlus15 * 100).toFixed(1),
-      awayMinus15: (fullGameMatrix.awayMinus15 * 100).toFixed(1),
-      homePlus15: (fullGameMatrix.homePlus15 * 100).toFixed(1)
+      homeMinus15: homeMinus15Pct,
+      awayPlus15: awayPlus15Pct,
+      awayMinus15: awayMinus15Pct,
+      homePlus15: homePlus15Pct,
+      homeMinus15Odds: getFairOddsDecimal(homeMinus15Pct),
+      awayPlus15Odds: getFairOddsDecimal(awayPlus15Pct),
+      awayMinus15Odds: getFairOddsDecimal(awayMinus15Pct),
+      homePlus15Odds: getFairOddsDecimal(homePlus15Pct)
     },
     // Mercado F5 (Primeras 5 Entradas)
     f5: {

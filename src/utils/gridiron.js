@@ -142,17 +142,18 @@ export function evaluateNflSpreadValue(expectedHomeLead, vegasSpread) {
   let heavySpreadWarning = null;
   let vetoFavoriteSpread = false;
 
-  // 1. Detección de trampa de medio punto en 3 y 7 (los números más cruciales de la NFL)
+  // 1. Detección de trampa de medio punto en 3 y 7 (tanto para favorito local como visitante)
+  const favExpectedMargin = vegasSpread < 0 ? expectedHomeLead : -expectedHomeLead;
   if (absVegas === 3.5) {
-    if (vegasSpread < 0 && expectedHomeLead >= 2.0 && expectedHomeLead <= 4.2) {
+    if (favExpectedMargin >= 1.5 && favExpectedMargin <= 4.2) {
       trapWarning = "⚠️ Trampa de Medio Punto en 3.5: Las Vegas infló al favorito. Gran valor cuantitativo en el Underdog (+3.5).";
     }
   } else if (absVegas === 7.5) {
-    if (vegasSpread < 0 && expectedHomeLead >= 6.0 && expectedHomeLead <= 8.2) {
+    if (favExpectedMargin >= 5.5 && favExpectedMargin <= 8.2) {
       trapWarning = "⚠️ Trampa de Medio Punto en 7.5: Proyección cerrada en un touchdown. Gran valor en Underdog (+7.5).";
     }
   } else if (absVegas === 2.5) {
-    if (vegasSpread < 0 && expectedHomeLead >= 2.8) {
+    if (favExpectedMargin >= 2.8) {
       keyAlert = "💎 Oportunidad Clave: Favorito en -2.5 (por debajo del número 3). Gran valor en cubrir.";
     }
   }
@@ -182,33 +183,41 @@ export function calculateNflProbabilities(
   vegasTotal = null,
   windSpeedMph = 0
 ) {
-  const adjHomeYPP = parseFloat(homeYPP);
-  const adjAwayYPP = parseFloat(awayYPP);
+  const adjHomeYPP = Math.min(6.6, Math.max(4.2, parseFloat(homeYPP) || 5.3));
+  const adjAwayYPP = Math.min(6.6, Math.max(4.2, parseFloat(awayYPP) || 5.3));
 
   // En NFL, una ventaja de 1.0 en Net Yards Per Play equivale aprox a 7 puntos de diferencia.
   const yppDiff = adjHomeYPP - adjAwayYPP;
   // Un diferencial de Turnover de +1 equivale aprox a 3 puntos por partido.
-  const toDiff = (parseFloat(homeTO) - parseFloat(awayTO)) / 17; // Temporada 17 juegos
+  const toDiff = (parseFloat(homeTO || 0) - parseFloat(awayTO || 0)) / 17; // Temporada 17 juegos
 
-  const homeFieldAdvantage = 2.4; // Puntos estándar de ventaja de local empírica en NFL moderna
+  const homeFieldAdvantage = 2.2; // Puntos estándar de ventaja de local empírica en NFL moderna
 
-  let predictedPointSpread;
+  let rawModelSpread;
   // Si disponemos de métricas de eficiencia EPA (Expected Points Added)
   if (homeEpa !== null && awayEpa !== null && !isNaN(parseFloat(homeEpa)) && !isNaN(parseFloat(awayEpa))) {
     const epaDiff = parseFloat(homeEpa) - parseFloat(awayEpa);
     // Ponderación cuantitativa: 60% EPA Net Efficiency + 25% Net YPP + 15% Turnover Differential
-    const epaPts = epaDiff * 65; // 0.10 de ventaja en Net EPA/play = ~6.5 pts
-    const yppPts = yppDiff * 4.5;
+    const epaPts = epaDiff * 55;
+    const yppPts = yppDiff * 4.2;
     const toPts = toDiff * 2.5;
-    predictedPointSpread = epaPts + yppPts + toPts + homeFieldAdvantage;
+    rawModelSpread = epaPts + yppPts + toPts + homeFieldAdvantage;
   } else {
-    predictedPointSpread = (yppDiff * 7) + (toDiff * 3) + homeFieldAdvantage;
+    rawModelSpread = (yppDiff * 6.5) + (toDiff * 3) + homeFieldAdvantage;
   }
 
+  // Anclaje Bayesiano con el Spread de Las Vegas (65% Modelo Estructural + 35% Implied Vegas Lead)
+  // Evita divergencias irreales de 10+ puntos contra la línea de cierre institucional
+  const spreadNum = parseFloat(vegasSpread) || -3.5;
+  const vegasImpliedHomeLead = -spreadNum;
+  let predictedPointSpread = (rawModelSpread * 0.65) + (vegasImpliedHomeLead * 0.35);
+
   // Modificador de Memoria de Lecciones Aprendidas (IA con Cap de Seguridad)
-  const hPen = parseFloat(homePenalty) || 0;
-  const aPen = parseFloat(awayPenalty) || 0;
-  const penaltySpreadAdjustment = (Math.min(hPen, 0.04) - Math.min(aPen, 0.04)) * 30;
+  const rawHPen = parseFloat(homePenalty) || 0;
+  const rawAPen = parseFloat(awayPenalty) || 0;
+  const hPen = rawHPen > 1 ? rawHPen / 100 : rawHPen;
+  const aPen = rawAPen > 1 ? rawAPen / 100 : rawAPen;
+  const penaltySpreadAdjustment = (Math.min(hPen, 0.08) - Math.min(aPen, 0.08)) * 32;
   predictedPointSpread -= penaltySpreadAdjustment;
 
   // Convertir el Point Spread a Probabilidad de Victoria (Win Probability) vía Normal CDF (σ = 13.45)
@@ -216,13 +225,20 @@ export function calculateNflProbabilities(
   const awayWinProb = 100 - homeWinProb;
 
   // Probabilidad de Cobertura de Spread (True Normal CDF)
-  const spreadNum = parseFloat(vegasSpread) || -3.5;
   const homeCoverProb = calculateSpreadCoverProbability(predictedPointSpread, spreadNum, true);
   const awayCoverProb = calculateSpreadCoverProbability(predictedPointSpread, spreadNum, false);
 
-  // Total de Puntos Estimado (Baseline promedio NFL 43.5 + varianza por yardas)
+  // Total de Puntos Estimado Calibrado:
+  // En la NFL moderna, el promedio combinado de YPP es ~10.8 (5.4 por equipo) y el total medio es 43.8 pts.
   const totalYpp = adjHomeYPP + adjAwayYPP;
-  const predictedTotalPoints = 43.5 + ((totalYpp - 10) * 4);
+  const epaTotalAdj = (homeEpa !== null && awayEpa !== null && !isNaN(parseFloat(homeEpa)) && !isNaN(parseFloat(awayEpa)))
+    ? (parseFloat(homeEpa) + parseFloat(awayEpa)) * 28
+    : 0;
+  const rawModelTotal = 43.8 + ((totalYpp - 10.8) * 3.0) + epaTotalAdj;
+  const vTotNum = parseFloat(vegasTotal);
+  const predictedTotalPoints = (!isNaN(vTotNum) && vTotNum > 28)
+    ? Math.max(vTotNum - 5.0, Math.min(vTotNum + 5.0, (rawModelTotal * 0.60) + (vTotNum * 0.40)))
+    : Math.max(33.0, Math.min(54.0, rawModelTotal));
 
   // Evaluación de Totales (Over/Under) contra Las Vegas y Viento
   const totalsEvaluation = calculateTotalOverUnderProbability(predictedTotalPoints, vegasTotal, windSpeedMph);

@@ -26,6 +26,35 @@ seedInitialMemory();
 
 // --- SISTEMA ELO DINÁMICO CON K-FACTOR CALIBRADO, HFA Y MARGEN DE VICTORIA (MOV) ---
 let nodeEloMemoryCache = null;
+let nodeLessonsMemoryCache = null;
+
+export function hydrateDynamicEloFromCloud(cloudElo = {}) {
+  if (!cloudElo || typeof cloudElo !== 'object') return;
+  if (!nodeEloMemoryCache) {
+    nodeEloMemoryCache = (defaultEloData && typeof defaultEloData === 'object') ? { ...defaultEloData } : {};
+  }
+  Object.assign(nodeEloMemoryCache, cloudElo);
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const existing = JSON.parse(localStorage.getItem(DYNAMIC_ELO_KEY) || '{}');
+      const merged = { ...existing, ...cloudElo };
+      localStorage.setItem(DYNAMIC_ELO_KEY, JSON.stringify(merged));
+    } catch (e) {}
+  }
+}
+
+export function hydrateCloudLessons(cloudLessons = []) {
+  if (!Array.isArray(cloudLessons) || cloudLessons.length === 0) return;
+  if (!nodeLessonsMemoryCache) {
+    nodeLessonsMemoryCache = Array.isArray(defaultLessons) ? [...defaultLessons] : [];
+  }
+  cloudLessons.forEach(cl => {
+    if (!cl || !cl.id) return;
+    const idx = nodeLessonsMemoryCache.findIndex(x => x.id === cl.id || (cl.predictionId && x.predictionId === cl.predictionId));
+    if (idx !== -1) nodeLessonsMemoryCache[idx] = cl;
+    else nodeLessonsMemoryCache.unshift(cl);
+  });
+}
 
 export function getDynamicEloStore() {
   if (typeof window !== 'undefined' && window.localStorage) {
@@ -100,6 +129,10 @@ export function updateDynamicElo(sport, homeTeam, awayTeam, homeScore, awayScore
 
   store[hNorm] = newHomeElo;
   store[aNorm] = newAwayElo;
+  if (nodeEloMemoryCache) {
+    nodeEloMemoryCache[hNorm] = newHomeElo;
+    nodeEloMemoryCache[aNorm] = newAwayElo;
+  }
 
   if (typeof window !== 'undefined' && window.localStorage) {
     try {
@@ -139,7 +172,7 @@ export function getAllLessons(sportFilter = null) {
 
   // Fallback isomórfico para Node.js (alertEngine) o si localStorage está vacío
   if (!lessons || lessons.length === 0) {
-    lessons = Array.isArray(defaultLessons) ? defaultLessons : [];
+    lessons = nodeLessonsMemoryCache || (Array.isArray(defaultLessons) ? defaultLessons : []);
   }
 
   return sportFilter 
@@ -277,18 +310,37 @@ export function isTeamMatch(t1, t2) {
   if (!n1 || !n2) return false;
   if (n1 === n2) return true;
 
-  // 1. Cruce por catálogo de alias
+  // Evitar colisión entre rama Femenil y Varonil del mismo club
+  const isFem1 = /\b(femenil|femenino|women|wfc|femeni)\b/.test(n1);
+  const isFem2 = /\b(femenil|femenino|women|wfc|femeni)\b/.test(n2);
+  if (isFem1 !== isFem2) return false;
+
+  const matchesAliasToken = (text, alias) => {
+    if (text === alias) return true;
+    // Las abreviaturas cortas (<= 3 letras como 'ne', 'no', 'sf', 'sea', 'ten', 'car') NUNCA deben buscarse como subcadena
+    if (alias.length <= 3) return false;
+    const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`\\b${escaped}\\b`).test(text);
+  };
+
+  // 1. Cruce por catálogo de alias con frontera de palabra estricta
   for (const group of TEAM_ALIASES) {
-    const m1 = group.some(alias => n1 === alias || n1.includes(alias));
-    const m2 = group.some(alias => n2 === alias || n2.includes(alias));
+    const m1 = group.some(alias => matchesAliasToken(n1, alias));
+    const m2 = group.some(alias => matchesAliasToken(n2, alias));
     if (m1 && m2) return true;
   }
 
-  // 2. Cruce por palabras clave distintivas (sin conectores)
-  const generics = ['cf', 'fc', 'club', 'de', 'el', 'la', 'los', 'las', 'the', 'cd', 'real', 'city', 'united', 'athletic', 'sporting'];
-  const w1 = n1.split(/\s+/).filter(w => w.length >= 3 && !generics.includes(w));
-  const w2 = n2.split(/\s+/).filter(w => w.length >= 3 && !generics.includes(w));
-  if (w1.some(w => w2.includes(w))) return true;
+  // 2. Cruce por palabras clave distintivas (excluyendo palabras genéricas de clubes/ciudades compartidas)
+  const generics = [
+    'cf', 'fc', 'club', 'de', 'el', 'la', 'los', 'las', 'the', 'cd', 'sc', 'ac', 'as',
+    'real', 'city', 'united', 'athletic', 'atletico', 'sporting', 'deportivo',
+    'san', 'new', 'york', 'angeles', 'bay', 'st', 'saint', 'santa',
+    'town', 'rovers', 'wanderers', 'albion', 'county', 'union', 'dynamo',
+    'nacional', 'internacional', 'universidad', 'femenil', 'femenino', 'women', 'wfc'
+  ];
+  const w1 = n1.split(/\s+/).filter(w => w.length >= 4 && !generics.includes(w));
+  const w2 = n2.split(/\s+/).filter(w => w.length >= 4 && !generics.includes(w));
+  if (w1.length > 0 && w2.length > 0 && w1.some(w => w2.includes(w))) return true;
 
   return false;
 }
@@ -680,6 +732,10 @@ export async function diagnoseFailureWithAI(predictionId, actualResult = '') {
     opponentTeam = homeName;
   }
 
+  const adjMatch = aiText.match(/AJUSTE:\s*\[?(\d+(?:\.\d+)?)\]?\s*%/i);
+  const parsedPenaltyPct = adjMatch ? parseFloat(adjMatch[1]) : 5.0;
+  const parsedPenaltyDec = Number(Math.min(0.10, Math.max(0.03, parsedPenaltyPct / 100)).toFixed(3));
+
   const newLesson = {
     id: `lesson-${Date.now()}`,
     predictionId: predictionId,
@@ -690,7 +746,7 @@ export async function diagnoseFailureWithAI(predictionId, actualResult = '') {
     predictedPick: item.pick,
     actualResult: actualResult || "Fallo del pick",
     diagnosisText: aiText,
-    penaltyModifier: 0,
+    penaltyModifier: parsedPenaltyDec,
     active: true
   };
 
@@ -701,7 +757,7 @@ export async function diagnoseFailureWithAI(predictionId, actualResult = '') {
     history[idx].status = 'lost';
     history[idx].resultDetails = actualResult;
     history[idx].diagnosis = aiText;
-    history[idx].learnedRule = `Auditoría completada para ${failedTeam}`;
+    history[idx].learnedRule = `Auditoría completada para ${failedTeam} (-${Math.round(parsedPenaltyDec * 100)}%)`;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
     } catch (e) {
@@ -726,6 +782,10 @@ export async function syncTelegramLedgerToHistory() {
     if (!res.ok) return { syncedCount: 0, auditedCount: 0 };
     const data = await res.json();
     if (!data.success) return { syncedCount: 0, auditedCount: 0 };
+
+    if (data.dynamicElo && typeof data.dynamicElo === 'object') {
+      hydrateDynamicEloFromCloud(data.dynamicElo);
+    }
 
     const allTelegramPicks = [
       ...(data.auditedPicks || []),
@@ -1015,12 +1075,12 @@ export async function autoVerifyResultsWithAPIs(sportFilter = null) {
     const itemAway = item.match?.away?.name || '';
     const pickStr = (item.pick || '').toLowerCase();
 
-    // GUARDRAIL CRÍTICO: Si el pick es un Player Prop (bases, ponches, yardas, etc.),
-    // NO debe verificarse contra el marcador total de carreras o puntos del partido.
-    const isPlayerProp = item.type?.toLowerCase().includes('prop') ||
-      ['bases', 'ponches', 'strikeout', 'yardas', 'touchdown', 'pases de', 'recepciones'].some(k => pickStr.includes(k));
+    // GUARDRAIL CRÍTICO: Si el pick es un Player Prop o Prop de Córners/Tarjetas,
+    // NO debe verificarse contra el marcador de goles/carreras/puntos del partido.
+    const isPlayerOrStatProp = item.type?.toLowerCase().includes('prop') ||
+      ['bases', 'ponches', 'strikeout', 'yardas', 'touchdown', 'pases de', 'recepciones', 'esquina', 'córner', 'corner', 'tarjeta', 'remate'].some(k => pickStr.includes(k));
 
-    if (isPlayerProp) {
+    if (isPlayerOrStatProp) {
       // Dejar pendiente para resolución individual en boxscore
       continue;
     }
@@ -1033,7 +1093,9 @@ export async function autoVerifyResultsWithAPIs(sportFilter = null) {
     });
 
     if (matchFound) {
-      const { homeScore, awayScore } = matchFound;
+      const isSwapped = isTeamMatch(itemHome, matchFound.away) && isTeamMatch(itemAway, matchFound.home);
+      const homeScore = isSwapped ? matchFound.awayScore : matchFound.homeScore;
+      const awayScore = isSwapped ? matchFound.homeScore : matchFound.awayScore;
       const totalGoalsRuns = homeScore + awayScore;
       let isWon = false;
       let resultDetails = "";
@@ -1042,7 +1104,7 @@ export async function autoVerifyResultsWithAPIs(sportFilter = null) {
       let matchClosingOdds = null;
       const isOver = pickStr.includes('over') || pickStr.includes('más de');
       const isUnder = pickStr.includes('under') || pickStr.includes('menos de');
-      const isSpread = pickStr.includes('spread') || pickStr.includes('hándicap') || pickStr.includes('handicap') || pickStr.includes('cubre línea') || pickStr.includes('cubre linea') || pickStr.includes('runline') || pickStr.includes('+') || pickStr.includes('-');
+      const isSpread = pickStr.includes('spread') || pickStr.includes('hándicap') || pickStr.includes('handicap') || pickStr.includes('cubre línea') || pickStr.includes('cubre linea') || pickStr.includes('runline') || /[-+]\d+\.?\d*/.test(pickStr);
 
       const isHomeInPick = isTeamMatch(itemHome, pickStr) || pickStr.includes('local');
       const isAwayInPick = isTeamMatch(itemAway, pickStr) || pickStr.includes('visita') || pickStr.includes('visitante');
@@ -1067,11 +1129,11 @@ export async function autoVerifyResultsWithAPIs(sportFilter = null) {
         if (matchFound.f5HomeScore === null || matchFound.f5AwayScore === null) {
           continue;
         }
-        const f5H = matchFound.f5HomeScore;
-        const f5A = matchFound.f5AwayScore;
+        const f5H = isSwapped ? matchFound.f5AwayScore : matchFound.f5HomeScore;
+        const f5A = isSwapped ? matchFound.f5HomeScore : matchFound.f5AwayScore;
         const f5Tot = f5H + f5A;
 
-        resultDetails = `Marcador Oficial F5: ${matchFound.home} ${f5H} - ${f5A} ${matchFound.away} (Final: ${homeScore}-${awayScore})`;
+        resultDetails = `Marcador Oficial F5: ${itemHome} ${f5H} - ${f5A} ${itemAway} (Final: ${homeScore}-${awayScore})`;
 
         if (pickStr.includes('over') || pickStr.includes('más de')) {
           const m = pickStr.match(/(\d+\.?\d*)/);
@@ -1083,25 +1145,37 @@ export async function autoVerifyResultsWithAPIs(sportFilter = null) {
           const line = m ? parseFloat(m[1]) : 4.5;
           if (f5Tot === line) isWon = 'push';
           else isWon = f5Tot < line;
-        } else if (pickStr.includes(itemHome.toLowerCase()) || pickStr.includes('local')) {
+        } else if (isHomeInPick) {
           if (f5H === f5A) isWon = 'push';
           else isWon = f5H > f5A;
-        } else if (pickStr.includes(itemAway.toLowerCase()) || pickStr.includes('visita') || pickStr.includes('visitante')) {
+        } else if (isAwayInPick) {
           if (f5H === f5A) isWon = 'push';
           else isWon = f5A > f5H;
         }
       } else {
         // Verificación Estándar (9 innings / Tiempo Reglamentario)
-        resultDetails = `Marcador Final Oficial: ${matchFound.home} ${homeScore} - ${awayScore} ${matchFound.away}`;
+        resultDetails = `Marcador Final Oficial: ${itemHome} ${homeScore} - ${awayScore} ${itemAway}`;
 
         const spreadMatch = pickStr.match(/([-+]\d+\.?\d*)/);
         const overMatch = pickStr.match(/(?:over|más de)\s*(\d+\.?\d*)/);
         const underMatch = pickStr.match(/(?:under|menos de)\s*(\d+\.?\d*)/);
 
-        if (spreadMatch && (pickStr.includes('spread') || pickStr.includes('hándicap') || pickStr.includes('handicap') || pickStr.includes('cubre línea') || pickStr.includes('cubre linea') || pickStr.includes('runline') || pickStr.includes('+1.5') || pickStr.includes('-1.5'))) {
+        // 1. Evaluar PRIMERO Ambos Anotan (BTTS) y Doble Oportunidad (1X / X2) antes que 1X2 directo
+        if (pickStr.includes('ambos anotan') || pickStr.includes('ambos equipos anotan') || pickStr.includes('btts')) {
+          isWon = homeScore > 0 && awayScore > 0;
+        } else if (pickStr.includes('o empate') || pickStr.includes('doble oportunidad') || pickStr.includes('(1x') || pickStr.includes('(x2') || pickStr.includes(' 1x') || pickStr.includes(' x2')) {
+          if (isHomeInPick && !isAwayInPick) {
+            isWon = homeScore >= awayScore;
+          } else if (isAwayInPick && !isHomeInPick) {
+            isWon = awayScore >= homeScore;
+          } else if (pickStr.includes('1x')) {
+            isWon = homeScore >= awayScore;
+          } else {
+            isWon = awayScore >= homeScore;
+          }
+        } else if (spreadMatch && (pickStr.includes('spread') || pickStr.includes('hándicap') || pickStr.includes('handicap') || pickStr.includes('cubre') || pickStr.includes('runline') || pickStr.includes('+1.5') || pickStr.includes('-1.5') || pickStr.includes('apertura') || pickStr.includes('clave'))) {
           const spreadValue = parseFloat(spreadMatch[1]) || 0;
-          const isHomeSpread = pickStr.includes('local') || pickStr.includes(itemHome.toLowerCase());
-          if (isHomeSpread) {
+          if (isHomeInPick && !isAwayInPick) {
             if ((homeScore + spreadValue) === awayScore) isWon = 'push';
             else isWon = (homeScore + spreadValue) > awayScore;
           } else {
@@ -1116,31 +1190,19 @@ export async function autoVerifyResultsWithAPIs(sportFilter = null) {
           const line = parseFloat(underMatch[1]);
           if (totalGoalsRuns === line) isWon = 'push';
           else isWon = totalGoalsRuns < line;
-        } else if (pickStr.includes('victoria ' + itemHome.toLowerCase()) || 
-                   pickStr.includes(itemHome.toLowerCase() + ' moneyline') || 
-                   pickStr.includes(itemHome.toLowerCase() + ' ml') || 
-                   pickStr.includes(itemHome.toLowerCase() + ' (local)') ||
-                   (pickStr.includes('local') && !pickStr.includes('visitante')) ||
-                   (pickStr.includes(itemHome.toLowerCase()) && !pickStr.includes(itemAway.toLowerCase()) && !pickStr.includes('over') && !pickStr.includes('under'))) {
+        } else if (isHomeInPick && !isAwayInPick) {
           isWon = homeScore > awayScore;
-        } else if (pickStr.includes('victoria ' + itemAway.toLowerCase()) || 
-                   pickStr.includes(itemAway.toLowerCase() + ' moneyline') || 
-                   pickStr.includes(itemAway.toLowerCase() + ' ml') || 
-                   pickStr.includes(itemAway.toLowerCase() + ' (visitante)') ||
-                   (pickStr.includes('visitante') && !pickStr.includes('local')) ||
-                   (pickStr.includes(itemAway.toLowerCase()) && !pickStr.includes(itemHome.toLowerCase()) && !pickStr.includes('over') && !pickStr.includes('under'))) {
+        } else if (isAwayInPick && !isHomeInPick) {
           isWon = awayScore > homeScore;
-        } else if (pickStr.includes('ambos anotan') || pickStr.includes('btts')) {
-          isWon = homeScore > 0 && awayScore > 0;
-        } else if (pickStr.includes('empate') || pickStr.includes('doble oportunidad') || pickStr.includes('1x') || pickStr.includes('x2')) {
-          isWon = homeScore === awayScore || (pickStr.includes(itemHome.toLowerCase()) && homeScore >= awayScore) || (pickStr.includes(itemAway.toLowerCase()) && awayScore >= homeScore);
+        } else if (pickStr.includes('empate') || pickStr.includes('draw')) {
+          isWon = homeScore === awayScore;
         } else {
           isWon = homeScore > awayScore;
         }
       }
 
       // Actualizar Elo Dinámico del partido
-      updateDynamicElo(matchFound.sport, matchFound.home, matchFound.away, homeScore, awayScore);
+      updateDynamicElo(matchFound.sport, itemHome, itemAway, homeScore, awayScore);
 
       if (isWon === true) {
         updatePredictionStatus(item.id, 'won', resultDetails, matchClosingOdds);
@@ -1152,6 +1214,22 @@ export async function autoVerifyResultsWithAPIs(sportFilter = null) {
         pushCount++;
       } else {
         updatePredictionStatus(item.id, 'lost', resultDetails, matchClosingOdds);
+        // Auto-generar lección forense base para que la Memoria de Aprendizaje actúe sin requerir clic manual
+        const failedTeam = (isAwayInPick && !isHomeInPick) ? itemAway : itemHome;
+        const opponentTeam = failedTeam === itemHome ? itemAway : itemHome;
+        saveTeamLesson({
+          id: `lesson-auto-${item.id}`,
+          predictionId: item.id,
+          date: new Date().toISOString(),
+          team: failedTeam,
+          opponent: opponentTeam,
+          sport: item.sport || matchFound.sport || 'futbol',
+          predictedPick: item.pick,
+          actualResult: resultDetails,
+          diagnosisText: `DIAGNÓSTICO: El modelo sobreestimó el pick "${item.pick}" (${resultDetails}).\nLECCIÓN: Aplicar penalización preventiva sobre ${failedTeam}.\nAJUSTE: 6%`,
+          penaltyModifier: 0.03,
+          active: true
+        });
         verifiedCount++;
         lostCount++;
       }

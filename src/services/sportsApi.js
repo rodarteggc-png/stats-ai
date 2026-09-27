@@ -66,8 +66,9 @@ export function trackAndDetectSteamMoves(matchKey, homeTeam, awayTeam, currentHo
   const openA = snap.awayOpen || curA;
 
   // Caída porcentual en la cuota: ej. abrió en 2.20 y bajó a 1.90 => ((2.20 / 1.90) - 1) * 100 = 15.8%
-  const dropHome = (curH > 0 && openH > curH) ? (((openH / curH) - 1) * 100) : 0;
-  const dropAway = (curA > 0 && openA > curA) ? (((openA / curA) - 1) * 100) : 0;
+  // CANDADO ANTI-LONGSHOT: Solo validar Smart Money en cuotas competitivas (<= 2.55)
+  const dropHome = (curH > 0 && curH <= 2.55 && openH > curH) ? (((openH / curH) - 1) * 100) : 0;
+  const dropAway = (curA > 0 && curA <= 2.55 && openA > curA) ? (((openA / curA) - 1) * 100) : 0;
 
   if (dropHome >= 4.5) {
     return {
@@ -696,13 +697,19 @@ async function fetchRealMlbSchedule(dateRange) {
             }
           },
           lineupStatus: getMatchLineupStatus(g.gameDate, 'mlb', { pitcher: { name: homePitcherName } }, { pitcher: { name: awayPitcherName } }),
-          market: {
-            open: "1.90",
-            current: "1.90",
-            homeOdds: "1.90",
-            awayOdds: "1.90",
-            isSteamMove: false
-          }
+          market: (() => {
+            const expHome = 1 / (1 + Math.pow(10, (awayElo - (homeElo + 25)) / 400));
+            const fairH = (1 / Math.min(0.85, Math.max(0.20, expHome))).toFixed(2);
+            const fairA = (1 / Math.min(0.85, Math.max(0.20, 1 - expHome))).toFixed(2);
+            return {
+              open: fairH,
+              current: fairH,
+              homeOdds: fairH,
+              awayOdds: fairA,
+              hasRealOdds: false,
+              isSteamMove: false
+            };
+          })()
         };
       })());
     });
@@ -715,12 +722,13 @@ async function fetchRealMlbSchedule(dateRange) {
   if (oddsData && Array.isArray(oddsData)) {
     resolvedGames.forEach(game => {
       const match = oddsData.find(o => 
-        (o.home_team === game.home.name || o.home_team.includes(game.home.name.split(' ').pop())) &&
-        (o.away_team === game.away.name || o.away_team.includes(game.away.name.split(' ').pop()))
+        (isTeamMatch(o.home_team, game.home.name) || o.home_team === game.home.name || o.home_team.includes(game.home.name.split(' ').pop())) &&
+        (isTeamMatch(o.away_team, game.away.name) || o.away_team === game.away.name || o.away_team.includes(game.away.name.split(' ').pop()))
       );
       if (match && match.bookmakers && match.bookmakers.length > 0) {
         const bookie = match.bookmakers.find(b => b.key === 'pinnacle') || match.bookmakers.find(b => b.key === 'bet365') || match.bookmakers[0];
-        const h2h = bookie.markets.find(m => m.key === 'h2h');
+        const h2h = bookie.markets?.find(m => m.key === 'h2h');
+        const spreads = bookie.markets?.find(m => m.key === 'spreads');
         if (h2h && h2h.outcomes) {
           const hOutcome = h2h.outcomes.find(o => o.name === match.home_team);
           const aOutcome = h2h.outcomes.find(o => o.name === match.away_team);
@@ -729,6 +737,7 @@ async function fetchRealMlbSchedule(dateRange) {
             game.market.awayOdds = aOutcome.price.toString();
             game.market.current = game.market.homeOdds;
             game.market.bookmaker = bookie.title;
+            game.market.hasRealOdds = true;
 
             // Detector 1: Steam Moves / Smart Money en MLB
             const steamData = trackAndDetectSteamMoves(
@@ -744,6 +753,18 @@ async function fetchRealMlbSchedule(dateRange) {
             game.market.open = steamData.open;
             game.market.current = steamData.current;
             if (steamData.details) game.market.steamDetails = steamData.details;
+          }
+        }
+        if (spreads && spreads.outcomes) {
+          const hSpread = spreads.outcomes.find(o => o.name === match.home_team);
+          const aSpread = spreads.outcomes.find(o => o.name === match.away_team);
+          if (hSpread) {
+            game.market.homeSpreadPoint = hSpread.point;
+            game.market.homeSpreadOdds = hSpread.price ? hSpread.price.toString() : "1.65";
+          }
+          if (aSpread) {
+            game.market.awaySpreadPoint = aSpread.point;
+            game.market.awaySpreadOdds = aSpread.price ? aSpread.price.toString() : "1.65";
           }
         }
       }
@@ -807,29 +828,38 @@ export async function fetchLiveSoccerStandings(leagueCode) {
     entries.forEach(entry => {
       const teamId = entry.team.id;
       const teamName = entry.team.displayName || entry.team.name || "";
-      let gp = 1, goalsFor = 1, goalsAgainst = 1, pts = 0;
+      let gp = 0, wins = 0, losses = 0, ties = 0, goalsFor = 1, goalsAgainst = 1, pts = 0;
       
       entry.stats?.forEach(s => {
-        if (s.name === 'gamesPlayed') gp = parseFloat(s.displayValue) || 1;
-        if (s.name === 'pointsFor') goalsFor = parseFloat(s.displayValue) || 0;
-        if (s.name === 'pointsAgainst') goalsAgainst = parseFloat(s.displayValue) || 0;
-        if (s.name === 'points') pts = parseFloat(s.displayValue) || 0;
+        const val = parseFloat(s.value !== undefined ? s.value : s.displayValue) || 0;
+        if (s.name === 'gamesPlayed') gp = val;
+        if (s.name === 'wins') wins = val;
+        if (s.name === 'losses') losses = val;
+        if (s.name === 'ties' || s.name === 'draws') ties = val;
+        if (s.name === 'pointsFor' || s.name === 'goalsFor') goalsFor = val;
+        if (s.name === 'pointsAgainst' || s.name === 'goalsAgainst') goalsAgainst = val;
+        if (s.name === 'points') pts = val;
       });
 
-      if (gp === 0) gp = 1; // Prevent div by zero
+      gp = Math.max(gp, wins + losses + ties, 1);
 
-      const baseGpg = (goalsFor / gp);
-      const baseAllowedGpg = (goalsAgainst / gp);
+      // Regresión Bayesiana Empírica (prior k = 5 partidos hacia media de 1.35 goles/juego)
+      // Evita que 1 o 2 goleadas al inicio de torneo inflen el xG a niveles irreales (> 3.0)
+      const priorGames = 5;
+      const leagueMeanGpg = 1.35;
+      const baseGpg = Math.min(2.45, Math.max(0.55, (goalsFor + (priorGames * leagueMeanGpg)) / (gp + priorGames)));
+      const baseAllowedGpg = Math.min(2.35, Math.max(0.55, (goalsAgainst + (priorGames * leagueMeanGpg)) / (gp + priorGames)));
 
       // Splits Home/Away científicamente calibrados (ventaja de localía empírica: +15% goles anotados, -12% recibidos)
-      const homeOffenseXg = Math.max(0.4, Number((baseGpg * 1.15).toFixed(2)));
-      const homeDefenseXg = Math.max(0.3, Number((baseAllowedGpg * 0.88).toFixed(2)));
-      const awayOffenseXg = Math.max(0.3, Number((baseGpg * 0.88).toFixed(2)));
-      const awayDefenseXg = Math.max(0.4, Number((baseAllowedGpg * 1.15).toFixed(2)));
+      const homeOffenseXg = Math.max(0.45, Number((baseGpg * 1.15).toFixed(2)));
+      const homeDefenseXg = Math.max(0.35, Number((baseAllowedGpg * 0.88).toFixed(2)));
+      const awayOffenseXg = Math.max(0.35, Number((baseGpg * 0.88).toFixed(2)));
+      const awayDefenseXg = Math.max(0.45, Number((baseAllowedGpg * 1.15).toFixed(2)));
 
       const xG = baseGpg.toFixed(2);
       const goalsAllowedPerGame = baseAllowedGpg.toFixed(2);
-      const elo = Math.round(1500 + ((pts / gp) * 40) - (goalsAllowedPerGame * 20));
+      const regressedPtsPerGame = (pts + (priorGames * 1.35)) / (gp + priorGames);
+      const elo = Math.round(1500 + (regressedPtsPerGame * 40) - (baseAllowedGpg * 20));
 
       const teamObj = {
         name: teamName,
@@ -961,15 +991,15 @@ async function fetchRealSoccerSchedule(dateRange) {
       const homeForm = home.form || "WDLWD";
       const awayForm = away.form || "LDWLD";
 
-      // Modelo Dixon-Coles Puro cruzando Ataque Local vs Defensa Visitante
+      // Modelo Dixon-Coles Puro cruzando Ataque Local vs Defensa Visitante (con techo prudencial)
       const leagueAvgGpg = 1.35;
       const attackHome = hStats.homeOffenseXg || parseFloat(hStats.xG) || 1.4;
       const defenseAway = aStats.awayDefenseXg || parseFloat(aStats.goalsAllowedPerGame) || 1.3;
       const attackAway = aStats.awayOffenseXg || parseFloat(aStats.xG) || 1.1;
       const defenseHome = hStats.homeDefenseXg || parseFloat(hStats.goalsAllowedPerGame) || 1.1;
 
-      const realHomeXg = Number(Math.max(0.3, (attackHome * defenseAway) / leagueAvgGpg).toFixed(2));
-      const realAwayXg = Number(Math.max(0.2, (attackAway * defenseHome) / leagueAvgGpg).toFixed(2));
+      const realHomeXg = Number(Math.min(2.75, Math.max(0.35, (attackHome * defenseAway) / leagueAvgGpg)).toFixed(2));
+      const realAwayXg = Number(Math.min(2.45, Math.max(0.25, (attackAway * defenseHome) / leagueAvgGpg)).toFixed(2));
       const totalRealXg = realHomeXg + realAwayXg || 1;
       
       // xG implícito dictado por la línea de Las Vegas
@@ -977,8 +1007,28 @@ async function fetchRealSoccerSchedule(dateRange) {
       const vegasImpliedAwayXG = (realAwayXg / totalRealXg) * overUnderLine;
 
       // Blend Inteligente (60% Datos Reales con Splits, 40% Vegas)
-      const homeXG = ((realHomeXg * 0.60) + (vegasImpliedHomeXG * 0.40)).toFixed(2);
-      const awayXG = ((realAwayXg * 0.60) + (vegasImpliedAwayXG * 0.40)).toFixed(2);
+      let homeXG = ((realHomeXg * 0.60) + (vegasImpliedHomeXG * 0.40)).toFixed(2);
+      let awayXG = ((realAwayXg * 0.60) + (vegasImpliedAwayXG * 0.40)).toFixed(2);
+
+      // Si ESPN provee momios reales de Moneyline, anclar el reparto de xG con el favorito de Las Vegas
+      const homeMLOpen = odds?.moneyline?.home?.open?.odds;
+      const homeMLClose = odds?.moneyline?.home?.close?.odds || odds?.moneyline?.home?.current?.odds;
+      const awayMLOpen = odds?.moneyline?.away?.open?.odds;
+      const awayMLClose = odds?.moneyline?.away?.close?.odds || odds?.moneyline?.away?.current?.odds;
+      const hasEspnRealOdds = Boolean(homeMLClose && awayMLClose);
+
+      if (hasEspnRealOdds) {
+        const decH = parseFloat(americanToDecimal(homeMLClose)) || 2.0;
+        const decA = parseFloat(americanToDecimal(awayMLClose)) || 2.0;
+        const pH = 1 / decH;
+        const pA = 1 / decA;
+        const pSum = pH + pA || 1;
+        const vegasShareH = pH / pSum;
+        const vegasShareA = pA / pSum;
+        const combinedXg = parseFloat(homeXG) + parseFloat(awayXG);
+        homeXG = Math.max(0.25, (parseFloat(homeXG) * 0.68) + (combinedXg * vegasShareH * 0.32)).toFixed(2);
+        awayXG = Math.max(0.20, (parseFloat(awayXG) * 0.68) + (combinedXg * vegasShareA * 0.32)).toFixed(2);
+      }
 
       const soccerDaysRest = getSoccerDaysRest(leagueCode, ev.date);
       const homeLeader = comp.leaders?.[0]?.leaders?.[0]?.athlete?.displayName || home.leaders?.[0]?.leaders?.[0]?.athlete?.displayName || "Delantero Principal";
@@ -1013,43 +1063,50 @@ async function fetchRealSoccerSchedule(dateRange) {
           keyPlayer: { name: awayLeader, shotsOnTargetAvg: ((parseFloat(awayXG) || 1) * 0.8).toFixed(1) }
         },
         market: (() => {
-          const homeMLOpen = odds?.moneyline?.home?.open?.odds;
-          const homeMLClose = odds?.moneyline?.home?.close?.odds || odds?.moneyline?.home?.current?.odds;
-          const awayMLOpen = odds?.moneyline?.away?.open?.odds;
-          const awayMLClose = odds?.moneyline?.away?.close?.odds || odds?.moneyline?.away?.current?.odds;
+          // Si no hay momios reales de ESPN, calcular cuota justa real (Fair Odds) alineada con Poisson para NO inventar 1.95/2.05 ni cuotas subvaluadas
+          const hXgVal = parseFloat(homeXG) || 1.35;
+          const aXgVal = parseFloat(awayXG) || 1.05;
+          const estHomeProb = Math.min(0.72, Math.max(0.15, hXgVal / (hXgVal + aXgVal + 0.78)));
+          const estAwayProb = Math.min(0.68, Math.max(0.12, aXgVal / (hXgVal + aXgVal + 0.82)));
+          const fairHomeDec = (1 / estHomeProb).toFixed(2);
+          const fairAwayDec = (1 / estAwayProb).toFixed(2);
 
-          const homeOpenDec = homeMLOpen ? americanToDecimal(homeMLOpen) : "1.90";
-          const homeCloseDec = homeMLClose ? americanToDecimal(homeMLClose) : (odds?.details ? "1.85" : "1.95");
-          const awayOpenDec = awayMLOpen ? americanToDecimal(awayMLOpen) : "2.10";
-          const awayCloseDec = awayMLClose ? americanToDecimal(awayMLClose) : "2.05";
+          const homeOpenDec = homeMLOpen ? americanToDecimal(homeMLOpen) : fairHomeDec;
+          const homeCloseDec = homeMLClose ? americanToDecimal(homeMLClose) : fairHomeDec;
+          const awayOpenDec = awayMLOpen ? americanToDecimal(awayMLOpen) : fairAwayDec;
+          const awayCloseDec = awayMLClose ? americanToDecimal(awayMLClose) : fairAwayDec;
 
-          // Un Steam Move real es cuando la cuota cae de forma demostrable al menos 0.15 en decimales
+          // Un Steam Move real es cuando la cuota cae al menos 0.15 en decimales EN UN RANGO COMPETITIVO (<= 2.55)
           let isSteamMove = false;
           let steamTeam = "";
-          if (homeMLOpen && homeMLClose) {
+          let steamOdds = homeCloseDec;
+          if (homeMLOpen && homeMLClose && parseFloat(homeCloseDec) <= 2.55) {
             const drop = parseFloat(homeOpenDec) - parseFloat(homeCloseDec);
             if (drop >= 0.15) {
               isSteamMove = true;
               steamTeam = home.team?.displayName || "Local";
+              steamOdds = homeCloseDec;
             }
           }
-          if (!isSteamMove && awayMLOpen && awayMLClose) {
+          if (!isSteamMove && awayMLOpen && awayMLClose && parseFloat(awayCloseDec) <= 2.55) {
             const drop = parseFloat(awayOpenDec) - parseFloat(awayCloseDec);
             if (drop >= 0.15) {
               isSteamMove = true;
               steamTeam = away.team?.displayName || "Visitante";
+              steamOdds = awayCloseDec;
             }
           }
 
           return {
             open: homeOpenDec,
-            current: homeCloseDec,
+            current: isSteamMove ? steamOdds : homeCloseDec,
             homeOdds: homeCloseDec,
             awayOdds: awayCloseDec,
+            hasRealOdds: hasEspnRealOdds,
             isSteamMove,
             steamTeam,
             details: odds?.details || `O/U ${overUnderLine}`,
-            provider: odds?.provider?.displayName || "DraftKings"
+            provider: hasEspnRealOdds ? (odds?.provider?.displayName || "DraftKings") : "Modelo Cuantitativo (Sin Línea Vegas)"
           };
         })(),
         lineupStatus: getMatchLineupStatus(ev.date, 'futbol')
@@ -1091,15 +1148,12 @@ async function fetchRealSoccerSchedule(dateRange) {
 
         if (allOdds.length > 0) {
           games.forEach(game => {
-            const normHome = (game.home.name || '').toLowerCase();
-            const normAway = (game.away.name || '').toLowerCase();
+            const expectedSportKey = SOCCER_SPORT_KEYS[game.league];
+            if (!expectedSportKey) return;
 
             const matchOdds = allOdds.find(o => {
-              const h2 = (o.home_team || '').toLowerCase();
-              const a2 = (o.away_team || '').toLowerCase();
-              const matchH = normHome.includes(h2) || h2.includes(normHome) || normHome.split(' ').some(w => w.length > 3 && h2.includes(w));
-              const matchA = normAway.includes(a2) || a2.includes(normAway) || normAway.split(' ').some(w => w.length > 3 && a2.includes(w));
-              return matchH && matchA;
+              if (o.sport_key && o.sport_key !== expectedSportKey) return false;
+              return isTeamMatch(game.home.name, o.home_team) && isTeamMatch(game.away.name, o.away_team);
             });
 
             if (matchOdds && matchOdds.bookmakers && matchOdds.bookmakers.length > 0) {
@@ -1122,6 +1176,19 @@ async function fetchRealSoccerSchedule(dateRange) {
                   game.market.current = game.market.homeOdds;
                   game.market.bookmaker = bookie.title;
                   game.market.provider = bookie.title;
+                  game.market.hasRealOdds = true;
+
+                  // Anclar suavemente el xG con la probabilidad implícita real de The Odds API
+                  const decH = parseFloat(game.market.homeOdds) || 2.0;
+                  const decA = parseFloat(game.market.awayOdds) || 2.0;
+                  const pH = 1 / decH;
+                  const pA = 1 / decA;
+                  const pSum = pH + pA || 1;
+                  const curHXg = parseFloat(game.home.xG) || 1.35;
+                  const curAXg = parseFloat(game.away.xG) || 1.05;
+                  const combXg = curHXg + curAXg;
+                  game.home.xG = Math.max(0.25, (curHXg * 0.68) + (combXg * (pH / pSum) * 0.32)).toFixed(2);
+                  game.away.xG = Math.max(0.20, (curAXg * 0.68) + (combXg * (pA / pSum) * 0.32)).toFixed(2);
 
                   // Detector 1: Steam Moves / Smart Money en Fútbol
                   const steamData = trackAndDetectSteamMoves(
@@ -1452,7 +1519,11 @@ async function fetchLiveNflTeamStats(teamId, fallbackElo, fallbackQb) {
       });
     });
 
-    const ypp = totalPlays > 0 ? (totalYards / totalPlays) : 5.2; // 5.2 promedio si no hay juegos jugados
+    let rawYpp = totalPlays > 0 ? (totalYards / totalPlays) : 5.3;
+    if (rawYpp < 4.2 || rawYpp > 6.5) {
+      rawYpp = 5.3 + ((fallbackElo - 1500) / 350);
+    }
+    const ypp = Math.min(6.4, Math.max(4.3, rawYpp));
 
     const result = {
       ypp: Number(ypp.toFixed(2)),
@@ -1465,7 +1536,7 @@ async function fetchLiveNflTeamStats(teamId, fallbackElo, fallbackQb) {
     return result;
   } catch (err) {
     console.error(`Error fetching stats for team ${teamId}:`, err);
-    return { ypp: 5.2, to: 0, elo: fallbackElo, qb: fallbackQb };
+    return { ypp: 5.3, to: 0, elo: fallbackElo, qb: fallbackQb };
   }
 }
 
@@ -1536,7 +1607,15 @@ export async function fetchNflWeekSchedule(weekNumber = null) {
     ]);
 
     const odds = comp.odds?.[0];
-    const spread = odds?.spread !== undefined ? parseFloat(odds.spread) : -3;
+    let rawSpread = odds?.spread !== undefined ? parseFloat(odds.spread) : -3;
+    const favoredAbbr = odds?.details?.split(' ')?.[0] || homeAbbr;
+    // Asegurar convención estándar: spread < 0 significa Local Favorito; spread > 0 significa Local Underdog (Visitante Favorito)
+    let spread = rawSpread;
+    if (favoredAbbr && awayAbbr && favoredAbbr.toUpperCase() === awayAbbr.toUpperCase()) {
+      spread = Math.abs(rawSpread);
+    } else if (favoredAbbr && homeAbbr && favoredAbbr.toUpperCase() === homeAbbr.toUpperCase()) {
+      spread = -Math.abs(rawSpread);
+    }
     const overUnder = odds?.overUnder || 43.5;
     
     const homeRecord = liveHStanding?.record || home.records?.[0]?.summary || "0-0";

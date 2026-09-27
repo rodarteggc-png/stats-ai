@@ -54,10 +54,12 @@ export function calculateMatchProbabilities(
   if (awayRest < 4) aXG *= 0.90;
 
   // 4. Modificador de Memoria de Lecciones Aprendidas (IA con Cap de Seguridad)
-  const hPen = parseFloat(homePenalty) || 0;
-  const aPen = parseFloat(awayPenalty) || 0;
-  if (hPen > 0) hXG *= (1 - Math.min(hPen, 0.04));
-  if (aPen > 0) aXG *= (1 - Math.min(aPen, 0.04));
+  const rawHPen = parseFloat(homePenalty) || 0;
+  const rawAPen = parseFloat(awayPenalty) || 0;
+  const hPen = rawHPen > 1 ? rawHPen / 100 : rawHPen;
+  const aPen = rawAPen > 1 ? rawAPen / 100 : rawAPen;
+  if (hPen > 0) hXG *= (1 - Math.min(hPen, 0.08));
+  if (aPen > 0) aXG *= (1 - Math.min(aPen, 0.08));
 
   hXG = Math.max(0.1, hXG);
   aXG = Math.max(0.1, aXG);
@@ -69,6 +71,8 @@ export function calculateMatchProbabilities(
   let under15 = 0;
   let over25 = 0;
   let under25 = 0;
+  let over35 = 0;
+  let under35 = 0;
   let bttsYes = 0;
   let bttsNo = 0;
 
@@ -93,6 +97,9 @@ export function calculateMatchProbabilities(
 
       if (i + j > 2.5) over25 += prob;
       else under25 += prob;
+
+      if (i + j > 3.5) over35 += prob;
+      else under35 += prob;
       
       if (i > 0 && j > 0) bttsYes += prob;
       else bttsNo += prob;
@@ -108,6 +115,9 @@ export function calculateMatchProbabilities(
 
   const totalOu = over25 + under25;
   over25 /= totalOu; under25 /= totalOu;
+
+  const totalOu35 = over35 + under35;
+  over35 /= totalOu35; under35 /= totalOu35;
   
   const totalBtts = bttsYes + bttsNo;
   bttsYes /= totalBtts; bttsNo /= totalBtts;
@@ -133,6 +143,8 @@ export function calculateMatchProbabilities(
     under15: (under15 * 100).toFixed(1),
     over25: (over25 * 100).toFixed(1),
     under25: (under25 * 100).toFixed(1),
+    over35: (over35 * 100).toFixed(1),
+    under35: (under35 * 100).toFixed(1),
     bttsYes: (bttsYes * 100).toFixed(1),
     bttsNo: (bttsNo * 100).toFixed(1),
     dnb,
@@ -148,7 +160,9 @@ export function calculateMatchProbabilities(
 export function getFairOddsDecimal(probability) {
   const p = parseFloat(probability);
   if (isNaN(p) || p <= 0) return "1.90";
-  return (100 / Math.min(p, 99.5)).toFixed(2);
+  // Estima la línea de mercado regresando ligeramente la proyección del modelo (-4.5% implícito) para no anular el Edge en mercados sin momio directo de ESPN
+  const marketImplied = Math.max(12, Math.min(88, p - 4.5));
+  return (100 / marketImplied).toFixed(2);
 }
 
 /**

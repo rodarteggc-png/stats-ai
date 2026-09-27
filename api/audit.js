@@ -26,7 +26,8 @@ export default async function handler(req, res) {
       summary: result.summary,
       auditedPicks: result.auditedPicks,
       pendingPicks: result.pendingPicks,
-      runtimePenalties: result.runtimePenalties
+      runtimePenalties: result.runtimePenalties,
+      dynamicElo: result.dynamicElo || {}
     });
   } catch (error) {
     console.error('Error en api/audit:', error);
