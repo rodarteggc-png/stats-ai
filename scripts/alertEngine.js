@@ -221,6 +221,20 @@ function isMatchWithinHorizon(gameDate, maxHoursAhead = 36) {
 }
 
 /**
+ * Verifica si la fecha del partido corresponde exactamente al día de HOY en horario de Ciudad de México (CDMX)
+ */
+function isMatchTodayInCdmx(gameDate) {
+  if (!gameDate) return true;
+  try {
+    const matchDateCdmx = new Date(gameDate).toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+    const todayCdmx = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+    return matchDateCdmx === todayCdmx;
+  } catch (e) {
+    return true;
+  }
+}
+
+/**
  * Califica un pronóstico oficial contra el marcador final real (F5 en MLB, Spread/Totales en NFL, 1X2/DC en Fútbol)
  */
 export function gradeOfficialPick(pick, match) {
@@ -353,7 +367,9 @@ export function buildOpportunitiesAndTopSlate({
   mlbMatches = [],
   nflMatches = [],
   maxPicksToSend = 6,
-  runtimePenalties = {}
+  runtimePenalties = {},
+  sentCache = {},
+  isForce = false
 }) {
   const rawOpportunities = [];
 
@@ -705,8 +721,9 @@ export function buildOpportunitiesAndTopSlate({
     }
   });
 
-  // ================= D. TRIBUNAL DE CONSENSO Y ORDENAMIENTO MULTIDEPORTE =================
+  // ================= D. TRIBUNAL DE CONSENSO Y ORDENAMIENTO CON PRIORIDAD AL DÍA ACTUAL (CDMX) =================
   rawOpportunities.forEach(opp => {
+    opp.isToday = isMatchTodayInCdmx(opp.gameDate);
     opp.consensus = evaluateEnsembleConsensus({
       sport: opp.sport,
       match: opp.match || {},
@@ -721,25 +738,47 @@ export function buildOpportunitiesAndTopSlate({
 
   const approvedOpps = rawOpportunities.filter(opp => opp.consensus && opp.consensus.votesPassed >= 2);
 
+  // Ordenar: 1) Partidos que se juegan HOY (CDMX) primero, 2) Unanimidad 3/3 antes que 2/3, 3) Mayor +EV
   approvedOpps.sort((a, b) => {
+    if (a.isToday !== b.isToday) {
+      return a.isToday ? -1 : 1;
+    }
     if (b.consensus.votesPassed !== a.consensus.votesPassed) {
       return b.consensus.votesPassed - a.consensus.votesPassed;
     }
     return b.edgeVal - a.edgeVal;
   });
 
-  const sportsPresent = [...new Set(approvedOpps.map(o => o.sport))];
+  // Filtrar primero las que NO se han enviado aún a Telegram para que las enviadas a las 9:30 AM
+  // nunca bloqueen los lugares del Top 6 en el corte de las 3:30 PM
+  const eligibleForTop = isForce
+    ? approvedOpps
+    : approvedOpps.filter(pick => !sentCache[pick.id] || sentCache[pick.id].dispatchedToTelegram === false);
+
+  const todayEligible = eligibleForTop.filter(o => o.isToday);
+  const tomorrowEligible = eligibleForTop.filter(o => !o.isToday);
   const topSlate = [];
 
-  for (const sport of sportsPresent) {
+  // Paso 1: Llenar el Top 6 dando prioridad 100% a los partidos de HOY (diversificando por deporte primero)
+  const todaySports = [...new Set(todayEligible.map(o => o.sport))];
+  for (const sport of todaySports) {
     if (topSlate.length >= maxPicksToSend) break;
-    const bestOfSport = approvedOpps.find(o => o.sport === sport);
-    if (bestOfSport && !topSlate.some(p => p.id === bestOfSport.id)) {
-      topSlate.push(bestOfSport);
+    const bestOfSportToday = todayEligible.find(o => o.sport === sport);
+    if (bestOfSportToday && !topSlate.some(p => p.id === bestOfSportToday.id)) {
+      topSlate.push(bestOfSportToday);
     }
   }
 
-  for (const pick of approvedOpps) {
+  for (const pick of todayEligible) {
+    if (topSlate.length >= maxPicksToSend) break;
+    if (!topSlate.some(p => p.id === pick.id)) {
+      topSlate.push(pick);
+    }
+  }
+
+  // Paso 2: Únicamente si HOY ya no tiene suficientes partidos para completar los 6 lugares,
+  // rellenar los huecos restantes con los de mañana temprano (dentro del horizonte permitido)
+  for (const pick of tomorrowEligible) {
     if (topSlate.length >= maxPicksToSend) break;
     if (!topSlate.some(p => p.id === pick.id)) {
       topSlate.push(pick);
@@ -747,6 +786,9 @@ export function buildOpportunitiesAndTopSlate({
   }
 
   topSlate.sort((a, b) => {
+    if (a.isToday !== b.isToday) {
+      return a.isToday ? -1 : 1;
+    }
     if (b.consensus.votesPassed !== a.consensus.votesPassed) {
       return b.consensus.votesPassed - a.consensus.votesPassed;
     }
@@ -949,20 +991,29 @@ export async function runAlertEngine(options = {}) {
   const isForce = options.force || process.argv.includes('--force');
   const forceAudit = options.audit || process.argv.includes('--audit');
   const maxPicksToSend = options.maxPicks || 6;
-  const rangeArg = process.argv.find(a => a.startsWith('--range='));
-  const dateRange = options.dateRange || (rangeArg ? rangeArg.split('=')[1] : 'hoy_y_manana');
-  const maxHoursAhead = options.maxHoursAhead !== undefined ? options.maxHoursAhead : 36;
 
-  console.log(`[${new Date().toISOString()}] 🚀 Iniciando Escaneo Cuantitativo Stats-AI Pro (Rango: ${dateRange}, Horizonte: ${maxHoursAhead}h)...`);
+  // Determinar hora actual en CDMX para calibrar la ventana:
+  // - Corte Matutino (ej. 9:30 AM, antes de las 14:00): Mira exclusivamente partidos de HOY (próximas 16h).
+  // - Corte Vespertino (ej. 3:30 PM, 14:00 en adelante): Prioriza 100% la tarde/noche de HOY y mira máximo 18h adelante (hasta las 9:30 AM de mañana).
+  const cdmxNow = new Date();
+  const cdmxHour = parseInt(cdmxNow.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', timeZone: 'America/Mexico_City' }), 10);
+  const cdmxDateStr = cdmxNow.toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+  const isMorningShift = cdmxHour < 14;
+
+  const rangeArg = process.argv.find(a => a.startsWith('--range='));
+  const defaultRange = isMorningShift ? 'hoy' : 'hoy_y_manana';
+  const defaultHorizon = isMorningShift ? 16 : 18;
+
+  const dateRange = options.dateRange || (rangeArg ? rangeArg.split('=')[1] : defaultRange);
+  const maxHoursAhead = options.maxHoursAhead !== undefined ? options.maxHoursAhead : defaultHorizon;
+
+  console.log(`[${new Date().toISOString()}] 🚀 Iniciando Escaneo Cuantitativo Stats-AI Pro (Turno CDMX ${cdmxHour}h, Rango: ${dateRange}, Horizonte: ${maxHoursAhead}h)...`);
   if (isDryRun) console.log('⚠️ Modo Dry-Run activo: no se mandarán mensajes reales.');
 
   const sentCache = await loadCloudLedger();
   if (!sentCache._meta) sentCache._meta = {};
 
   // Determinar si es turno matutino en CDMX (6:00 AM a 1:30 PM) para enviar el Corte de Caja una vez al día
-  const cdmxNow = new Date();
-  const cdmxHour = parseInt(cdmxNow.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', timeZone: 'America/Mexico_City' }), 10);
-  const cdmxDateStr = cdmxNow.toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
   const isMorningWindow = cdmxHour >= 6 && cdmxHour <= 13;
   const shouldSendAuditReport = forceAudit || (isMorningWindow && sentCache._meta.lastAuditDate !== cdmxDateStr);
 
@@ -982,7 +1033,7 @@ export async function runAlertEngine(options = {}) {
     console.error('Aviso en auditoría previa:', err.message);
   }
 
-  // Descargar programación dentro de la ventana de 36 horas
+  // Descargar programación dentro de la ventana calibrada del turno
   const [soccerRaw, mlbRaw, nflRaw] = await Promise.all([
     fetchDailySchedule('futbol', dateRange).catch(() => []),
     fetchDailySchedule('mlb', dateRange).catch(() => []),
@@ -1004,13 +1055,13 @@ export async function runAlertEngine(options = {}) {
     mlbMatches,
     nflMatches,
     maxPicksToSend,
-    runtimePenalties: auditResult.runtimePenalties
+    runtimePenalties: auditResult.runtimePenalties,
+    sentCache,
+    isForce
   });
 
-  // De ese Top, verificar cuáles NO se han enviado hoy a Telegram (a menos que se use force)
-  const toSend = isForce
-    ? topSlate
-    : topSlate.filter(pick => !sentCache[pick.id] || sentCache[pick.id].dispatchedToTelegram === false);
+  // topSlate ya viene filtrado contra sentCache y con prioridad estricta para los juegos de HOY
+  const toSend = topSlate;
 
   // Además, identificar TODAS las oportunidades con Unanimidad 3/3 (incluyendo las que no entraron al Top 6 de Telegram)
   // para guardarlas automáticamente en la Memoria de Auditoría y calificarlas contra resultados oficiales
