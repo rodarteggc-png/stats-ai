@@ -249,6 +249,129 @@ function americanToDecimal(american) {
   return ((100 / Math.abs(val)) + 1).toFixed(2);
 }
 
+/**
+ * Extrae el movimiento institucional real (Apertura vs. Línea Actual de DraftKings/ESPN BET)
+ * en Moneyline, Spread/Runline y Totales para detectar Sharp Money y Reverse Line Movement.
+ */
+export function extractEspnSharpMarket(oddsObj, homeName = "Local", awayName = "Visitante") {
+  if (!oddsObj) return null;
+
+  const provider = oddsObj.provider?.displayName || oddsObj.provider?.name || "DraftKings";
+
+  // 1. Moneyline (Open vs Close/Current)
+  const rawHomeMLOpen = oddsObj.moneyline?.home?.open?.odds;
+  const rawHomeMLClose = oddsObj.moneyline?.home?.current?.odds || oddsObj.moneyline?.home?.close?.odds || oddsObj.homeTeamOdds?.moneyLine;
+  const rawAwayMLOpen = oddsObj.moneyline?.away?.open?.odds;
+  const rawAwayMLClose = oddsObj.moneyline?.away?.current?.odds || oddsObj.moneyline?.away?.close?.odds || oddsObj.awayTeamOdds?.moneyLine;
+  const rawDrawMLClose = oddsObj.moneyline?.draw?.current?.odds || oddsObj.moneyline?.draw?.close?.odds;
+
+  const hasRealML = Boolean(rawHomeMLClose && rawAwayMLClose);
+  const homeOpenDec = rawHomeMLOpen ? americanToDecimal(rawHomeMLOpen) : (rawHomeMLClose ? americanToDecimal(rawHomeMLClose) : null);
+  const homeCloseDec = rawHomeMLClose ? americanToDecimal(rawHomeMLClose) : null;
+  const awayOpenDec = rawAwayMLOpen ? americanToDecimal(rawAwayMLOpen) : (rawAwayMLClose ? americanToDecimal(rawAwayMLClose) : null);
+  const awayCloseDec = rawAwayMLClose ? americanToDecimal(rawAwayMLClose) : null;
+  const drawCloseDec = rawDrawMLClose ? americanToDecimal(rawDrawMLClose) : null;
+
+  const hOpenNum = parseFloat(homeOpenDec) || 0;
+  const hCloseNum = parseFloat(homeCloseDec) || 0;
+  const aOpenNum = parseFloat(awayOpenDec) || 0;
+  const aCloseNum = parseFloat(awayCloseDec) || 0;
+
+  // Caída porcentual en cuota decimal desde Apertura (Candado Anti-Longshot <= 2.55)
+  const homeDropPct = (hOpenNum > 0 && hCloseNum > 0 && hCloseNum <= 2.55 && hOpenNum > hCloseNum)
+    ? Number((((hOpenNum / hCloseNum) - 1) * 100).toFixed(1))
+    : 0;
+  const awayDropPct = (aOpenNum > 0 && aCloseNum > 0 && aCloseNum <= 2.55 && aOpenNum > aCloseNum)
+    ? Number((((aOpenNum / aCloseNum) - 1) * 100).toFixed(1))
+    : 0;
+
+  // 2. Point Spread / Runline (Open vs Close/Current)
+  const rawSpreadOpen = oddsObj.pointSpread?.home?.open?.line;
+  const rawSpreadClose = oddsObj.pointSpread?.home?.current?.line || oddsObj.pointSpread?.home?.close?.line;
+  const rawAwaySpreadClose = oddsObj.pointSpread?.away?.current?.line || oddsObj.pointSpread?.away?.close?.line;
+  const rawHomeSpreadOdds = oddsObj.pointSpread?.home?.current?.odds || oddsObj.pointSpread?.home?.close?.odds || oddsObj.homeTeamOdds?.spreadOdds;
+  const rawAwaySpreadOdds = oddsObj.pointSpread?.away?.current?.odds || oddsObj.pointSpread?.away?.close?.odds || oddsObj.awayTeamOdds?.spreadOdds;
+
+  const spreadHomeOpen = rawSpreadOpen !== undefined ? parseFloat(rawSpreadOpen) : null;
+  const spreadHomeClose = rawSpreadClose !== undefined ? parseFloat(rawSpreadClose) : null;
+  const spreadAwayClose = rawAwaySpreadClose !== undefined ? parseFloat(rawAwaySpreadClose) : (spreadHomeClose !== null && !isNaN(spreadHomeClose) ? -spreadHomeClose : null);
+
+  // spreadDeltaHome < 0 => Línea se movió a favor del Local (ej. de -1.5 a -3.5)
+  // spreadDeltaHome > 0 => Línea se movió a favor del Visitante / en contra del Local (ej. de -1.5 a +3.5)
+  const spreadDeltaHome = (spreadHomeOpen !== null && !isNaN(spreadHomeOpen) && spreadHomeClose !== null && !isNaN(spreadHomeClose))
+    ? Number((spreadHomeClose - spreadHomeOpen).toFixed(1))
+    : 0;
+  const spreadOpenFmt = (spreadHomeOpen !== null && !isNaN(spreadHomeOpen)) ? (spreadHomeOpen > 0 ? `+${spreadHomeOpen}` : `${spreadHomeOpen}`) : null;
+  const spreadCloseFmt = (spreadHomeClose !== null && !isNaN(spreadHomeClose)) ? (spreadHomeClose > 0 ? `+${spreadHomeClose}` : `${spreadHomeClose}`) : null;
+
+  // 3. Total Over/Under (Open vs Close/Current)
+  const cleanLine = (val) => val !== undefined && val !== null ? parseFloat(val.toString().replace(/^[ou]/i, '')) : null;
+  const totalOpen = cleanLine(oddsObj.total?.over?.open?.line);
+  const totalClose = cleanLine(oddsObj.total?.over?.current?.line || oddsObj.total?.over?.close?.line) ?? (oddsObj.overUnder ? parseFloat(oddsObj.overUnder) : null);
+  const totalDelta = (totalOpen !== null && !isNaN(totalOpen) && totalClose !== null && !isNaN(totalClose))
+    ? Number((totalClose - totalOpen).toFixed(1))
+    : 0;
+  const rawOverOdds = oddsObj.total?.over?.current?.odds || oddsObj.total?.over?.close?.odds || oddsObj.overOdds;
+  const rawUnderOdds = oddsObj.total?.under?.current?.odds || oddsObj.total?.under?.close?.odds || oddsObj.underOdds;
+
+  // 4. Síntesis de Señales de Dinero Profesional (Sharp Money)
+  let isSteamMove = false;
+  let steamTeam = null;
+  let steamDropPct = 0;
+  let steamDetails = null;
+  let sharpSide = null; // 'home' | 'away' | null
+
+  if (homeDropPct >= 4.5 && homeDropPct >= awayDropPct) {
+    isSteamMove = true;
+    steamTeam = homeName;
+    steamDropPct = homeDropPct;
+    sharpSide = 'home';
+    steamDetails = `Sharp Money (${provider}): La cuota de ${homeName} cayó de ${homeOpenDec} a ${homeCloseDec} (-${homeDropPct}%).`;
+  } else if (awayDropPct >= 4.5) {
+    isSteamMove = true;
+    steamTeam = awayName;
+    steamDropPct = awayDropPct;
+    sharpSide = 'away';
+    steamDetails = `Sharp Money (${provider}): La cuota de ${awayName} cayó de ${awayOpenDec} a ${awayCloseDec} (-${awayDropPct}%).`;
+  } else if (spreadDeltaHome <= -1.5) {
+    sharpSide = 'home';
+    steamDetails = `Sharp Money en Spread (${provider}): Línea movida ${Math.abs(spreadDeltaHome)} pts a favor de ${homeName} (${spreadOpenFmt} -> ${spreadCloseFmt}).`;
+  } else if (spreadDeltaHome >= 1.5) {
+    sharpSide = 'away';
+    steamDetails = `Sharp Money en Spread (${provider}): Línea movida ${spreadDeltaHome} pts a favor de ${awayName} (Local ${spreadOpenFmt} -> ${spreadCloseFmt}).`;
+  }
+
+  return {
+    provider,
+    hasRealML,
+    openHome: homeOpenDec,
+    openAway: awayOpenDec,
+    homeOdds: homeCloseDec,
+    awayOdds: awayCloseDec,
+    drawOdds: drawCloseDec,
+    homeDropPct,
+    awayDropPct,
+    spreadHomeOpen: spreadHomeOpen !== null && !isNaN(spreadHomeOpen) ? spreadHomeOpen : null,
+    spreadHomeClose: spreadHomeClose !== null && !isNaN(spreadHomeClose) ? spreadHomeClose : null,
+    spreadAwayClose: spreadAwayClose !== null && !isNaN(spreadAwayClose) ? spreadAwayClose : null,
+    spreadDeltaHome,
+    spreadOpenFmt,
+    spreadCloseFmt,
+    homeSpreadOdds: rawHomeSpreadOdds ? americanToDecimal(rawHomeSpreadOdds) : null,
+    awaySpreadOdds: rawAwaySpreadOdds ? americanToDecimal(rawAwaySpreadOdds) : null,
+    totalOpen: totalOpen !== null && !isNaN(totalOpen) ? totalOpen : null,
+    totalClose: totalClose !== null && !isNaN(totalClose) ? totalClose : null,
+    totalDelta,
+    overOdds: rawOverOdds ? americanToDecimal(rawOverOdds) : null,
+    underOdds: rawUnderOdds ? americanToDecimal(rawUnderOdds) : null,
+    isSteamMove,
+    steamTeam,
+    steamDropPct,
+    steamDetails,
+    sharpSide
+  };
+}
+
 // ================= CACHÉ PERSISTENTE (3 HORAS) Y POOL DE LLAVES =================
 const ODDS_CACHE_TTL_MS = 3 * 60 * 60 * 1000; // 3 Horas exactas
 const BUILTIN_ODDS_API_KEYS = [
@@ -581,13 +704,25 @@ export async function fetchLiveMlbStandings() {
  * Obtiene partidos reales de la MLB usando la API oficial de las Grandes Ligas (statsapi.mlb.com)
  */
 async function fetchRealMlbSchedule(dateRange) {
-  const { mlbStart, mlbEnd } = getDateRanges(dateRange);
+  const { mlbStart, mlbEnd, espnDatesList } = getDateRanges(dateRange);
   const url = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=${mlbStart}&endDate=${mlbEnd}&hydrate=probablePitcher,linescore,team,decisions`;
   
-  const [res, mlbStandings] = await Promise.all([
+  const espnScoreboardPromises = (espnDatesList || []).map(dStr =>
+    fetch(`https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=${dStr}`)
+      .then(r => (r.ok ? r.json() : { events: [] }))
+      .catch(() => ({ events: [] }))
+  );
+
+  const [res, mlbStandings, ...espnScoreboards] = await Promise.all([
     fetch(url),
-    fetchLiveMlbStandings()
+    fetchLiveMlbStandings(),
+    ...espnScoreboardPromises
   ]);
+
+  const espnMlbEvents = [];
+  espnScoreboards.forEach(sb => {
+    if (Array.isArray(sb?.events)) espnMlbEvents.push(...sb.events);
+  });
 
   if (!res.ok) throw new Error("No se pudo conectar a la MLB Stats API");
   const data = await res.json();
@@ -648,6 +783,16 @@ async function fetchRealMlbSchedule(dateRange) {
           f5AwayScore = innings.slice(0, 5).reduce((sum, inn) => sum + (inn.away?.runs || 0), 0);
         }
 
+        // Cruzar contra el Scoreboard de ESPN/DraftKings para tener cuotas reales de Apertura vs Cierre y Runline gratis
+        const matchedEspnEv = espnMlbEvents.find(ev => {
+          const comp = ev.competitions?.[0];
+          const eHome = comp?.competitors?.find(c => c.homeAway === 'home')?.team?.displayName;
+          const eAway = comp?.competitors?.find(c => c.homeAway === 'away')?.team?.displayName;
+          return eHome && eAway && isTeamMatch(eHome, homeTeam.team.name) && isTeamMatch(eAway, awayTeam.team.name);
+        });
+        const espnOddsObj = matchedEspnEv?.competitions?.[0]?.odds?.find(Boolean);
+        const espnSharp = extractEspnSharpMarket(espnOddsObj, homeTeam.team.name, awayTeam.team.name);
+
         return {
           id: `mlb-${g.gamePk}`,
           sport: 'mlb',
@@ -701,6 +846,23 @@ async function fetchRealMlbSchedule(dateRange) {
             const expHome = 1 / (1 + Math.pow(10, (awayElo - (homeElo + 25)) / 400));
             const fairH = (1 / Math.min(0.85, Math.max(0.20, expHome))).toFixed(2);
             const fairA = (1 / Math.min(0.85, Math.max(0.20, 1 - expHome))).toFixed(2);
+
+            if (espnSharp && espnSharp.hasRealML) {
+              return {
+                ...espnSharp,
+                open: espnSharp.openHome || espnSharp.homeOdds || fairH,
+                current: espnSharp.homeOdds || fairH,
+                homeOdds: espnSharp.homeOdds || fairH,
+                awayOdds: espnSharp.awayOdds || fairA,
+                homeSpreadPoint: espnSharp.spreadHomeClose ?? 1.5,
+                awaySpreadPoint: espnSharp.spreadAwayClose ?? 1.5,
+                homeSpreadOdds: espnSharp.homeSpreadOdds || "1.68",
+                awaySpreadOdds: espnSharp.awaySpreadOdds || "1.68",
+                bookmaker: espnSharp.provider || "DraftKings",
+                hasRealOdds: true
+              };
+            }
+
             return {
               open: fairH,
               current: fairH,
@@ -733,13 +895,15 @@ async function fetchRealMlbSchedule(dateRange) {
           const hOutcome = h2h.outcomes.find(o => o.name === match.home_team);
           const aOutcome = h2h.outcomes.find(o => o.name === match.away_team);
           if (hOutcome && aOutcome) {
+            const prevOpenHome = game.market.openHome;
+            const prevOpenAway = game.market.openAway;
             game.market.homeOdds = hOutcome.price.toString();
             game.market.awayOdds = aOutcome.price.toString();
             game.market.current = game.market.homeOdds;
             game.market.bookmaker = bookie.title;
             game.market.hasRealOdds = true;
 
-            // Detector 1: Steam Moves / Smart Money en MLB
+            // Detector 1: Steam Moves / Smart Money en MLB (conservando la Apertura oficial de Vegas si existía)
             const steamData = trackAndDetectSteamMoves(
               `${normalizeTeamName(game.home.name)}_${normalizeTeamName(game.away.name)}`,
               game.home.name,
@@ -747,12 +911,14 @@ async function fetchRealMlbSchedule(dateRange) {
               game.market.homeOdds,
               game.market.awayOdds
             );
-            game.market.isSteamMove = steamData.isSteamMove;
-            game.market.steamTeam = steamData.steamTeam;
-            game.market.steamDropPct = steamData.steamDropPct;
-            game.market.open = steamData.open;
-            game.market.current = steamData.current;
-            if (steamData.details) game.market.steamDetails = steamData.details;
+            if (!game.market.isSteamMove && steamData.isSteamMove) {
+              game.market.isSteamMove = steamData.isSteamMove;
+              game.market.steamTeam = steamData.steamTeam;
+              game.market.steamDropPct = steamData.steamDropPct;
+              game.market.open = prevOpenHome || steamData.open;
+              game.market.current = steamData.current;
+              if (steamData.details) game.market.steamDetails = steamData.details;
+            }
           }
         }
         if (spreads && spreads.outcomes) {
@@ -1071,14 +1237,15 @@ async function fetchRealSoccerSchedule(dateRange) {
           const fairHomeDec = (1 / estHomeProb).toFixed(2);
           const fairAwayDec = (1 / estAwayProb).toFixed(2);
 
+          const espnSharp = extractEspnSharpMarket(odds, home.team?.displayName || "Local", away.team?.displayName || "Visitante");
           const homeOpenDec = homeMLOpen ? americanToDecimal(homeMLOpen) : fairHomeDec;
           const homeCloseDec = homeMLClose ? americanToDecimal(homeMLClose) : fairHomeDec;
           const awayOpenDec = awayMLOpen ? americanToDecimal(awayMLOpen) : fairAwayDec;
           const awayCloseDec = awayMLClose ? americanToDecimal(awayMLClose) : fairAwayDec;
 
           // Un Steam Move real es cuando la cuota cae al menos 0.15 en decimales EN UN RANGO COMPETITIVO (<= 2.55)
-          let isSteamMove = false;
-          let steamTeam = "";
+          let isSteamMove = espnSharp?.isSteamMove || false;
+          let steamTeam = espnSharp?.steamTeam || "";
           let steamOdds = homeCloseDec;
           if (homeMLOpen && homeMLClose && parseFloat(homeCloseDec) <= 2.55) {
             const drop = parseFloat(homeOpenDec) - parseFloat(homeCloseDec);
@@ -1098,15 +1265,18 @@ async function fetchRealSoccerSchedule(dateRange) {
           }
 
           return {
+            ...(espnSharp || {}),
             open: homeOpenDec,
             current: isSteamMove ? steamOdds : homeCloseDec,
+            openHome: homeOpenDec,
+            openAway: awayOpenDec,
             homeOdds: homeCloseDec,
             awayOdds: awayCloseDec,
             hasRealOdds: hasEspnRealOdds,
             isSteamMove,
             steamTeam,
             details: odds?.details || `O/U ${overUnderLine}`,
-            provider: hasEspnRealOdds ? (odds?.provider?.displayName || "DraftKings") : "Modelo Cuantitativo (Sin Línea Vegas)"
+            provider: hasEspnRealOdds ? (odds?.provider?.displayName || odds?.provider?.name || "DraftKings") : "Modelo Cuantitativo (Sin Línea Vegas)"
           };
         })(),
         lineupStatus: getMatchLineupStatus(ev.date, 'futbol')
@@ -1483,13 +1653,16 @@ async function fetchRealNflSchedule(dateRange) {
         openingHuntAlert
       },
       market: {
+        ...(g.market || {}),
         vegasSpread: g.vegas.spread,
         vegasOverUnder: g.vegas.overUnder,
-        open: "1.90",
-        current: "1.90",
-        isSteamMove: false,
+        open: g.market?.openHome || g.market?.open || "1.90",
+        current: g.market?.homeOdds || g.market?.current || "1.90",
+        isSteamMove: g.market?.isSteamMove || false,
+        steamTeam: g.market?.steamTeam || null,
+        steamDetails: g.market?.steamDetails || null,
         details: g.vegas.details,
-        provider: "DraftKings"
+        provider: g.market?.provider || "DraftKings"
       }
     };
   });
@@ -1606,7 +1779,8 @@ export async function fetchNflWeekSchedule(weekNumber = null) {
       fetchStadiumWeather(homeName)
     ]);
 
-    const odds = comp.odds?.[0];
+    const odds = comp.odds?.find(Boolean);
+    const espnSharp = extractEspnSharpMarket(odds, homeName, awayName);
     let rawSpread = odds?.spread !== undefined ? parseFloat(odds.spread) : -3;
     const favoredAbbr = odds?.details?.split(' ')?.[0] || homeAbbr;
     // Asegurar convención estándar: spread < 0 significa Local Favorito; spread > 0 significa Local Underdog (Visitante Favorito)
@@ -1663,6 +1837,16 @@ export async function fetchNflWeekSchedule(weekNumber = null) {
         overUnder,
         details: odds?.details || `${spread > 0 ? '+' : ''}${spread}`,
         favoredTeam: odds?.details?.split(' ')?.[0] || homeAbbr
+      },
+      market: {
+        ...(espnSharp || {}),
+        vegasSpread: spread,
+        vegasOverUnder: overUnder,
+        open: espnSharp?.openHome || "1.90",
+        current: espnSharp?.homeOdds || "1.90",
+        hasRealOdds: Boolean(espnSharp?.hasRealML || odds?.spread !== undefined),
+        details: odds?.details || `${spread > 0 ? '+' : ''}${spread}`,
+        provider: espnSharp?.provider || "DraftKings"
       }
     };
   });

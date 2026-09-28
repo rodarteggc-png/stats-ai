@@ -27,6 +27,7 @@ export function evaluateEnsembleConsensus({
   probs = {},
   mcStats = null,
   pickType = '1X2',
+  pick = '',
   edgeVal = 0,
   prob = null,
   odds = null
@@ -197,26 +198,114 @@ export function evaluateEnsembleConsensus({
   });
 
   // =========================================================================
-  // VOTO 3: FILTRO DE MERCADO Y MEMORIA HISTÓRICA DE FALLOS
+  // VOTO 3: FILTRO DE MERCADO, SHARP MONEY (OPEN VS CLOSE) Y MEMORIA HISTÓRICA
   // =========================================================================
   let vote3Passed = true;
   let vote3Reason = 'Validado por mercado sin trampas institucionales activas.';
 
-  // 1. Detección de Smart Money / Steam Move con Candado Anti-Longshot (<= 2.55)
-  if (pTypeUpper.includes('SMART MONEY') || match.market?.isSteamMove) {
-    if (numericOdds > 2.55) {
-      vote3Passed = false;
-      vote3Reason = `⛔ Falso Smart Money descartado: Cuota de longshot (${numericOdds.toFixed(2)} > 2.55) fuera de rango institucional.`;
+  const mkt = match.market || {};
+  const pickStr = (pick || '').toString().toLowerCase();
+  const hNameLower = (match.home?.name || '').toLowerCase();
+  const aNameLower = (match.away?.name || '').toLowerCase();
+
+  const isOverPick = pTypeUpper.includes('OVER') || (pickStr.includes('over') && !pickStr.includes('under'));
+  const isUnderPick = pTypeUpper.includes('UNDER') || pickStr.includes('under');
+  const isBttsPick = pTypeUpper.includes('AMBOS ANOTAN') || pTypeUpper.includes('BTTS');
+  const isTotalsMarket = isOverPick || isUnderPick || isBttsPick;
+
+  let isHomeSidePick = false;
+  let isAwaySidePick = false;
+  if (!isTotalsMarket) {
+    if (pickStr && hNameLower && pickStr.includes(hNameLower)) {
+      isHomeSidePick = true;
+    } else if (pickStr && aNameLower && pickStr.includes(aNameLower)) {
+      isAwaySidePick = true;
+    } else if (pTypeUpper.includes('LOCAL') || pickStr.includes('(1x)')) {
+      isHomeSidePick = true;
+    } else if (pTypeUpper.includes('VISITANTE') || pickStr.includes('(x2)')) {
+      isAwaySidePick = true;
+    } else if (sLower.includes('nfl')) {
+      const expLead = parseFloat(probs.expectedHomeLead || 0);
+      const vSpread = match.vegas?.spread !== undefined ? parseFloat(match.vegas.spread) : -3.5;
+      isHomeSidePick = (expLead + vSpread) >= 0;
+      isAwaySidePick = !isHomeSidePick;
+    } else if (sLower.includes('mlb')) {
+      const f5H = parseFloat(probs.f5?.homeMl || 50);
+      const f5A = parseFloat(probs.f5?.awayMl || 50);
+      isHomeSidePick = f5H >= f5A;
+      isAwaySidePick = !isHomeSidePick;
     } else {
-      const steamTeam = match.market?.steamTeam || '';
-      const isPickAligned = match.home?.name?.includes(steamTeam) || match.away?.name?.includes(steamTeam);
-      if (isPickAligned) {
-        vote3Reason = `Confirmado por Smart Money: Caída institucional de línea (-${match.market.steamDropPct || '5'}%) en cuota competitiva (${numericOdds.toFixed(2)}).`;
+      const hW = parseFloat(probs.homeWin || 50);
+      const aW = parseFloat(probs.awayWin || 50);
+      isHomeSidePick = hW >= aW;
+      isAwaySidePick = !isHomeSidePick;
+    }
+  }
+
+  // 1. Candado Anti-Longshot en alertas de Smart Money (<= 2.55)
+  if ((pTypeUpper.includes('SMART MONEY') || mkt.isSteamMove) && numericOdds > 2.55) {
+    vote3Passed = false;
+    vote3Reason = `⛔ Falso Smart Money descartado: Cuota de longshot (${numericOdds.toFixed(2)} > 2.55) fuera de rango institucional.`;
+  }
+
+  // 2. Detector de Flujo Institucional (Apertura vs. Cierre de DraftKings / Vegas)
+  if (vote3Passed) {
+    const totalDelta = parseFloat(mkt.totalDelta) || 0;
+    const spreadDeltaHome = parseFloat(mkt.spreadDeltaHome) || 0;
+    const homeDropPct = parseFloat(mkt.homeDropPct) || 0;
+    const awayDropPct = parseFloat(mkt.awayDropPct) || 0;
+    const bookName = mkt.provider || mkt.bookmaker || 'DraftKings';
+
+    if (isTotalsMarket && totalDelta !== 0) {
+      const vetoThreshold = sLower.includes('nfl') ? 2.0 : 1.0;
+      const confirmThreshold = sLower.includes('nfl') ? 1.0 : 0.5;
+      if ((isOverPick || isBttsPick) && totalDelta <= -vetoThreshold) {
+        vote3Passed = false;
+        vote3Reason = `⛔ Veto Sharp Money (${bookName}): Buscamos OVER/Goles, pero el dinero profesional desplomó la línea de ${mkt.totalOpen} a ${mkt.totalClose} (${totalDelta} pts).`;
+      } else if (isUnderPick && totalDelta >= vetoThreshold) {
+        vote3Passed = false;
+        vote3Reason = `⛔ Veto Sharp Money (${bookName}): Buscamos UNDER, pero el dinero profesional infló la línea de ${mkt.totalOpen} a ${mkt.totalClose} (+${totalDelta} pts).`;
+      } else if ((isOverPick || isBttsPick) && totalDelta >= confirmThreshold) {
+        vote3Reason = `🔥 Confirmado por Sharp Money (${bookName}): Dinero profesional empujando el Total al alza (Apertura ${mkt.totalOpen} -> Actual ${mkt.totalClose}).`;
+      } else if (isUnderPick && totalDelta <= -confirmThreshold) {
+        vote3Reason = `🔥 Confirmado por Sharp Money (${bookName}): Dinero profesional tumbando el Total a la baja (Apertura ${mkt.totalOpen} -> Actual ${mkt.totalClose}).`;
+      }
+    } else if (!isTotalsMarket && sLower.includes('nfl') && spreadDeltaHome !== 0) {
+      // En NFL: spreadDeltaHome > 0 significa que el Spread del Local empeoró (ej. de -1.5 a +3.5 => dinero fuerte en Visitante)
+      if (isHomeSidePick && spreadDeltaHome >= 2.0) {
+        vote3Passed = false;
+        vote3Reason = `⛔ Veto Sharp Money (Reverse Line): Dinero profesional movió el Spread ${spreadDeltaHome.toFixed(1)} pts en contra de ${match.home?.name} (Apertura ${mkt.spreadOpenFmt} -> Actual ${mkt.spreadCloseFmt}).`;
+      } else if (isAwaySidePick && spreadDeltaHome <= -2.0) {
+        vote3Passed = false;
+        vote3Reason = `⛔ Veto Sharp Money (Reverse Line): Dinero profesional movió el Spread ${Math.abs(spreadDeltaHome).toFixed(1)} pts en contra de ${match.away?.name} (Local ${mkt.spreadOpenFmt} -> ${mkt.spreadCloseFmt}).`;
+      } else if (isHomeSidePick && spreadDeltaHome <= -1.0) {
+        vote3Reason = `🔥 Confirmado por Sharp Money (${bookName}): Línea de Spread movida ${Math.abs(spreadDeltaHome).toFixed(1)} pts a favor de ${match.home?.name} (${mkt.spreadOpenFmt} -> ${mkt.spreadCloseFmt}).`;
+      } else if (isAwaySidePick && spreadDeltaHome >= 1.0) {
+        vote3Reason = `🔥 Confirmado por Sharp Money (${bookName}): Línea de Spread movida ${spreadDeltaHome.toFixed(1)} pts a favor de ${match.away?.name} (Local ${mkt.spreadOpenFmt} -> ${mkt.spreadCloseFmt}).`;
+      }
+    } else if (!isTotalsMarket) {
+      // En MLB y Fútbol: evaluar caída de cuota de Apertura vs Actual en Moneyline
+      if (isHomeSidePick && awayDropPct >= 8.0 && (parseFloat(mkt.awayOdds) || 3.0) <= 2.35) {
+        vote3Passed = false;
+        vote3Reason = `⛔ Veto Sharp Money (Reverse Line): Fuerte entrada de dinero profesional en el rival ${match.away?.name} (cuota cayó -${awayDropPct}% de ${mkt.openAway} a ${mkt.awayOdds}).`;
+      } else if (isAwaySidePick && homeDropPct >= 8.0 && (parseFloat(mkt.homeOdds) || 3.0) <= 2.35) {
+        vote3Passed = false;
+        vote3Reason = `⛔ Veto Sharp Money (Reverse Line): Fuerte entrada de dinero profesional en el local ${match.home?.name} (cuota cayó -${homeDropPct}% de ${mkt.openHome} a ${mkt.homeOdds}).`;
+      } else if (isHomeSidePick && homeDropPct >= 3.5) {
+        vote3Reason = `🔥 Confirmado por Sharp Money (${bookName}): Cuota de ${match.home?.name} cayó -${homeDropPct}% desde apertura (${mkt.openHome} -> ${mkt.homeOdds}).`;
+      } else if (isAwaySidePick && awayDropPct >= 3.5) {
+        vote3Reason = `🔥 Confirmado por Sharp Money (${bookName}): Cuota de ${match.away?.name} cayó -${awayDropPct}% desde apertura (${mkt.openAway} -> ${mkt.awayOdds}).`;
+      } else if (mkt.isSteamMove) {
+        const steamTeam = mkt.steamTeam || '';
+        const isPickAligned = (isHomeSidePick && match.home?.name?.includes(steamTeam)) || (isAwaySidePick && match.away?.name?.includes(steamTeam));
+        if (isPickAligned) {
+          vote3Reason = `🔥 Confirmado por Smart Money: Caída institucional de línea (-${mkt.steamDropPct || '5'}%) en cuota competitiva (${numericOdds.toFixed(2)}).`;
+        }
       }
     }
   }
 
-  // 2. Consulta de Memoria de Lecciones Aprendidas (history.js + Auditoría Telegram)
+  // 3. Consulta de Memoria de Lecciones Aprendidas (history.js + Auditoría Telegram)
   try {
     const lessons = getAllLessons();
     const hName = (match.home?.name || '').toLowerCase();

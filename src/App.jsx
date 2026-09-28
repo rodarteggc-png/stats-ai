@@ -360,6 +360,7 @@ export default function App() {
               probs: opp.probs,
               mcStats: opp.mcStats,
               pickType: opp.type,
+              pick: opp.pick,
               edgeVal: opp.edgeVal,
               prob: opp.prob,
               odds: opp.odds
@@ -1250,6 +1251,7 @@ export default function App() {
               probs: opp.probs || {},
               mcStats: opp.mcStats,
               pickType: opp.type,
+              pick: opp.pick,
               edgeVal: opp.edgeVal !== undefined ? opp.edgeVal : 4.0,
               prob: opp.prob,
               odds: opp.odds

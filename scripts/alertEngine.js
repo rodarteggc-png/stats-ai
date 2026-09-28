@@ -884,6 +884,7 @@ export function buildOpportunitiesAndTopSlate({
       probs: opp.probs || {},
       mcStats: opp.mcStats,
       pickType: opp.type,
+      pick: opp.pick,
       edgeVal: opp.edgeVal,
       prob: opp.prob,
       odds: opp.odds
