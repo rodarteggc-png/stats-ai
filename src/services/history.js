@@ -927,141 +927,202 @@ export async function autoVerifyResultsWithAPIs(sportFilter = null) {
     return formatEspn(d);
   });
 
+  // Helper de concurrencia para evitar saturar el pool de conexiones del navegador
+  const asyncPool = async (limit, items, fn) => {
+    const executing = new Set();
+    const results = [];
+    for (const item of items) {
+      const p = Promise.resolve().then(() => fn(item));
+      results.push(p);
+      executing.add(p);
+      const clean = () => executing.delete(p);
+      p.then(clean).catch(clean);
+      if (executing.size >= limit) {
+        await Promise.race(executing);
+      }
+    }
+    return Promise.all(results);
+  };
+
+  // Extraer qué deportes y fechas realmente tenemos pendientes de resolver
+  const pendingSports = new Set(pendingItems.map(i => i.sport || 'futbol'));
+  const targetDateStrs = new Set();
+  pendingItems.forEach(i => {
+    if (i.match?.gameDate) {
+      try {
+        const d = new Date(i.match.gameDate);
+        if (!isNaN(d.getTime())) targetDateStrs.add(formatEspn(d));
+      } catch (e) {}
+    }
+  });
+  // Añadir hoy y ayer como ventana de resolución natural
+  targetDateStrs.add(formatEspn(new Date()));
+  targetDateStrs.add(formatEspn(new Date(Date.now() - 24 * 60 * 60 * 1000)));
+  const datesToQuery = Array.from(targetDateStrs).slice(0, 4);
+
   const completedGames = [];
 
-  // 1. Descargar partidos completados de MLB con Linescore para F5
-  const mlbClosingOddsMap = {};
-  for (const dStr of recentEspnDates) {
-    try {
-      const resEspnMlb = await fetch(`https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=${dStr}`);
-      if (resEspnMlb.ok) {
-        const dataEspnMlb = await resEspnMlb.json();
-        dataEspnMlb.events?.forEach(ev => {
-          const comp = ev.competitions?.[0];
-          const home = comp?.competitors?.find(c => c.homeAway === 'home');
-          const away = comp?.competitors?.find(c => c.homeAway === 'away');
-          if (home && away && comp.odds?.[0]) {
-            const hName = home.team?.displayName || '';
-            const aName = away.team?.displayName || '';
-            mlbClosingOddsMap[`${normalizeTeamName(hName)}_${normalizeTeamName(aName)}`] = extractOddsFromEspn(comp.odds[0]);
-          }
-        });
-      }
-    } catch (e) {}
-  }
-
-  try {
-    const resMlb = await fetch(`https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=${startDateMlb}&endDate=${endDateMlb}&hydrate=linescore`);
-    if (resMlb.ok) {
-      const dataMlb = await resMlb.json();
-      dataMlb.dates?.forEach(d => {
-        d.games?.forEach(g => {
-          if (g.status?.abstractGameState === 'Final' || g.status?.detailedState === 'Final') {
-            const innings = g.linescore?.innings || [];
-            let f5Home = null;
-            let f5Away = null;
-            if (innings.length >= 5) {
-              f5Home = innings.slice(0, 5).reduce((sum, inn) => sum + (inn.home?.runs || 0), 0);
-              f5Away = innings.slice(0, 5).reduce((sum, inn) => sum + (inn.away?.runs || 0), 0);
+  // 1. Descargar resultados de MLB SOLO si hay apuestas pendientes de MLB
+  if (pendingSports.has('mlb')) {
+    const mlbClosingOddsMap = {};
+    for (const dStr of datesToQuery) {
+      try {
+        const resEspnMlb = await fetch(`https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=${dStr}`);
+        if (resEspnMlb.ok) {
+          const dataEspnMlb = await resEspnMlb.json();
+          dataEspnMlb.events?.forEach(ev => {
+            const comp = ev.competitions?.[0];
+            const home = comp?.competitors?.find(c => c.homeAway === 'home');
+            const away = comp?.competitors?.find(c => c.homeAway === 'away');
+            if (home && away && comp.odds?.[0]) {
+              const hName = home.team?.displayName || '';
+              const aName = away.team?.displayName || '';
+              mlbClosingOddsMap[`${normalizeTeamName(hName)}_${normalizeTeamName(aName)}`] = extractOddsFromEspn(comp.odds[0]);
             }
-
-            const hTeam = g.teams?.home?.team?.name || '';
-            const aTeam = g.teams?.away?.team?.name || '';
-            const mlbKey = `${normalizeTeamName(hTeam)}_${normalizeTeamName(aTeam)}`;
-            const mlbOdds = mlbClosingOddsMap[mlbKey] || {};
-
-            completedGames.push({
-              sport: 'mlb',
-              home: hTeam,
-              homeScore: parseInt(g.teams?.home?.score || 0, 10),
-              away: aTeam,
-              awayScore: parseInt(g.teams?.away?.score || 0, 10),
-              f5HomeScore: f5Home,
-              f5AwayScore: f5Away,
-              ...mlbOdds
-            });
-          }
-        });
-      });
-    }
-  } catch (e) {
-    console.error("Error consultando resultados MLB:", e);
-  }
-
-  // 2. Descargar partidos completados de Fútbol (ESPN)
-  const leagues = [
-    'uefa.champions', 'uefa.europa', 'uefa.europa.conf',
-    'uefa.nations', 'concacaf.nations.league',
-    'esp.1', 'eng.1', 'ita.1', 'ger.1', 'fra.1', 'mex.1',
-    'mex.w.1', 'usa.nwsl', 'esp.w.1', 'eng.w.1', 'uefa.wchampions',
-    'conmebol.libertadores', 'conmebol.sudamericana',
-    'usa.1', 'ksa.1', 'por.1', 'ned.1', 'sco.1', 'arg.1', 'bra.1'
-  ];
-
-  await Promise.allSettled(
-    leagues.map(async (l) => {
-      for (const dStr of recentEspnDates) {
-        try {
-          const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${l}/scoreboard?dates=${dStr}`);
-          if (res.ok) {
-            const data = await res.json();
-            data.events?.forEach(ev => {
-              const comp = ev.competitions?.[0];
-              if (comp?.status?.type?.completed) {
-                const home = comp.competitors?.find(c => c.homeAway === 'home');
-                const away = comp.competitors?.find(c => c.homeAway === 'away');
-                const oddsObj = comp.odds?.[0];
-                const odds = extractOddsFromEspn(oddsObj);
-
-                if (home && away) {
-                  completedGames.push({
-                    sport: 'futbol',
-                    home: home.team?.displayName || '',
-                    homeScore: parseInt(home.score || 0, 10),
-                    away: away.team?.displayName || '',
-                    awayScore: parseInt(away.score || 0, 10),
-                    ...odds
-                  });
-                }
-              }
-            });
-          }
-        } catch (e) {
-          // Ignorar fallo de red puntual
+          });
         }
-      }
-    })
-  );
+      } catch (e) {}
+    }
 
-  // 3. Descargar partidos completados de NFL (ESPN)
-  for (const dStr of recentEspnDates) {
     try {
-      const resNfl = await fetch(`https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates=${dStr}`);
-      if (resNfl.ok) {
-        const dataNfl = await resNfl.json();
-        dataNfl.events?.forEach(ev => {
-          const comp = ev.competitions?.[0];
-          if (comp?.status?.type?.completed) {
-            const home = comp.competitors?.find(c => c.homeAway === 'home');
-            const away = comp.competitors?.find(c => c.homeAway === 'away');
-            const oddsObj = comp.odds?.[0];
-            const odds = extractOddsFromEspn(oddsObj);
+      const resMlb = await fetch(`https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=${startDateMlb}&endDate=${endDateMlb}&hydrate=linescore`);
+      if (resMlb.ok) {
+        const dataMlb = await resMlb.json();
+        dataMlb.dates?.forEach(d => {
+          d.games?.forEach(g => {
+            if (g.status?.abstractGameState === 'Final' || g.status?.detailedState === 'Final') {
+              const innings = g.linescore?.innings || [];
+              let f5Home = null;
+              let f5Away = null;
+              if (innings.length >= 5) {
+                f5Home = innings.slice(0, 5).reduce((sum, inn) => sum + (inn.home?.runs || 0), 0);
+                f5Away = innings.slice(0, 5).reduce((sum, inn) => sum + (inn.away?.runs || 0), 0);
+              }
 
-            if (home && away) {
+              const hTeam = g.teams?.home?.team?.name || '';
+              const aTeam = g.teams?.away?.team?.name || '';
+              const mlbKey = `${normalizeTeamName(hTeam)}_${normalizeTeamName(aTeam)}`;
+              const mlbOdds = mlbClosingOddsMap[mlbKey] || {};
+
               completedGames.push({
-                sport: 'nfl',
-                home: home.team?.displayName || '',
-                homeScore: parseInt(home.score || 0, 10),
-                away: away.team?.displayName || '',
-                awayScore: parseInt(away.score || 0, 10),
-                ...odds
+                sport: 'mlb',
+                home: hTeam,
+                homeScore: parseInt(g.teams?.home?.score || 0, 10),
+                away: aTeam,
+                awayScore: parseInt(g.teams?.away?.score || 0, 10),
+                f5HomeScore: f5Home,
+                f5AwayScore: f5Away,
+                ...mlbOdds
               });
             }
-          }
+          });
         });
       }
     } catch (e) {
-      console.error("Error consultando resultados NFL:", e);
+      console.error("Error consultando resultados MLB:", e);
+    }
+  }
+
+  // 2. Descargar resultados de Fútbol SOLO si hay apuestas pendientes de Fútbol
+  if (pendingSports.has('futbol')) {
+    // Detectar qué ligas específicas están en las apuestas pendientes
+    const allSoccerLeagues = [
+      'uefa.champions', 'uefa.europa', 'uefa.europa.conf',
+      'esp.1', 'eng.1', 'ita.1', 'ger.1', 'fra.1', 'mex.1',
+      'mex.w.1', 'usa.nwsl', 'conmebol.libertadores',
+      'usa.1', 'ksa.1', 'por.1', 'ned.1', 'arg.1', 'bra.1'
+    ];
+
+    const targetLeagues = new Set();
+    pendingItems.forEach(i => {
+      if ((i.sport || 'futbol') === 'futbol') {
+        const itemLeague = (i.match?.league || i.match?.tournament || '').toLowerCase();
+        if (itemLeague.includes('champion')) targetLeagues.add('uefa.champions');
+        else if (itemLeague.includes('europa')) targetLeagues.add('uefa.europa');
+        else if (itemLeague.includes('premier') || itemLeague.includes('inglaterra')) targetLeagues.add('eng.1');
+        else if (itemLeague.includes('laliga') || itemLeague.includes('españa') || itemLeague.includes('espana')) targetLeagues.add('esp.1');
+        else if (itemLeague.includes('serie a') || itemLeague.includes('italia')) targetLeagues.add('ita.1');
+        else if (itemLeague.includes('bundesliga') || itemLeague.includes('alemania')) targetLeagues.add('ger.1');
+        else if (itemLeague.includes('ligue 1') || itemLeague.includes('francia')) targetLeagues.add('fra.1');
+        else if (itemLeague.includes('liga mx') || itemLeague.includes('mexico') || itemLeague.includes('méxico')) targetLeagues.add('mex.1');
+        else if (itemLeague.includes('mls')) targetLeagues.add('usa.1');
+      }
+    });
+
+    // Si no logramos identificar una liga específica, consultar las ligas top habituales
+    const leaguesToRun = targetLeagues.size > 0 
+      ? Array.from(targetLeagues) 
+      : ['esp.1', 'eng.1', 'mex.1', 'uefa.champions', 'ita.1', 'ger.1'];
+
+    const soccerTasks = [];
+    leaguesToRun.forEach(l => {
+      datesToQuery.forEach(dStr => {
+        soccerTasks.push({ league: l, dateStr: dStr });
+      });
+    });
+
+    // Consultar con concurrencia máxima de 4 para no saturar el navegador
+    await asyncPool(4, soccerTasks, async ({ league, dateStr }) => {
+      try {
+        const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/scoreboard?dates=${dateStr}`);
+        if (res.ok) {
+          const data = await res.json();
+          data.events?.forEach(ev => {
+            const comp = ev.competitions?.[0];
+            if (comp?.status?.type?.completed) {
+              const home = comp.competitors?.find(c => c.homeAway === 'home');
+              const away = comp.competitors?.find(c => c.homeAway === 'away');
+              const oddsObj = comp.odds?.[0];
+              const odds = extractOddsFromEspn(oddsObj);
+
+              if (home && away) {
+                completedGames.push({
+                  sport: 'futbol',
+                  home: home.team?.displayName || '',
+                  homeScore: parseInt(home.score || 0, 10),
+                  away: away.team?.displayName || '',
+                  awayScore: parseInt(away.score || 0, 10),
+                  ...odds
+                });
+              }
+            }
+          });
+        }
+      } catch (e) {}
+    });
+  }
+
+  // 3. Descargar resultados de NFL SOLO si hay apuestas pendientes de NFL
+  if (pendingSports.has('nfl')) {
+    for (const dStr of datesToQuery) {
+      try {
+        const resNfl = await fetch(`https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates=${dStr}`);
+        if (resNfl.ok) {
+          const dataNfl = await resNfl.json();
+          dataNfl.events?.forEach(ev => {
+            const comp = ev.competitions?.[0];
+            if (comp?.status?.type?.completed) {
+              const home = comp.competitors?.find(c => c.homeAway === 'home');
+              const away = comp.competitors?.find(c => c.homeAway === 'away');
+              const oddsObj = comp.odds?.[0];
+              const odds = extractOddsFromEspn(oddsObj);
+
+              if (home && away) {
+                completedGames.push({
+                  sport: 'nfl',
+                  home: home.team?.displayName || '',
+                  homeScore: parseInt(home.score || 0, 10),
+                  away: away.team?.displayName || '',
+                  awayScore: parseInt(away.score || 0, 10),
+                  ...odds
+                });
+              }
+            }
+          });
+        }
+      } catch (e) {
+        console.error("Error consultando resultados NFL:", e);
+      }
     }
   }
 

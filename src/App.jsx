@@ -24,6 +24,7 @@ import {
   deleteLesson,
   clearAllHistory
 } from "./services/history";
+import { runBatchMonteCarlo } from "./services/simulationBridge";
 // Obfuscated to bypass GitHub Secret Scanning and Rollup constant evaluation
 const _k = [65,81,46,65,98,56,82,78,54,73,103,87,102,101,116,101,118,120,45,77,121,115,103,97,53,111,100,100,112,84,56,45,78,53,80,111,108,90,99,83,48,80,79,99,103,100,90,78,110,112,104,121,103];
 const GEMINI_API_KEY = _k.map(c => String.fromCharCode(c + (typeof window !== 'undefined' && window.innerWidth > -1 ? 0 : 1))).join('');
@@ -478,9 +479,38 @@ export default function App() {
         return true;
       });
 
+      // Preparar lote de simulación asíncrona en segundo plano (Web Worker con fallback automático)
+      const mcBatchItems = activeSchedule.map(m => {
+        const mKey = m.id || `${m.home?.name}_${m.away?.name}`;
+        if (activeSport === 'futbol') {
+          return { id: mKey, sport: 'futbol', params: { homeXg: m.home?.xG, awayXg: m.away?.xG, iterations: 10000 } };
+        } else if (activeSport === 'mlb') {
+          return {
+            id: mKey, sport: 'mlb',
+            params: {
+              homeWhip: m.home?.pitcher?.whip,
+              awayWhip: m.away?.pitcher?.whip,
+              homeOps: m.home?.ops,
+              awayOps: m.away?.ops,
+              iterations: 10000,
+              homeElo: m.home?.elo,
+              awayElo: m.away?.elo
+            }
+          };
+        } else if (activeSport === 'nfl') {
+          const spread = m.vegas?.spread !== undefined ? m.vegas.spread : -3.5;
+          const total = m.vegas?.overUnder !== undefined ? m.vegas.overUnder : 44.5;
+          const wind = m.weather?.windMph || 0;
+          return { id: mKey, sport: 'nfl', params: { lead: 0, spread, total, wind, iterations: 10000 } };
+        }
+        return null;
+      }).filter(Boolean);
+
+      const mcResultsMap = await runBatchMonteCarlo(mcBatchItems);
       let opportunities = [];
 
       for (const matchData of activeSchedule) {
+        const mKey = matchData.id || `${matchData.home?.name}_${matchData.away?.name}`;
         const learned = getLearnedAdjustmentsForMatch(matchData.home?.name, matchData.away?.name);
 
         if (activeSport === 'futbol') {
@@ -490,7 +520,7 @@ export default function App() {
             matchData.home.daysRest, matchData.away.daysRest,
             learned.homePenalty, learned.awayPenalty
           );
-          const mc = simulateSoccerMatch(matchData.home?.xG, matchData.away?.xG, 10000);
+          const mc = mcResultsMap[mKey] || simulateSoccerMatch(matchData.home?.xG, matchData.away?.xG, 10000);
           
           const hWin = parseFloat(probs.homeWin);
           const aWin = parseFloat(probs.awayWin);
@@ -805,7 +835,7 @@ export default function App() {
             learned.homePenalty, learned.awayPenalty,
             matchData.home.name
           );
-          const mcMlb = simulateMlbMatch(
+          const mcMlb = mcResultsMap[mKey] || simulateMlbMatch(
             matchData.home.pitcher?.whip, matchData.away.pitcher?.whip,
             matchData.home.ops, matchData.away.ops, 10000,
             matchData.home.elo, matchData.away.elo
@@ -1083,7 +1113,7 @@ export default function App() {
             windMph
           );
           const expectedHomeLead = parseFloat(probs.expectedHomeLead);
-          const mcNfl = simulateNflMatch(expectedHomeLead, vegasSpread, vegasTotal || 44.5, windMph, 10000);
+          const mcNfl = mcResultsMap[mKey] || simulateNflMatch(expectedHomeLead, vegasSpread, vegasTotal || 44.5, windMph, 10000);
           const awaySpread = -vegasSpread;
           const homeSpreadFmt = vegasSpread > 0 ? `+${vegasSpread}` : `${vegasSpread}`;
           const awaySpreadFmt = awaySpread > 0 ? `+${awaySpread}` : `${awaySpread}`;

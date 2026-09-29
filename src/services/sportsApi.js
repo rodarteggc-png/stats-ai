@@ -341,6 +341,15 @@ export function extractEspnSharpMarket(oddsObj, homeName = "Local", awayName = "
     steamDetails = `Sharp Money en Spread (${provider}): Línea movida ${spreadDeltaHome} pts a favor de ${awayName} (Local ${spreadOpenFmt} -> ${spreadCloseFmt}).`;
   }
 
+  // Detección de Reverse Line Movement (RLM):
+  // Asumimos RLM cuando la línea de spread se mueve fuertemente en contra del favorito,
+  // o cuando la cuota moneyline cae drásticamente a favor del underdog (cuota > 2.0).
+  let isReverseLineMovement = false;
+  if (spreadDeltaHome <= -1.5 && spreadHomeOpen > 0) isReverseLineMovement = true; // El visitante era favorito y la línea se movió al local
+  if (spreadDeltaHome >= 1.5 && spreadHomeOpen < 0) isReverseLineMovement = true; // El local era favorito y la línea se movió al visitante
+  if (homeDropPct >= 4.0 && hOpenNum > 2.05) isReverseLineMovement = true; // Underdog local recibe mucho dinero
+  if (awayDropPct >= 4.0 && aOpenNum > 2.05) isReverseLineMovement = true; // Underdog visitante recibe mucho dinero
+
   return {
     provider,
     hasRealML,
@@ -368,7 +377,8 @@ export function extractEspnSharpMarket(oddsObj, homeName = "Local", awayName = "
     steamTeam,
     steamDropPct,
     steamDetails,
-    sharpSide
+    sharpSide,
+    isReverseLineMovement
   };
 }
 
@@ -1157,15 +1167,61 @@ async function fetchRealSoccerSchedule(dateRange) {
       const homeForm = home.form || "WDLWD";
       const awayForm = away.form || "LDWLD";
 
+      // Extraer Estadísticas Avanzadas (Si están disponibles, ej. partidos en vivo o completados)
+      const getStat = (comp, statName) => {
+        const stat = comp.statistics?.find(s => s.name === statName || s.abbreviation === statName);
+        return stat ? parseFloat(stat.displayValue) : null;
+      };
+      const homeTotalShots = getStat(home, 'totalShots') || getStat(home, 'SHOT');
+      const homeSot = getStat(home, 'shotsOnTarget') || getStat(home, 'SOG');
+      const awayTotalShots = getStat(away, 'totalShots') || getStat(away, 'SHOT');
+      const awaySot = getStat(away, 'shotsOnTarget') || getStat(away, 'SOG');
+
+      // Función de Calidad de Disparos (Shot Quality xG)
+      // Un tiro a puerta (SoT) promedia ~0.28 xG, un tiro desviado indica presión pero tiene 0% conversión directa (~0.03 xG)
+      const calculateShotQualityXg = (shots, sot) => {
+        if (shots === null || sot === null) return null;
+        const offTarget = Math.max(0, shots - sot);
+        return Number(((sot * 0.28) + (offTarget * 0.03)).toFixed(2));
+      };
+
+      const advancedHomeXg = calculateShotQualityXg(homeTotalShots, homeSot);
+      const advancedAwayXg = calculateShotQualityXg(awayTotalShots, awaySot);
+
       // Modelo Dixon-Coles Puro cruzando Ataque Local vs Defensa Visitante (con techo prudencial)
+      // Ajuste Cuantitativo de Momentum Reciente (Últimos 5 partidos ponderados: W=3, D=1, L=0)
+      const parseFormMultiplier = (formStr) => {
+        if (!formStr || typeof formStr !== 'string') return 1.0;
+        const cleaned = formStr.toUpperCase().replace(/[^WDL]/g, '').slice(-5);
+        if (cleaned.length === 0) return 1.0;
+        let points = 0;
+        for (const ch of cleaned) {
+          if (ch === 'W') points += 3;
+          else if (ch === 'D') points += 1;
+        }
+        const maxPoints = cleaned.length * 3;
+        const ratio = points / maxPoints; // 0.0 a 1.0
+        return Number((0.92 + (ratio * 0.16)).toFixed(3)); // Multiplicador de 0.92 a 1.08
+      };
+
+      const homeMomentum = parseFormMultiplier(homeForm);
+      const awayMomentum = parseFormMultiplier(awayForm);
+
       const leagueAvgGpg = 1.35;
-      const attackHome = hStats.homeOffenseXg || parseFloat(hStats.xG) || 1.4;
+      const attackHome = (hStats.homeOffenseXg || parseFloat(hStats.xG) || 1.4) * homeMomentum;
       const defenseAway = aStats.awayDefenseXg || parseFloat(aStats.goalsAllowedPerGame) || 1.3;
-      const attackAway = aStats.awayOffenseXg || parseFloat(aStats.xG) || 1.1;
+      const attackAway = (aStats.awayOffenseXg || parseFloat(aStats.xG) || 1.1) * awayMomentum;
       const defenseHome = hStats.homeDefenseXg || parseFloat(hStats.goalsAllowedPerGame) || 1.1;
 
-      const realHomeXg = Number(Math.min(2.75, Math.max(0.35, (attackHome * defenseAway) / leagueAvgGpg)).toFixed(2));
-      const realAwayXg = Number(Math.min(2.45, Math.max(0.25, (attackAway * defenseHome) / leagueAvgGpg)).toFixed(2));
+      let realHomeXg = Number(Math.min(2.75, Math.max(0.35, (attackHome * defenseAway) / leagueAvgGpg)).toFixed(2));
+      let realAwayXg = Number(Math.min(2.45, Math.max(0.25, (attackAway * defenseHome) / leagueAvgGpg)).toFixed(2));
+      
+      // Integrar Calidad de Disparos (Shot Quality) si hay datos reales del partido
+      if (advancedHomeXg !== null && advancedAwayXg !== null) {
+        realHomeXg = Number(((realHomeXg * 0.4) + (advancedHomeXg * 0.6)).toFixed(2));
+        realAwayXg = Number(((realAwayXg * 0.4) + (advancedAwayXg * 0.6)).toFixed(2));
+      }
+      
       const totalRealXg = realHomeXg + realAwayXg || 1;
       
       // xG implícito dictado por la línea de Las Vegas

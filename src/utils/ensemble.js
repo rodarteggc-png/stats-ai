@@ -53,9 +53,17 @@ export function evaluateEnsembleConsensus({
     const isBttsPick = pTypeUpper.includes('AMBOS ANOTAN') || pTypeUpper.includes('BTTS');
     const isProtectedPick = pTypeUpper.includes('DOBLE') || pTypeUpper.includes('PROTEGIDO') || pTypeUpper.includes('1X') || pTypeUpper.includes('X2') || pTypeUpper.includes('HÁNDICAP') || pTypeUpper.includes('HANDICAP');
     const isTotalsPick = pTypeUpper.includes('OVER') || pTypeUpper.includes('UNDER') || pTypeUpper.includes('GOLES') || pTypeUpper.includes('CÓRNERS');
-    const isOutright1X2 = !isBttsPick && !isProtectedPick && !isTotalsPick;
+    const isProp = pTypeUpper.includes('PROP') || pTypeUpper.includes('JUGADOR');
+    const isOutright1X2 = !isBttsPick && !isProtectedPick && !isTotalsPick && !isProp;
 
-    if (isOutright1X2 && numericOdds > 2.05) {
+    if (isProp) {
+      if (edgeVal >= 3.0) {
+        vote1Passed = true;
+        vote1Reason = `Player Prop de alto valor detectado (Edge: +${edgeVal.toFixed(1)}%). El modelo supera el margen de Las Vegas.`;
+      } else {
+        vote1Reason = `Player Prop sin ventaja matemática suficiente (+${edgeVal.toFixed(1)}% EV).`;
+      }
+    } else if (isOutright1X2 && numericOdds > 2.05) {
       vote1Passed = false;
       vote1Reason = `⛔ Candado Anti-Underdog: Cuota ${numericOdds.toFixed(2)} (> 2.05) prohibida en Victoria Directa 1X2. Se exige Doble Oportunidad (1X/X2).`;
     } else if (isBttsPick) {
@@ -92,8 +100,16 @@ export function evaluateEnsembleConsensus({
     const f5Away = parseFloat(probs.f5?.awayMl || 50);
     const isRunlinePlus = pTypeUpper.includes('+1.5') || pTypeUpper.includes('RUNLINE') || pTypeUpper.includes('HÁNDICAP') || pTypeUpper.includes('PROTEGIDO');
     const isTotalsMlb = pTypeUpper.includes('OVER') || pTypeUpper.includes('UNDER') || pTypeUpper.includes('CARRERAS');
+    const isPropMlb = pTypeUpper.includes('PROP') || pTypeUpper.includes('STRIKEOUTS') || pTypeUpper.includes('BASES');
 
-    if (!isRunlinePlus && !isTotalsMlb && numericOdds > 2.05) {
+    if (isPropMlb) {
+      if (edgeVal >= 2.5) {
+        vote1Passed = true;
+        vote1Reason = `Player Prop Sabermétrico de alto valor (Edge: +${edgeVal.toFixed(1)}%). Factores de estadio y vulnerabilidad del rival alineados.`;
+      } else {
+        vote1Reason = `Player Prop MLB sin ventaja matemática suficiente (+${edgeVal.toFixed(1)}% EV).`;
+      }
+    } else if (!isRunlinePlus && !isTotalsMlb && numericOdds > 2.05) {
       vote1Passed = false;
       vote1Reason = `⛔ Candado Anti-Underdog MLB: Cuota ${numericOdds.toFixed(2)} (> 2.05) en Moneyline directo. Convertir a Runline +1.5 Carreras.`;
     } else if (isRunlinePlus) {
