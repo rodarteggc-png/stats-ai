@@ -1066,7 +1066,7 @@ export async function fetchLiveSoccerStandings(leagueCode) {
 function getSoccerDaysRest(leagueCode, gameDateStr) {
   if (!gameDateStr) return 5;
   const lCode = (leagueCode || '').toLowerCase();
-  const isCup = lCode.includes('champions') || lCode.includes('europa') || lCode.includes('libertadores') || lCode.includes('sudamericana') || lCode.includes('nations');
+  const isCup = lCode.includes('champions') || lCode.includes('europa') || lCode.includes('libertadores') || lCode.includes('sudamericana') || lCode.includes('nations') || lCode.includes('caf') || lCode.includes('worldq');
   const dayOfWeek = new Date(gameDateStr).getUTCDay();
   
   if (isCup) {
@@ -1105,6 +1105,12 @@ async function fetchRealSoccerSchedule(dateRange) {
     // Selecciones / Torneos Internacionales
     { code: 'uefa.nations', name: 'UEFA Nations League' },
     { code: 'concacaf.nations.league', name: 'Concacaf Nations League' },
+    { code: 'caf.nations', name: 'Copa Africana de Naciones' },
+    { code: 'caf.nations_qual', name: 'Clasificación Copa Africana' },
+    { code: 'fifa.worldq.conmebol', name: 'Eliminatorias CONMEBOL' },
+    { code: 'fifa.worldq.uefa', name: 'Eliminatorias UEFA' },
+    { code: 'fifa.worldq.concacaf', name: 'Eliminatorias Concacaf' },
+    { code: 'fifa.worldq.caf', name: 'Eliminatorias CAF África' },
     // Ligas Femeniles (Alta disparidad de nivel -> Oportunidades Sharp en Hándicaps y Totales)
     { code: 'mex.w.1', name: 'Liga MX Femenil' },
     { code: 'usa.nwsl', name: 'NWSL (EE.UU. Femenil)' },
@@ -1355,7 +1361,9 @@ async function fetchRealSoccerSchedule(dateRange) {
       'Conference League': 'soccer_uefa_europa_conference_league',
       'MLS (EE.UU.)': 'soccer_usa_mls',
       'Primeira Liga (Portugal)': 'soccer_portugal_primeira_liga',
-      'Copa Libertadores': 'soccer_conmebol_copa_libertadores'
+      'Copa Libertadores': 'soccer_conmebol_copa_libertadores',
+      'UEFA Nations League': 'soccer_uefa_nations_league',
+      'Copa Africana de Naciones': 'soccer_africa_cup_of_nations'
     };
 
     // Identificar qué ligas tienen partidos en esta búsqueda

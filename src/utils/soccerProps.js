@@ -78,7 +78,7 @@ export function generateDailySoccerProps(games = []) {
     
     if (game.home.keyPlayer && game.home.keyPlayer.name && game.home.keyPlayer.name !== 'Goleador') {
       const homeProp = calculateSoccerPlayerProps(game.home.keyPlayer, hAttack, aDefense, 1.15);
-      if (homeProp) sotCandidates.push({ ...homeProp, team: game.home.name, opponent: game.away.name, matchId: game.id, gameDate: game.gameDate });
+      if (homeProp) sotCandidates.push({ ...homeProp, team: game.home.name, opponent: game.away.name, matchId: game.id, gameDate: game.gameDate, league: game.league });
     }
     
     const aAttack = parseFloat(game.away.xG) || 1.05;
@@ -86,7 +86,7 @@ export function generateDailySoccerProps(games = []) {
     
     if (game.away.keyPlayer && game.away.keyPlayer.name && game.away.keyPlayer.name !== 'Extremo') {
       const awayProp = calculateSoccerPlayerProps(game.away.keyPlayer, aAttack, hDefense, 0.90);
-      if (awayProp) sotCandidates.push({ ...awayProp, team: game.away.name, opponent: game.home.name, matchId: game.id, gameDate: game.gameDate });
+      if (awayProp) sotCandidates.push({ ...awayProp, team: game.away.name, opponent: game.home.name, matchId: game.id, gameDate: game.gameDate, league: game.league });
     }
   });
 

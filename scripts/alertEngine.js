@@ -627,10 +627,12 @@ export function buildOpportunitiesAndTopSlate({
   const soccerProps = generateDailySoccerProps(soccerMatches);
   soccerProps.forEach(prop => {
     if (prop.isSharp) {
+      const parentMatch = soccerMatches.find(m => m.id === prop.matchId);
+      const leagueName = prop.league || parentMatch?.league || 'Fútbol';
       rawOpportunities.push({
         id: `prop-soc-${prop.matchId}-${prop.playerName.replace(/\s+/g, '')}`,
         sport: 'Fútbol',
-        league: 'Soccer',
+        league: leagueName,
         game: prop.team + ' vs ' + prop.opponent,
         gameDate: prop.gameDate,
         type: '⚽ PLAYER PROP (TIROS A PUERTA)',
@@ -641,7 +643,7 @@ export function buildOpportunitiesAndTopSlate({
         edgeStr: `Edge: +${prop.edge}% | Proyección: ${prop.projectedSot} Tiros`,
         argument: prop.reason,
         mcStats: { stability: Math.max(70, prop.prob), risk: 'Bajo', iterations: 10000 },
-        match: soccerMatches.find(m => m.id === prop.matchId),
+        match: parentMatch,
         probs: { f5: { homeMl: 50, awayMl: 50 } } // mock para pasar verificaciones
       });
     }
