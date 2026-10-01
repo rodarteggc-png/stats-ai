@@ -67,16 +67,51 @@ export function calculateSoccerPlayerProps(player, teamXG, opponentDefXG, homeAd
   };
 }
 
+// Whitelist de Ligas Comerciales donde las casas de apuestas (Novibet, Draftea, Playdoit, Caliente)
+// abren de forma estándar mercados de Tiros a Puerta de Jugadores (Player Props).
+// En torneos secundarios (Concacaf Nations League, Copas de selecciones menores, etc.) NO se generan props
+// para evitar desperdiciar cupos del Top 6 con selecciones inexistentes en las casas locales.
+export const SOCCER_PROPS_ALLOWED_LEAGUES = [
+  'Champions League',
+  'Europa League',
+  'Conference League',
+  'Premier League',
+  'LaLiga',
+  'Serie A',
+  'Bundesliga',
+  'Ligue 1',
+  'Liga MX',
+  'MLS'
+];
+
+function isPlayerNameValid(name) {
+  if (!name || typeof name !== 'string') return false;
+  const trimmed = name.trim();
+  if (trimmed.length < 3) return false;
+  const invalidPlaceholders = [
+    'goleador', 'extremo', 'delantero', 'principal', 'titular',
+    'delantero principal', 'extremo titular', 'jugador', 'leader'
+  ];
+  return !invalidPlaceholders.some(p => trimmed.toLowerCase().includes(p));
+}
+
 export function generateDailySoccerProps(games = []) {
   const sotCandidates = [];
 
   games.forEach(game => {
     if (!game.home || !game.away) return;
     
+    // Candado Comercial: Solo generar Player Props en ligas donde las casas realmente abren el mercado
+    const leagueName = game.league || '';
+    const isCommercialPropLeague = SOCCER_PROPS_ALLOWED_LEAGUES.some(l => 
+      leagueName.toLowerCase().includes(l.toLowerCase())
+    );
+    if (!isCommercialPropLeague) return;
+
     const hAttack = parseFloat(game.home.xG) || 1.35;
     const aDefense = parseFloat(game.away.defenseXG) || 1.10;
     
-    if (game.home.keyPlayer && game.home.keyPlayer.name && game.home.keyPlayer.name !== 'Goleador') {
+    if (game.home.keyPlayer && isPlayerNameValid(game.home.keyPlayer.name)) {
       const homeProp = calculateSoccerPlayerProps(game.home.keyPlayer, hAttack, aDefense, 1.15);
       if (homeProp) sotCandidates.push({ ...homeProp, team: game.home.name, opponent: game.away.name, matchId: game.id, gameDate: game.gameDate, league: game.league });
     }
@@ -84,7 +119,7 @@ export function generateDailySoccerProps(games = []) {
     const aAttack = parseFloat(game.away.xG) || 1.05;
     const hDefense = parseFloat(game.home.defenseXG) || 1.10;
     
-    if (game.away.keyPlayer && game.away.keyPlayer.name && game.away.keyPlayer.name !== 'Extremo') {
+    if (game.away.keyPlayer && isPlayerNameValid(game.away.keyPlayer.name)) {
       const awayProp = calculateSoccerPlayerProps(game.away.keyPlayer, aAttack, hDefense, 0.90);
       if (awayProp) sotCandidates.push({ ...awayProp, team: game.away.name, opponent: game.home.name, matchId: game.id, gameDate: game.gameDate, league: game.league });
     }
