@@ -12,6 +12,9 @@ import { generateDailySoccerProps } from '../src/utils/soccerProps.js';
 import { calculateNflProbabilities } from '../src/utils/gridiron.js';
 import { simulateSoccerMatch, simulateMlbMatch, simulateNflMatch } from '../src/utils/monteCarlo.js';
 import { evaluateEnsembleConsensus } from '../src/utils/ensemble.js';
+import { applyPlattCalibration } from '../src/utils/calibration.js';
+import { getPairCorrelation } from '../src/utils/correlationMatrix.js';
+import { detectReverseLineMovement } from '../src/utils/rlmDetector.js';
 import {
   getLearnedAdjustmentsForMatch,
   updateDynamicElo,
@@ -1121,6 +1124,12 @@ export function buildOpportunitiesAndTopSlate({
   // ================= D. TRIBUNAL DE CONSENSO Y ORDENAMIENTO ESTRICTO POR EFECTIVIDAD =================
   rawOpportunities.forEach(opp => {
     opp.isToday = isMatchTodayInCdmx(opp.gameDate);
+    // Calibración Bayesiana de Platt por deporte para corregir sesgos de cola
+    const rawP = parseFloat(opp.prob) || 60;
+    const calibrated = applyPlattCalibration(rawP, opp.sport);
+    opp.rawProb = opp.prob;
+    opp.prob = `${calibrated}%`;
+
     opp.consensus = evaluateEnsembleConsensus({
       sport: opp.sport,
       match: opp.match || {},
@@ -1136,9 +1145,11 @@ export function buildOpportunitiesAndTopSlate({
 
   // Candado de Certeza Inquebrantable:
   // Solo se aprueban selecciones con mínimo 2 de 3 votos del Tribunal.
+  // Veto preventivo si hay trampa institucional detectada por RLM.
   // Para Spreads/Totales se exige prob >= 55.5% y para 1X2/ML/BTTS prob >= 60.0%
   const approvedOpps = rawOpportunities.filter(opp => {
     if (!opp.consensus || opp.consensus.votesPassed < 2) return false;
+    if (opp.consensus.rlmInfo?.isTrapForPick) return false;
     const probNum = parseFloat(opp.prob) || 0;
     const pickStr = (opp.pick || '').toLowerCase();
     const isSpreadOrTotal = pickStr.includes('cubre') || pickStr.includes('hándicap') || pickStr.includes('handicap') || pickStr.includes('over') || pickStr.includes('under') || /[+-]\d+/.test(pickStr);
@@ -1220,8 +1231,14 @@ export function buildOpportunitiesAndTopSlate({
       const existingCat = getPickMarketCategory(existing);
       const newCat = getPickMarketCategory(pick);
 
-      // Permitir segunda selección si es de un mercado complementario (ej. Side + Total o Prop)
-      if (existingCat !== newCat) {
+      // Evaluación bivariada con la matriz de correlación matemática
+      const corr = getPairCorrelation(existing, pick);
+
+      // Permitir segunda selección si es de un mercado complementario Y sin canibalización (no negativa)
+      if (existingCat !== newCat && corr.synergyType !== 'NEGATIVA') {
+        if (corr.synergyType === 'POSITIVA') {
+          pick.correlationNote = corr.reason;
+        }
         topSlate.push(pick);
         gamePicksMap.set(pick.game, [...currentPicks, pick]);
       }
@@ -1706,6 +1723,14 @@ export async function runAlertEngine(options = {}) {
       ? `🌙 *ALERTA NOCTURNA — JORNADA EUROPEA TEMPRANERA* 🌙\n🔬 *CALIBRACIÓN MONTE CARLO & CONSENSO 3v1*`
       : `🎯 *ALERTA DE VALOR CUANTITATIVO — TIER 1* 🎯\n🔬 *CALIBRACIÓN MONTE CARLO & CONSENSO 3v1*`;
 
+    const rlmBlock = pick.consensus?.rlmInfo?.isRlmDetected
+      ? [`🚨 *Dinero Inteligente (RLM):* \`${pick.consensus.rlmInfo.badgeText}\``, `  _${pick.consensus.rlmInfo.reason}_`, ``]
+      : [];
+
+    const corrBlock = pick.correlationNote
+      ? [`🧩 *Sinergia Bivariada:* \`${pick.correlationNote}\``, ``]
+      : [];
+
     const message = [
       headerTitle,
       ``,
@@ -1721,6 +1746,8 @@ export async function runAlertEngine(options = {}) {
       `💰 *Cuota de Mercado:* \`${pick.odds}\``,
       `📈 *Ventaja Cuantitativa:* *${pick.edgeStr}*`,
       ``,
+      ...rlmBlock,
+      ...corrBlock,
       `🧠 *Veredicto del Tribunal de Consenso:*`,
       consensusLines
     ].join('\n');

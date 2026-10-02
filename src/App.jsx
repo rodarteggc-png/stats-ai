@@ -7,6 +7,9 @@ import { simulateSoccerMatch, simulateMlbMatch, simulateNflMatch } from "./utils
 import { evaluateEnsembleConsensus } from "./utils/ensemble";
 import { calculateKellyStake } from "./utils/kelly";
 import { generateDailyMlbProps } from "./utils/mlbProps";
+import { applyPlattCalibration } from "./utils/calibration";
+import { evaluateCorrelatedCombo, getPairCorrelation } from "./utils/correlationMatrix";
+import { detectReverseLineMovement } from "./utils/rlmDetector";
 import { fetchMatchData, fetchDailySchedule, fetchNflWeekSchedule, checkOddsApiUsage, clearOddsCache, getOddsApiKeys } from "./services/sportsApi";
 import { 
   getHistory, 
@@ -32,13 +35,13 @@ const MODEL = "gemini-3.6-flash";
 
 function buildSystemPrompt() {
   return [
-    `Eres el analista principal de Stats-AI Pro, experto en inteligencia deportiva cuantitativa, simulación Monte Carlo y gestión de riesgo.`,
-    `Te proporcionaré datos reales de partidos, la salida del motor matemático (Monte Carlo 10k, Poisson Bivariado, Sabermetría, Gridiron) y las LECCIONES APRENDIDAS DE FALLOS ANTERIORES.`,
+    `Eres el Director Cuantitativo y Auditor Forense de Stats-AI Pro, combinando modelado matemático Monte Carlo con análisis de riesgo implacable ('Devil's Advocate / Stress Testing').`,
+    `Te proporcionaré datos reales de partidos, la salida del motor matemático (Monte Carlo 10k, Poisson Bivariado, Sabermetría, Gridiron, RLM institucional) y las LECCIONES APRENDIDAS DE FALLOS ANTERIORES.`,
     `TU TAREA: Redactar un ANÁLISIS PROFUNDO DEL PICK EN 3 BLOQUES ESTRUCTURADOS Y EJECUTIVOS:`,
     `Usa emojis deportivos y un tono profesional, riguroso y analítico ('sharp investor').`,
-    `[BLOQUE 1 - DIAGNÓSTICO CUANTITATIVO]: El Pick Recomendado, probabilidad real calibrada por Monte Carlo (10k simulaciones), cuota de valor (+EV) y margen proyectado.`,
-    `[BLOQUE 2 - RADIOGRAFÍA TÉCNICA & MATCHUP]: Métricas avanzadas de trinchera/pitcheo/xG, nivel de estabilidad de la simulación, riesgo de varianza (Bullpen, tarjetas, turnovers) y lecciones aprendidas previas.`,
-    `[BLOQUE 3 - ESTRATEGIA DE INVERSIÓN & KELLY]: Mercados alternos de valor (F5, Hándicap, Totales) y tamaño de apuesta recomendado según Criterio de Kelly (unidades).`,
+    `[BLOQUE 1 - DIAGNÓSTICO CUANTITATIVO & RLM]: El Pick Recomendado, probabilidad calibrada por Platt Scaling (Monte Carlo 10k), cuota de valor (+EV), margen proyectado y detección de Dinero Inteligente (Reverse Line Movement / Sharp Money).`,
+    `[BLOQUE 2 - STRESS TEST: ABOGADO DEL DIABLO]: Actúa como el más severo contradictor de la apuesta. Simula el peor escenario táctico (rotación, fatiga de calendario, expulsión, condición climática, trampa de mercado o desmotivación). Califica explícitamente el 'ÍNDICE DE FRAGILIDAD: [1 a 5]/5' (donde 1 es Blindado y 5 es Altamente Frágil) y explica qué evento imprevisto podría sabotear el pick.`,
+    `[BLOQUE 3 - ESTRATEGIA DE INVERSIÓN & GESTIÓN KELLY]: Mercados alternos correlacionados (+EV), recomendación de tamaño de apuesta según Criterio de Kelly (unidades) ajustado según el Índice de Fragilidad.`,
     `Separa cada bloque usando estrictamente "---" en una línea nueva.`
   ].join("\n");
 }
@@ -1262,10 +1265,16 @@ export default function App() {
         }
       }
 
-      // Enriquecer todas las oportunidades con el Tribunal de Consenso Tripartito (3v1) y Gestión Kelly Dinámica
+      // Enriquecer todas las oportunidades con Calibración de Platt, Tribunal de Consenso Tripartito (3v1) y RLM
       opportunities.forEach(opp => {
         if (opp.match) {
           try {
+            // 1. Calibración Bayesiana de Platt para alinear la probabilidad calculada con la tasa empírica real
+            const rawProbNum = parseFloat(opp.prob) || 60;
+            const calibratedVal = applyPlattCalibration(rawProbNum, activeSport);
+            opp.rawProb = opp.prob;
+            opp.prob = `${calibratedVal}%`;
+
             if (!opp.mcStats) {
               if (activeSport === 'futbol') {
                 const mc = simulateSoccerMatch(opp.match.home?.xG, opp.match.away?.xG, 10000);
@@ -1278,11 +1287,12 @@ export default function App() {
                 );
                 opp.mcStats = { stability: mc.f5Stability, risk: mc.bullpenRisk };
               } else if (activeSport === 'nfl') {
+                const isCol = opp.match.isCollege || opp.match.sport === 'ncaaf' || footballLeague === 'ncaaf';
                 const spread = opp.match.vegas?.spread !== undefined ? opp.match.vegas.spread : -3.5;
-                const total = opp.match.vegas?.overUnder !== undefined ? opp.match.vegas.overUnder : 44.5;
+                const total = opp.match.vegas?.overUnder !== undefined ? opp.match.vegas.overUnder : (isCol ? 52.8 : 44.5);
                 const wind = opp.match.weather?.windMph || 0;
                 const lead = parseFloat(opp.probs?.expectedHomeLead || 0);
-                const mc = simulateNflMatch(lead, spread, total, wind, 10000);
+                const mc = simulateNflMatch(lead, spread, total, wind, 10000, isCol);
                 opp.mcStats = { stability: mc.stabilityScore, risk: mc.riskLevel };
               }
             }
@@ -1302,35 +1312,42 @@ export default function App() {
         }
       });
       
-      // Filtrar para mostrar ÚNICAMENTE picks aprobados por el Tribunal (>= 2/3 votos)
-      // Se eliminan al 100% las tarjetas de 'Pasar / Sin Ventaja' (Tier 3) y vetadas por discrepancia
-      // Se admiten hasta 2 apuestas distintas de un mismo encuentro (ej. Ganador + Over/Under)
-      const matchPickCounts = {};
+      // Filtrar para mostrar ÚNICAMENTE picks aprobados por el Tribunal (>= 2/3 votos) y sin vetos RLM
+      // Se admiten hasta 2 apuestas distintas de un mismo encuentro SOLO si tienen correlación no-negativa
+      const gamePicksTracker = new Map();
       opportunities = opportunities.filter((v) => {
         if (v.tier === 3 || v.pick.includes('⛔')) return false;
-        if (v.consensus && v.consensus.votesPassed < 2) return false; // Filtro estricto del Tribunal 3v1
+        if (v.consensus && v.consensus.votesPassed < 2) return false;
+        if (v.consensus?.rlmInfo?.isTrapForPick) return false; // Veto preventivo de trampa institucional
+
         const homeName = v.match?.home?.name || 'unknown';
-        const pickKey = `${homeName}_${v.pick}`;
-        if (matchPickCounts[pickKey]) return false;
-        
-        const gameCountKey = `count_${homeName}`;
-        const count = matchPickCounts[gameCountKey] || 0;
-        if (count >= 2) return false; // Máximo 2 apuestas distintas por juego con valor
-        
-        matchPickCounts[pickKey] = true;
-        matchPickCounts[gameCountKey] = count + 1;
-        return true;
+        const gamePicks = gamePicksTracker.get(homeName) || [];
+        if (gamePicks.length === 0) {
+          gamePicksTracker.set(homeName, [v]);
+          return true;
+        } else if (gamePicks.length === 1) {
+          const firstPick = gamePicks[0];
+          const corr = getPairCorrelation(firstPick, v);
+          // Rechazar si hay conflicto o canibalización de mercados
+          if (corr.synergyType === 'NEGATIVA') return false;
+          if (corr.synergyType === 'POSITIVA') {
+            v.correlationNote = corr.reason;
+          }
+          gamePicksTracker.set(homeName, [...gamePicks, v]);
+          return true;
+        }
+        return false;
       });
 
-      // Ordenar: Prioridad 1: Votos de Consenso (3/3 Unánimes primero, luego 2/3), Prioridad 2: Tier, Prioridad 3: Probabilidad
+      // Ordenar: Prioridad 1: Votos de Consenso (3/3 Unánimes primero, luego 2/3), Prioridad 2: Mayor Probabilidad Calibrada, Prioridad 3: Edge
       opportunities.sort((a, b) => {
         const vA = a.consensus?.votesPassed || 0;
         const vB = b.consensus?.votesPassed || 0;
         if (vB !== vA) return vB - vA;
-        if (a.tier !== b.tier) return a.tier - b.tier;
         const pA = parseFloat(a.prob) || 0;
         const pB = parseFloat(b.prob) || 0;
-        return pB - pA;
+        if (Math.abs(pB - pA) >= 1.0) return pB - pA;
+        return (b.edgeVal || 0) - (a.edgeVal || 0);
       });
 
       const displayedOpps = opportunities.slice(0, 16);
@@ -2360,6 +2377,36 @@ export default function App() {
                             🗳️ {res.consensus.badgeText}
                           </span>
                         )}
+                        {res.consensus?.rlmInfo?.isRlmDetected && (
+                          <span style={{
+                            color: res.consensus.rlmInfo.rlmType === 'FAVORABLE' ? '#10b981' : '#f59e0b',
+                            fontWeight: 800,
+                            background: res.consensus.rlmInfo.rlmType === 'FAVORABLE' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                            border: `1px solid ${res.consensus.rlmInfo.rlmType === 'FAVORABLE' ? '#10b981' : '#f59e0b'}`,
+                            padding: '2px 8px',
+                            borderRadius: 4,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4
+                          }} title={res.consensus.rlmInfo.reason}>
+                            {res.consensus.rlmInfo.badgeText}
+                          </span>
+                        )}
+                        {res.correlationNote && (
+                          <span style={{
+                            color: '#818cf8',
+                            fontWeight: 800,
+                            background: 'rgba(129, 140, 248, 0.12)',
+                            border: '1px solid rgba(129, 140, 248, 0.3)',
+                            padding: '2px 8px',
+                            borderRadius: 4,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4
+                          }} title={res.correlationNote}>
+                            🧩 Combo Sinergia Positiva
+                          </span>
+                        )}
                         {res.mcStats && (
                           <span style={{ 
                             color: res.mcStats.risk === 'Bajo' ? '#10b981' : (res.mcStats.risk === 'Medio' ? '#f59e0b' : '#ef4444'), 
@@ -2454,8 +2501,9 @@ export default function App() {
                   usedParleyGames.add(gKey);
                 }
               }
-              const combinedOdds = topParley.reduce((acc, curr) => acc * (parseFloat(curr.odds) || 1.5), 1).toFixed(2);
-              const parleyProb = topParley.reduce((acc, curr) => acc * ((parseFloat(curr.prob) || 50) / 100), 1) * 100;
+              const parleyEval = topParley.length >= 2 ? evaluateCorrelatedCombo(topParley) : null;
+              const combinedOdds = parleyEval ? parleyEval.cumulativeOdds : topParley.reduce((acc, curr) => acc * (parseFloat(curr.odds) || 1.5), 1).toFixed(2);
+              const parleyProb = parleyEval ? (parseFloat(parleyEval.realJointProb) || 45) : topParley.reduce((acc, curr) => acc * ((parseFloat(curr.prob) || 50) / 100), 1) * 100;
               const parleyKelly = calculateKellyStake(parleyProb, parseFloat(combinedOdds) || 2.0, parleyMode === 'blindado' ? 0.25 : 0.15);
 
               const isBlindado = parleyMode === 'blindado';
@@ -2484,9 +2532,10 @@ export default function App() {
 
                       <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 16 }}>
                         {sameGameCombos.map(([matchTitle, picks], idx) => {
-                          const comboOdds = picks.reduce((acc, p) => acc * (parseFloat(p.odds) || 1.5), 1).toFixed(2);
-                          const comboProb = picks.reduce((acc, p) => acc * ((parseFloat(p.prob) || 50) / 100), 1) * 100;
-                          const comboKelly = calculateKellyStake(comboProb, parseFloat(comboOdds) || 2.0, 0.20);
+                          const comboEval = evaluateCorrelatedCombo(picks);
+                          const comboOdds = comboEval.cumulativeOdds || picks.reduce((acc, p) => acc * (parseFloat(p.odds) || 1.5), 1).toFixed(2);
+                          const comboProbNum = parseFloat(comboEval.realJointProb) || (picks.reduce((acc, p) => acc * ((parseFloat(p.prob) || 50) / 100), 1) * 100);
+                          const comboKelly = calculateKellyStake(comboProbNum, parseFloat(comboOdds) || 2.0, 0.20);
 
                           return (
                             <div key={idx} style={{ background: "#0b0f19", border: "1px solid #334155", borderRadius: 12, padding: 18 }}>
@@ -2524,7 +2573,12 @@ export default function App() {
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #1e293b", paddingTop: 12, flexWrap: "wrap", gap: 10 }}>
                                 <div style={{ fontSize: 11, color: "#94a3b8", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                                   <span>🎯 Stake Sugerido: <b>{parseFloat(comboKelly.units) > 0 ? `${comboKelly.units}u` : '0.5u (Micro-Stake)'}</b></span>
-                                  <span style={{ color: "#a5b4fc", fontWeight: 700 }}>• Correlación en mismo juego</span>
+                                  <span style={{ color: "#a5b4fc", fontWeight: 700 }}>• {comboEval.badgeText || 'Correlación en mismo juego'}</span>
+                                  {comboEval.realJointProb && (
+                                    <span style={{ color: "#38bdf8", fontWeight: 800, background: "rgba(56, 189, 248, 0.12)", border: "1px solid rgba(56, 189, 248, 0.3)", padding: "1px 6px", borderRadius: 4 }}>
+                                      Prob: {comboEval.realJointProb} (Edge: {comboEval.parleyEdge})
+                                    </span>
+                                  )}
                                 </div>
                                 <button
                                   onClick={() => handleSaveParleyToHistory(picks, parseFloat(comboKelly.units) > 0 ? comboKelly.units : "0.5")}

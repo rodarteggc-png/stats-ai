@@ -7,6 +7,7 @@
 
 import { getAllLessons } from '../services/history.js';
 import { formatDynamicStake, calculateKellyStake } from './kelly.js';
+import { detectReverseLineMovement } from './rlmDetector.js';
 
 /**
  * Evalúa el consenso de una oportunidad en función del deporte y sus motores analíticos.
@@ -264,8 +265,14 @@ export function evaluateEnsembleConsensus({
     vote3Reason = `⛔ Falso Smart Money descartado: Cuota de longshot (${numericOdds.toFixed(2)} > 2.55) fuera de rango institucional.`;
   }
 
-  // 2. Detector de Flujo Institucional (Apertura vs. Cierre de DraftKings / Vegas)
-  if (vote3Passed) {
+  // 2. Detector Avanzado de Reverse Line Movement (RLM) y Flujo Institucional
+  const rlm = detectReverseLineMovement({ sport, match, pick, pickType });
+  if (rlm.isTrapForPick) {
+    vote3Passed = false;
+    vote3Reason = `${rlm.badgeText}: ${rlm.reason}`;
+  } else if (rlm.isRlmDetected && rlm.rlmType === 'FAVORABLE') {
+    vote3Reason = `${rlm.badgeText}: ${rlm.reason}`;
+  } else if (vote3Passed) {
     const totalDelta = parseFloat(mkt.totalDelta) || 0;
     const spreadDeltaHome = parseFloat(mkt.spreadDeltaHome) || 0;
     const homeDropPct = parseFloat(mkt.homeDropPct) || 0;
@@ -287,7 +294,6 @@ export function evaluateEnsembleConsensus({
         vote3Reason = `🔥 Confirmado por Sharp Money (${bookName}): Dinero profesional tumbando el Total a la baja (Apertura ${mkt.totalOpen} -> Actual ${mkt.totalClose}).`;
       }
     } else if (!isTotalsMarket && sLower.includes('nfl') && spreadDeltaHome !== 0) {
-      // En NFL: spreadDeltaHome > 0 significa que el Spread del Local empeoró (ej. de -1.5 a +3.5 => dinero fuerte en Visitante)
       if (isHomeSidePick && spreadDeltaHome >= 2.0) {
         vote3Passed = false;
         vote3Reason = `⛔ Veto Sharp Money (Reverse Line): Dinero profesional movió el Spread ${spreadDeltaHome.toFixed(1)} pts en contra de ${match.home?.name} (Apertura ${mkt.spreadOpenFmt} -> Actual ${mkt.spreadCloseFmt}).`;
@@ -300,7 +306,6 @@ export function evaluateEnsembleConsensus({
         vote3Reason = `🔥 Confirmado por Sharp Money (${bookName}): Línea de Spread movida ${spreadDeltaHome.toFixed(1)} pts a favor de ${match.away?.name} (Local ${mkt.spreadOpenFmt} -> ${mkt.spreadCloseFmt}).`;
       }
     } else if (!isTotalsMarket) {
-      // En MLB y Fútbol: evaluar caída de cuota de Apertura vs Actual en Moneyline
       if (isHomeSidePick && awayDropPct >= 8.0 && (parseFloat(mkt.awayOdds) || 3.0) <= 2.35) {
         vote3Passed = false;
         vote3Reason = `⛔ Veto Sharp Money (Reverse Line): Fuerte entrada de dinero profesional en el rival ${match.away?.name} (cuota cayó -${awayDropPct}% de ${mkt.openAway} a ${mkt.awayOdds}).`;
@@ -445,6 +450,7 @@ export function evaluateEnsembleConsensus({
     badgeColor,
     breakdown,
     recommendedStake,
-    kellyData
+    kellyData,
+    rlmInfo: rlm
   };
 }
