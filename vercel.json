@@ -1,16 +1,7 @@
 {
-  "crons": [
-    {
-      "path": "/api/scan",
-      "schedule": "30 15 * * *"
-    },
-    {
-      "path": "/api/scan",
-      "schedule": "30 21 * * *"
-    },
-    {
-      "path": "/api/scan?shift=nocturno",
-      "schedule": "0 5 * * 6,0"
+  "functions": {
+    "api/**/*.js": {
+      "maxDuration": 60
     }
-  ]
+  }
 }
