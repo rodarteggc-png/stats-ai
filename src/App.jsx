@@ -63,6 +63,7 @@ export default function App() {
   const [radarLoading, setRadarLoading] = useState(false);
   const [radarResults, setRadarResults] = useState([]);
   const [radarDateRange, setRadarDateRange] = useState("hoy"); // hoy, manana, fin_de_semana
+  const [radarFilter, setRadarFilter] = useState("all"); // "all" | "approved" | "unanimous" | "consensus"
   const [rawScheduleCount, setRawScheduleCount] = useState(0);
   const [parleyMode, setParleyMode] = useState("blindado"); // "blindado" o "alto_rendimiento"
   const [mlbPropsView, setMlbPropsView] = useState("partidos"); // "partidos" | "props"
@@ -2001,42 +2002,134 @@ export default function App() {
               )}
             </div>
 
-            {radarResults.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-                  <div style={{ fontSize: 13, fontWeight: 800, color: "#94a3b8", letterSpacing: 0.5 }}>
-                    💎 OPORTUNIDADES DETECTADAS ({radarResults.length})
+            {radarResults.length > 0 && (() => {
+              const isApprovedRadarPick = (r) => {
+                if (!r) return false;
+                const isUnan = Boolean(r.consensus?.isUnanimous || r.consensus?.votesPassed === 3);
+                const isCons = Boolean(r.consensus?.votesPassed === 2 && !r.consensus?.rlmInfo?.isTrapForPick);
+                const pNum = parseFloat(r.prob) || 0;
+                const pStr = (r.pick || '').toLowerCase();
+                const isST = pStr.includes('cubre') || pStr.includes('hándicap') || pStr.includes('handicap') || pStr.includes('over') || pStr.includes('under') || /[+-]\d+/.test(pStr);
+                const mProb = isST ? pNum >= 55.5 : pNum >= 60.0;
+                return (isUnan || isCons) && mProb && !r.consensus?.rlmInfo?.isTrapForPick;
+              };
+
+              const approvedRadarCount = radarResults.filter(isApprovedRadarPick).length;
+              const unanimousRadarCount = radarResults.filter(r => r.consensus?.isUnanimous || r.consensus?.votesPassed === 3).length;
+              const consensusRadarCount = radarResults.filter(r => r.consensus?.votesPassed === 2 && !r.consensus?.rlmInfo?.isTrapForPick).length;
+
+              const displayedRadarResults = radarResults.filter(r => {
+                if (radarFilter === "approved") return isApprovedRadarPick(r);
+                if (radarFilter === "unanimous") return r.consensus?.isUnanimous || r.consensus?.votesPassed === 3;
+                if (radarFilter === "consensus") return r.consensus?.votesPassed === 2 && !r.consensus?.rlmInfo?.isTrapForPick;
+                return true;
+              });
+
+              return (
+                <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: "#94a3b8", letterSpacing: 0.5 }}>
+                      💎 OPORTUNIDADES ({displayedRadarResults.length} de {radarResults.length})
+                    </div>
+                    <div style={{ display: "flex", gap: 8, fontSize: 11, fontWeight: 800, flexWrap: "wrap", alignItems: "center" }}>
+                      <button
+                        onClick={() => setRadarFilter(radarFilter === "approved" ? "all" : "approved")}
+                        style={{
+                          padding: "7px 14px",
+                          background: radarFilter === "approved" ? "linear-gradient(135deg, #10b981, #059669)" : "#0f172a",
+                          color: radarFilter === "approved" ? "#fff" : "#34d399",
+                          border: radarFilter === "approved" ? "1.5px solid #34d399" : "1px solid #10b98155",
+                          borderRadius: 8,
+                          cursor: "pointer",
+                          fontWeight: 900,
+                          boxShadow: radarFilter === "approved" ? "0 0 16px rgba(16, 185, 129, 0.45)" : "none",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          transition: "all 0.2s ease"
+                        }}
+                        title="Muestra únicamente selecciones que cumplen los mismos 7 filtros de Telegram"
+                      >
+                        ⭐ Solo Aprobadas ({approvedRadarCount})
+                      </button>
+
+                      <button
+                        onClick={() => setRadarFilter(radarFilter === "unanimous" ? "all" : "unanimous")}
+                        style={{
+                          padding: "7px 13px",
+                          background: radarFilter === "unanimous" ? "#10b981" : "#0f172a",
+                          color: radarFilter === "unanimous" ? "#fff" : "#10b981",
+                          border: radarFilter === "unanimous" ? "1.5px solid #10b981" : "1px solid #10b98133",
+                          borderRadius: 8,
+                          cursor: "pointer",
+                          fontWeight: 800,
+                          boxShadow: radarFilter === "unanimous" ? "0 0 14px rgba(16, 185, 129, 0.4)" : "none",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 5,
+                          transition: "all 0.2s ease"
+                        }}
+                      >
+                        🗳️ 3/3 Élite ({unanimousRadarCount})
+                      </button>
+
+                      <button
+                        onClick={() => setRadarFilter(radarFilter === "consensus" ? "all" : "consensus")}
+                        style={{
+                          padding: "7px 13px",
+                          background: radarFilter === "consensus" ? "#06b6d4" : "#0f172a",
+                          color: radarFilter === "consensus" ? "#fff" : "#22d3ee",
+                          border: radarFilter === "consensus" ? "1.5px solid #06b6d4" : "1px solid #06b6d433",
+                          borderRadius: 8,
+                          cursor: "pointer",
+                          fontWeight: 800,
+                          boxShadow: radarFilter === "consensus" ? "0 0 14px rgba(6, 182, 212, 0.4)" : "none",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 5,
+                          transition: "all 0.2s ease"
+                        }}
+                      >
+                        🚨 RLM / 2/3 ({consensusRadarCount})
+                      </button>
+
+                      <button
+                        onClick={() => setRadarFilter("all")}
+                        style={{
+                          padding: "7px 13px",
+                          background: radarFilter === "all" ? "#334155" : "#0f172a",
+                          color: radarFilter === "all" ? "#fff" : "#94a3b8",
+                          border: radarFilter === "all" ? "1.5px solid #64748b" : "1px solid #334155",
+                          borderRadius: 8,
+                          cursor: "pointer",
+                          fontWeight: 800,
+                          transition: "all 0.2s ease"
+                        }}
+                      >
+                        📋 Todas ({radarResults.length})
+                      </button>
+
+                      <button
+                        onClick={handleSaveRadarToHistory}
+                        style={{
+                          padding: "7px 14px",
+                          background: "#10b981",
+                          border: "none",
+                          borderRadius: 8,
+                          color: "#fff",
+                          fontSize: 11,
+                          fontWeight: 800,
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 5,
+                          marginLeft: 4
+                        }}
+                      >
+                        💾 Guardar en Historial ({radarResults.filter(r => r.tier !== 3).length})
+                      </button>
+                    </div>
                   </div>
-                  <div style={{ display: "flex", gap: 8, fontSize: 11, fontWeight: 700, flexWrap: "wrap", alignItems: "center" }}>
-                    <span style={{ background: "#10b98122", color: "#10b981", padding: "3px 8px", borderRadius: 6, border: "1px solid #10b98144" }}>
-                      🗳️ {radarResults.filter(r => r.consensus?.isUnanimous).length} Unánimes (3/3)
-                    </span>
-                    <span style={{ background: "#f59e0b22", color: "#f59e0b", padding: "3px 8px", borderRadius: 6, border: "1px solid #f59e0b44" }}>
-                      ⚖️ {radarResults.filter(r => r.consensus?.votesPassed === 2).length} Consenso (2/3)
-                    </span>
-                    <span style={{ background: "#38bdf822", color: "#38bdf8", padding: "3px 8px", borderRadius: 6, border: "1px solid #38bdf844" }}>
-                      🟢 {radarResults.filter(r => r.tier === 1).length} Tier 1 Élite
-                    </span>
-                    <button
-                      onClick={handleSaveRadarToHistory}
-                      style={{
-                        padding: "6px 14px",
-                        background: "#10b981",
-                        border: "none",
-                        borderRadius: 6,
-                        color: "#fff",
-                        fontSize: 11,
-                        fontWeight: 800,
-                        cursor: "pointer",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 5
-                      }}
-                    >
-                      💾 Guardar Radar en Historial ({radarResults.filter(r => r.tier !== 3).length})
-                    </button>
-                  </div>
-                </div>
 
                 {saveActionMsg && (
                   <div style={{ background: "#064e3b", border: "1px solid #10b981", color: "#a7f3d0", padding: "12px 18px", borderRadius: 8, fontSize: 13, fontWeight: 800, display: "flex", alignItems: "center", gap: 8 }}>
@@ -2228,11 +2321,124 @@ export default function App() {
                       )}
                     </div>
                   </div>
+                ) : displayedRadarResults.length === 0 ? (
+                  <div style={{ background: "#0f172a", border: "1px solid #1e293b", padding: 36, borderRadius: 14, textAlign: "center", color: "#94a3b8", display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+                    <div style={{ fontSize: 32 }}>🔍</div>
+                    <div style={{ fontSize: 16, fontWeight: 900, color: "#f8fafc" }}>
+                      No hay selecciones que coincidan con el filtro activo.
+                    </div>
+                    <div style={{ fontSize: 13, color: "#64748b" }}>
+                      Prueba seleccionando "Todas" para explorar la cartelera completa de partidos disponibles.
+                    </div>
+                    <button 
+                      onClick={() => setRadarFilter("all")}
+                      style={{ padding: "8px 20px", background: "#334155", color: "#fff", border: "none", borderRadius: 8, fontWeight: 800, cursor: "pointer", fontSize: 12, marginTop: 4 }}>
+                      Mostrar Todas las Oportunidades ({radarResults.length})
+                    </button>
+                  </div>
                 ) : (
-                  radarResults.map((res, i) => (
-                  <div key={i} style={{ background: "#0f172a", border: `1px solid ${res.color}44`, borderRadius: 14, padding: 22, display: "flex", flexDirection: "column", gap: 14, boxShadow: "0 4px 20px rgba(0,0,0,0.2)" }}>
-                    
-                    {/* Header de la tarjeta */}
+                  displayedRadarResults.map((res, i) => {
+                    const isUnan = Boolean(res.consensus?.isUnanimous || res.consensus?.votesPassed === 3);
+                    const isCons = Boolean(res.consensus?.votesPassed === 2 && !res.consensus?.rlmInfo?.isTrapForPick);
+                    const pNum = parseFloat(res.prob) || 0;
+                    const pStr = (res.pick || '').toLowerCase();
+                    const isST = pStr.includes('cubre') || pStr.includes('hándicap') || pStr.includes('handicap') || pStr.includes('over') || pStr.includes('under') || /[+-]\d+/.test(pStr);
+                    const mProb = isST ? pNum >= 55.5 : pNum >= 60.0;
+                    const isApp = (isUnan || isCons) && mProb && !res.consensus?.rlmInfo?.isTrapForPick;
+                    const isRlm = Boolean(isCons && (res.consensus?.rlmInfo?.isRlmDetected || res.type?.includes('SMART MONEY') || res.type?.includes('STEAM')));
+
+                    let cardBorder = `1px solid ${res.color}44`;
+                    let cardBg = "#0f172a";
+                    let cardShadow = "0 4px 20px rgba(0,0,0,0.2)";
+                    let cardOpacity = 1;
+
+                    if (isUnan && isApp) {
+                      cardBorder = "1.5px solid #10b981";
+                      cardBg = "linear-gradient(145deg, rgba(6, 44, 34, 0.45) 0%, #0c1522 100%)";
+                      cardShadow = "0 0 25px rgba(16, 185, 129, 0.22), inset 0 0 15px rgba(16, 185, 129, 0.04), 0 8px 32px rgba(0, 0, 0, 0.4)";
+                    } else if (isApp && (isRlm || isCons)) {
+                      cardBorder = "1.5px solid #06b6d4";
+                      cardBg = "linear-gradient(145deg, rgba(8, 38, 53, 0.5) 0%, #0c1522 100%)";
+                      cardShadow = "0 0 25px rgba(6, 182, 212, 0.22), inset 0 0 15px rgba(6, 182, 212, 0.04), 0 8px 32px rgba(0, 0, 0, 0.4)";
+                    } else {
+                      cardBorder = "1px solid #334155";
+                      cardBg = "#090d16";
+                      cardShadow = "0 4px 15px rgba(0, 0, 0, 0.25)";
+                      cardOpacity = 0.72;
+                    }
+
+                    return (
+                    <div key={i} style={{ 
+                      background: cardBg, 
+                      border: cardBorder, 
+                      borderRadius: 14, 
+                      padding: 22, 
+                      display: "flex", 
+                      flexDirection: "column", 
+                      gap: 14, 
+                      boxShadow: cardShadow,
+                      opacity: cardOpacity,
+                      transition: "all 0.25s ease"
+                    }}>
+                      {/* Sello de Garantía y Estatus de Aprobación */}
+                      {isUnan && isApp ? (
+                        <div style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          background: "linear-gradient(90deg, rgba(16, 185, 129, 0.22), rgba(16, 185, 129, 0.04))",
+                          border: "1px solid #10b98177",
+                          borderRadius: 8,
+                          padding: "6px 12px",
+                          boxShadow: "0 0 14px rgba(16, 185, 129, 0.22)"
+                        }}>
+                          <span style={{ fontSize: 11, fontWeight: 900, color: "#34d399", display: "flex", alignItems: "center", gap: 6 }}>
+                            <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#10b981", boxShadow: "0 0 10px #10b981" }}></span>
+                            ✨ APROBADA POR TRIBUNAL • CALIFICADA PARA TELEGRAM
+                          </span>
+                          <span style={{ fontSize: 10, fontWeight: 800, color: "#10b981", background: "#10b98122", padding: "2px 8px", borderRadius: 4, border: "1px solid #10b98144" }}>
+                            🗳️ 3/3 VOTOS ÉLITE • STAKE 1.0u - 2.0u
+                          </span>
+                        </div>
+                      ) : isApp ? (
+                        <div style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          background: "linear-gradient(90deg, rgba(6, 182, 212, 0.22), rgba(6, 182, 212, 0.04))",
+                          border: "1px solid #06b6d477",
+                          borderRadius: 8,
+                          padding: "6px 12px",
+                          boxShadow: "0 0 14px rgba(6, 182, 212, 0.22)"
+                        }}>
+                          <span style={{ fontSize: 11, fontWeight: 900, color: "#22d3ee", display: "flex", alignItems: "center", gap: 6 }}>
+                            <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#06b6d4", boxShadow: "0 0 10px #06b6d4" }}></span>
+                            🚨 DINERO INTELIGENTE (RLM) • STEAM INSTITUCIONAL
+                          </span>
+                          <span style={{ fontSize: 10, fontWeight: 800, color: "#06b6d4", background: "#06b6d422", padding: "2px 8px", borderRadius: 4, border: "1px solid #06b6d444" }}>
+                            ⚖️ 2/3 CONSENSO • STAKE 0.4u
+                          </span>
+                        </div>
+                      ) : (
+                        <div style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          background: "rgba(30, 41, 59, 0.3)",
+                          border: "1px solid #334155",
+                          borderRadius: 8,
+                          padding: "5px 12px"
+                        }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", display: "flex", alignItems: "center", gap: 6 }}>
+                            ⚠️ EN OBSERVACIÓN • SIN CONSENSO COMPLETO
+                          </span>
+                          <span style={{ fontSize: 10, color: "#64748b", background: "#1e293b", padding: "2px 6px", borderRadius: 4 }}>
+                            FUERA DE TELEGRAM
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Header de la tarjeta */}
                     <div className="radar-card-top" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
                       <div>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
@@ -2455,11 +2661,12 @@ export default function App() {
                         </button>
                       </div>
                     </div>
-
                   </div>
-                )))}
-              </div>
-            )}
+                );
+              }))}
+            </div>
+          );
+        })()}
 
             {/* COMBOS DE VALOR DEL MISMO JUEGO Y PARLEYS */}
             {radarResults.length > 0 && !radarLoading && (() => {
