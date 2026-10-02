@@ -164,9 +164,9 @@ function pruneCache(cache) {
   const entries = Object.keys(cache)
     .filter(id => id !== '_meta' && cache[id] && typeof cache[id] === 'object')
     .map(id => ({ id, data: cache[id] }))
-    // Conservar pronósticos de los últimos 5 días (120 horas) y depurar pendientes pre-calibración con anomalías
+    // Conservar pronósticos de los últimos 8 días (192 horas) para soportar el Corte Semanal de los Lunes
     .filter(item => {
-      if (item.data.timestamp && (now - item.data.timestamp >= 120 * 60 * 60 * 1000)) return false;
+      if (item.data.timestamp && (now - item.data.timestamp >= 192 * 60 * 60 * 1000)) return false;
       if (!item.data.audited && item.data.status === 'pending') {
         const oddVal = parseFloat(item.data.odds) || 1.90;
         const pickText = item.data.pick || '';
@@ -179,7 +179,7 @@ function pruneCache(cache) {
       return true;
     })
     .sort((a, b) => (b.data.timestamp || 0) - (a.data.timestamp || 0))
-    .slice(0, 65); // Hasta 65 pronósticos recientes (Top Telegram + Unánimes 3/3 del Portal/Radar)
+    .slice(0, 100); // Hasta 100 pronósticos recientes (Corte Semanal + Top Telegram + Unánimes 3/3)
 
   entries.forEach(({ id, data }) => {
     clean[id] = data;
@@ -1066,6 +1066,7 @@ export function buildOpportunitiesAndTopSlate({
 export async function runDailyTelegramAudit(options = {}) {
   const isDryRun = options.dryRun || process.argv.includes('--dry-run');
   const sendToTelegram = options.sendToTelegram !== undefined ? options.sendToTelegram : true;
+  const sendWeeklyAudit = options.sendWeeklyAudit !== undefined ? options.sendWeeklyAudit : (process.argv.includes('--weekly') || process.argv.includes('--semanal'));
   const forceResend = options.forceAudit || process.argv.includes('--audit');
   const providedCache = options.ledger || await loadCloudLedger();
 
@@ -1222,6 +1223,83 @@ export async function runDailyTelegramAudit(options = {}) {
     }
   }
 
+  // ================= CORTE DE CAJA SEMANAL CONSOLIDADO (LUNES POR LA MAÑANA) =================
+  let weeklyAuditSent = false;
+  if (sendWeeklyAudit) {
+    const now = Date.now();
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+    const weeklyAudited = allAuditedRecent.filter(p => {
+      const t = p.timestamp || p.auditedAt;
+      return t && (now - t <= sevenDaysMs) && p.status && p.status !== 'pending';
+    });
+
+    if (weeklyAudited.length > 0) {
+      const sportStats = {};
+      let totalW = 0, totalL = 0, totalP = 0, totalStaked = 0, totalNet = 0;
+
+      weeklyAudited.forEach(p => {
+        const s = (p.sport || 'General').trim();
+        if (!sportStats[s]) sportStats[s] = { won: 0, lost: 0, push: 0, netUnits: 0, staked: 0 };
+        const st = parseFloat(p.stakeUnits) || 2.0;
+        const nu = parseFloat(p.netUnits) || 0;
+        sportStats[s].staked += st;
+        sportStats[s].netUnits += nu;
+        totalStaked += st;
+        totalNet += nu;
+
+        if (p.status === 'won') {
+          sportStats[s].won++;
+          totalW++;
+        } else if (p.status === 'lost') {
+          sportStats[s].lost++;
+          totalL++;
+        } else {
+          sportStats[s].push++;
+          totalP++;
+        }
+      });
+
+      const sportLines = Object.keys(sportStats).map(s => {
+        const st = sportStats[s];
+        const sClean = s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        let icon = '🎯';
+        if (sClean.includes('fut') || sClean.includes('soc')) icon = '⚽';
+        else if (sClean.includes('mlb') || sClean.includes('beis')) icon = '⚾';
+        else if (sClean.includes('nfl') || sClean.includes('americ')) icon = '🏈';
+        const sNetSign = st.netUnits >= 0 ? '+' : '';
+        return `${icon} *${s}:* \`${st.won}G - ${st.lost}P${st.push > 0 ? ` - ${st.push}E` : ''}\` | \`${sNetSign}${st.netUnits.toFixed(2)}u\``;
+      });
+
+      const totalResolved = totalW + totalL;
+      const winRate = totalResolved > 0 ? ((totalW / totalResolved) * 100).toFixed(0) : '0';
+      const roi = totalStaked > 0 ? ((totalNet / totalStaked) * 100).toFixed(1) : '0.0';
+      const netSign = totalNet >= 0 ? '+' : '';
+      const roiSign = parseFloat(roi) >= 0 ? '+' : '';
+
+      const weeklyReportMsg = [
+        `🏛️ *CORTE DE CAJA SEMANAL CONSOLIDADO — STATS-AI PRO* 🏛️`,
+        `🗓️ *Rendición de Cuentas de los Últimos 7 Días (Lunes de Auditoría)*`,
+        ``,
+        `📊 *DESGLOSE DE RENDIMIENTO POR DEPORTE:*`,
+        ...sportLines,
+        ``,
+        `📈 *BALANCE GLOBAL ACUMULADO:*`,
+        `🎯 *Récord Semanal:* \`${totalW} Ganadas - ${totalL} Perdidas${totalP > 0 ? ` - ${totalP} Push` : ''} (${winRate}% Efectividad)\``,
+        `💼 *Ganancia Neta:* \`${netSign}${totalNet.toFixed(2)} Unidades\``,
+        `💰 *ROI Semanal:* \`${roiSign}${roi}%\``,
+        `🏦 *Gestión de Banca (Kelly):* _${totalNet >= 0 ? 'Crecimiento sostenible de capital con varianza controlada.' : 'Preservación de banca y disciplina de control de riesgo activa.'}_`
+      ].join('\n');
+
+      weeklyAuditSent = await sendTelegramMessage(weeklyReportMsg, isDryRun);
+      if (weeklyAuditSent && !isDryRun) {
+        if (!providedCache._meta) providedCache._meta = {};
+        const cdmxToday = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+        providedCache._meta.lastWeeklyAuditDate = cdmxToday;
+        ledgerModified = true;
+      }
+    }
+  }
+
   // Hidratar lecciones forenses en memoria de Node.js para que el Voto 3 del Tribunal las consulte de inmediato
   const cloudLessonsForMemory = allAuditedRecent
     .filter(p => p.status === 'lost')
@@ -1298,6 +1376,8 @@ export async function runAlertEngine(options = {}) {
   // Determinar si es turno matutino en CDMX (6:00 AM a 1:30 PM) para enviar el Corte de Caja una vez al día
   const isMorningWindow = cdmxHour >= 6 && cdmxHour <= 13;
   const shouldSendAuditReport = forceAudit || (isMorningWindow && sentCache._meta.lastAuditDate !== cdmxDateStr);
+  const isMondayMorning = isMorningWindow && cdmxDayOfWeek === 'Mon';
+  const shouldSendWeeklyAudit = (options.weekly !== undefined ? options.weekly : (process.argv.includes('--weekly') || process.argv.includes('--semanal'))) || (isMondayMorning && sentCache._meta.lastWeeklyAuditDate !== cdmxDateStr);
 
   // Ejecutar siempre la auditoría para calificar alertas pendientes, actualizar Elo y obtener castigos
   let auditResult = { auditedPicks: [], pendingPicks: [], runtimePenalties: {}, summary: null, auditSent: false };
@@ -1305,6 +1385,7 @@ export async function runAlertEngine(options = {}) {
     auditResult = await runDailyTelegramAudit({
       dryRun: isDryRun,
       sendToTelegram: shouldSendAuditReport,
+      sendWeeklyAudit: shouldSendWeeklyAudit,
       forceAudit,
       ledger: sentCache
     });
