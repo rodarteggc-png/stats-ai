@@ -269,6 +269,23 @@ function isMatchTodayInCdmx(gameDate) {
 }
 
 /**
+ * Verifica si un partido arranca en la franja matutina temprana europea (entre 4:30 a.m. y 9:00 a.m. horario CDMX).
+ * Cubre partidos que arrancan a las 5:30 a.m., 6:30 a.m., 7:00 a.m., 8:00 a.m., etc.
+ */
+function isEarlyEuropeanMorningMatch(gameDate) {
+  if (!gameDate) return false;
+  try {
+    const matchDate = new Date(gameDate);
+    const hour = parseInt(matchDate.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', timeZone: 'America/Mexico_City' }), 10);
+    const min = parseInt(matchDate.toLocaleTimeString('en-US', { hour12: false, minute: '2-digit', timeZone: 'America/Mexico_City' }), 10);
+    const timeDec = hour + (min / 60);
+    return timeDec >= 4.5 && timeDec <= 9.0;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
  * Califica un pronóstico oficial contra el marcador final real (F5 en MLB, Spread/Totales en NFL, 1X2/DC en Fútbol)
  */
 export function gradeOfficialPick(pick, match) {
@@ -1250,21 +1267,29 @@ export async function runAlertEngine(options = {}) {
   const maxPicksToSend = options.maxPicks || 6;
 
   // Determinar hora actual en CDMX para calibrar la ventana:
-  // - Corte Matutino (ej. 9:30 AM, antes de las 14:00): Mira exclusivamente partidos de HOY (próximas 16h).
-  // - Corte Vespertino (ej. 3:30 PM, 14:00 en adelante): Prioriza 100% la tarde/noche de HOY y mira máximo 18h adelante (hasta las 9:30 AM de mañana).
+  // 1. Turno Nocturno de Fin de Semana (Viernes y Sábados a las 11:00 PM / 23h o con shift='nocturno'):
+  //    Mira exclusivamente partidos de fútbol europeo que arrancan temprano la mañana siguiente (5:00 a 9:00 AM CDMX)
+  //    conservando sus Player Props y líneas con valor para poder meterlas con calma la noche anterior.
+  // 2. Corte Matutino (ej. 9:30 AM, antes de las 14:00): Mira partidos de HOY (próximas 16h), omitiendo los que ya iniciaron.
+  // 3. Corte Vespertino (ej. 3:30 PM, 14:00 en adelante): Prioriza 100% la tarde/noche de HOY y mira máximo 18h adelante.
   const cdmxNow = new Date();
   const cdmxHour = parseInt(cdmxNow.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', timeZone: 'America/Mexico_City' }), 10);
   const cdmxDateStr = cdmxNow.toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
-  const isMorningShift = cdmxHour < 14;
+  const cdmxDayOfWeek = cdmxNow.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'America/Mexico_City' });
+
+  const isWeekendNight = (cdmxDayOfWeek === 'Fri' || cdmxDayOfWeek === 'Sat') && cdmxHour >= 21;
+  const isNightShift = options.shift === 'nocturno' || process.argv.includes('--nocturno') || isWeekendNight;
+  const isMorningShift = !isNightShift && cdmxHour < 14;
 
   const rangeArg = process.argv.find(a => a.startsWith('--range='));
-  const defaultRange = isMorningShift ? 'hoy' : 'hoy_y_manana';
-  const defaultHorizon = isMorningShift ? 16 : 18;
+  const defaultRange = isNightShift ? 'hoy_y_manana' : (isMorningShift ? 'hoy' : 'hoy_y_manana');
+  const defaultHorizon = isNightShift ? 14 : (isMorningShift ? 16 : 18);
 
   const dateRange = options.dateRange || (rangeArg ? rangeArg.split('=')[1] : defaultRange);
   const maxHoursAhead = options.maxHoursAhead !== undefined ? options.maxHoursAhead : defaultHorizon;
 
-  console.log(`[${new Date().toISOString()}] 🚀 Iniciando Escaneo Cuantitativo Stats-AI Pro (Turno CDMX ${cdmxHour}h, Rango: ${dateRange}, Horizonte: ${maxHoursAhead}h)...`);
+  const shiftLabel = isNightShift ? '🌙 NOCTURNO (Cartelera Europea 5:30-8:30 AM)' : (isMorningShift ? '☀️ MATUTINO' : '🌆 VESPERTINO');
+  console.log(`[${new Date().toISOString()}] 🚀 Iniciando Escaneo Cuantitativo Stats-AI Pro (Turno CDMX ${cdmxHour}h [${shiftLabel}], Rango: ${dateRange}, Horizonte: ${maxHoursAhead}h)...`);
   if (isDryRun) console.log('⚠️ Modo Dry-Run activo: no se mandarán mensajes reales.');
 
   const sentCache = await loadCloudLedger();
@@ -1297,7 +1322,15 @@ export async function runAlertEngine(options = {}) {
     fetchDailySchedule('nfl', dateRange).catch(() => [])
   ]);
 
-  const filterUpcoming = (m) => !m.isCompleted && isMatchWithinHorizon(m.gameDate, maxHoursAhead);
+  const filterUpcoming = (m) => {
+    if (!m || m.isCompleted) return false;
+    if (!isMatchWithinHorizon(m.gameDate, maxHoursAhead)) return false;
+    if (isNightShift) {
+      // En el turno nocturno de fin de semana, enfocar exclusivamente en la jornada europea matutina temprana (5:00 a 9:00 a.m. CDMX)
+      return isEarlyEuropeanMorningMatch(m.gameDate);
+    }
+    return true;
+  };
 
   const soccerMatches = soccerRaw.filter(filterUpcoming);
   const mlbMatches = mlbRaw.filter(filterUpcoming);
@@ -1399,9 +1432,12 @@ export async function runAlertEngine(options = {}) {
       `💼 *Gestión de Banca:* \`${pick.consensus.recommendedStake}\``
     ].join('\n') : `_Gestión Kelly Sugerida: 1.0 a 1.5 Unidades_`;
 
+    const headerTitle = isNightShift
+      ? `🌙 *ALERTA NOCTURNA — JORNADA EUROPEA TEMPRANERA* 🌙\n🔬 *CALIBRACIÓN MONTE CARLO & CONSENSO 3v1*`
+      : `🎯 *ALERTA DE VALOR CUANTITATIVO — TIER 1* 🎯\n🔬 *CALIBRACIÓN MONTE CARLO & CONSENSO 3v1*`;
+
     const message = [
-      `🎯 *ALERTA DE VALOR CUANTITATIVO — TIER 1* 🎯`,
-      `🔬 *CALIBRACIÓN MONTE CARLO & CONSENSO 3v1*`,
+      headerTitle,
       ``,
       `🏆 *${pick.sport}* | ${pick.league}`,
       `⚔️ *${pick.game}*`,

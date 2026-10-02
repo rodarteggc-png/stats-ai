@@ -17,7 +17,8 @@ export default async function handler(req, res) {
 
     const force = req.query?.force === 'true' || req.query?.force === '1';
     const audit = req.query?.audit === 'true' || req.query?.audit === '1';
-    const result = await runAlertEngine({ force, audit });
+    const shift = req.query?.shift || (req.query?.nocturno ? 'nocturno' : null);
+    const result = await runAlertEngine({ force, audit, shift });
     return res.status(200).json({
       success: true,
       timestamp: new Date().toISOString(),
