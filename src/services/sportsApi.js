@@ -173,13 +173,13 @@ export function getMatchLineupStatus(gameDate, sport = 'futbol', homeMeta = null
         xgModifier: 0
       };
     }
-  } else if (sport === 'nfl') {
+  } else if (sport === 'nfl' || sport === 'ncaaf') {
     return {
       isImminent: diffMinutes <= 180 && diffMinutes > 0,
       confirmed: true,
       label: `🏈 QB: ${homeMeta?.qb || 'Titular'} vs ${awayMeta?.qb || 'Titular'}`,
       color: "#10b981",
-      notice: "Informe de lesionados oficial validado.",
+      notice: sport === 'ncaaf' ? "Informe oficial de Colegial FBS validado." : "Informe de lesionados oficial validado.",
       xgModifier: 0
     };
   }
@@ -565,7 +565,8 @@ async function fetchTheOdds(sportKey) {
 let liveCache = {
   futbol: [],
   mlb: [],
-  nfl: []
+  nfl: [],
+  ncaaf: []
 };
 
 const mlbLiveStatsCache = {};
@@ -1949,16 +1950,391 @@ export async function fetchNflWeekSchedule(weekNumber = null) {
   return { weekNumber: actualWeek, seasonYear, games };
 }
 
+// ================= STANDINGS Y ESTADÍSTICAS EN VIVO NCAAF (ESPN COLLEGE FOOTBALL API) =================
+const ncaafStandingsCache = { data: null, timestamp: 0 };
+const NCAAF_STANDINGS_TTL_MS = 2 * 60 * 60 * 1000;
+
+export async function fetchLiveNcaafStandings() {
+  const now = Date.now();
+  if (ncaafStandingsCache.data && (now - ncaafStandingsCache.timestamp < NCAAF_STANDINGS_TTL_MS)) {
+    return ncaafStandingsCache.data;
+  }
+
+  try {
+    const res = await fetch('https://site.api.espn.com/apis/v2/sports/football/college-football/standings');
+    if (!res.ok) throw new Error("Error en API de Standings NCAAF");
+    const json = await res.json();
+    const standingsMap = {};
+
+    function extractEntries(node) {
+      if (node.standings && Array.isArray(node.standings.entries)) {
+        node.standings.entries.forEach(e => {
+          const teamName = e.team?.displayName || e.team?.name || '';
+          if (!teamName) return;
+
+          const pf = parseFloat(e.stats?.find(s => s.name === 'pointsFor')?.displayValue || 0);
+          const pa = parseFloat(e.stats?.find(s => s.name === 'pointsAgainst')?.displayValue || 0);
+          const w = parseFloat(e.stats?.find(s => s.name === 'wins')?.displayValue || 0);
+          const l = parseFloat(e.stats?.find(s => s.name === 'losses')?.displayValue || 0);
+          const t = parseFloat(e.stats?.find(s => s.name === 'ties')?.displayValue || 0);
+          const streak = e.stats?.find(s => s.name === 'streak')?.displayValue || '';
+
+          const gp = w + l + t || 1;
+          const diff = pf - pa;
+          const diffPerGame = diff / gp;
+          const regressedDiff = diffPerGame * (gp / (gp + 4));
+          const epaNet = Number((regressedDiff / 70).toFixed(3));
+          
+          const winPct = (w + 0.5 * t) / gp;
+          const dynamicBaseElo = Math.round(1500 + (winPct * 160) + (diffPerGame * 5));
+
+          standingsMap[teamName] = {
+            id: e.team?.id,
+            teamName,
+            epaNet,
+            elo: dynamicBaseElo,
+            record: `${w}-${l}${t > 0 ? '-' + t : ''}`,
+            streak: streak || (w >= l ? 'W1' : 'L1'),
+            pointsForPerGame: Number((pf / gp).toFixed(1)),
+            pointsAgainstPerGame: Number((pa / gp).toFixed(1))
+          };
+        });
+      }
+      if (Array.isArray(node.children)) {
+        node.children.forEach(extractEntries);
+      }
+    }
+
+    extractEntries(json);
+
+    if (Object.keys(standingsMap).length >= 20) {
+      ncaafStandingsCache.data = standingsMap;
+      ncaafStandingsCache.timestamp = now;
+      return standingsMap;
+    }
+  } catch (err) {
+    console.warn("No se pudo obtener standings en vivo de NCAAF:", err.message);
+  }
+
+  return ncaafStandingsCache.data || {};
+}
+
+const ncaafLiveStatsCache = {};
+
+async function fetchLiveNcaafTeamStats(teamId, fallbackElo, fallbackQb) {
+  if (ncaafLiveStatsCache[teamId]) return ncaafLiveStatsCache[teamId];
+
+  try {
+    const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/football/college-football/teams/${teamId}/statistics`);
+    if (!res.ok) throw new Error("API error");
+    const data = await res.json();
+    const cats = data.results?.stats?.categories || [];
+
+    let totalYards = 0;
+    let totalPlays = 0;
+    let turnoverDiff = 0;
+
+    cats.forEach(cat => {
+      cat.stats?.forEach(s => {
+        if (s.name === 'totalYards') totalYards = parseFloat(s.displayValue.replace(/,/g, ''));
+        if (s.name === 'totalOffensivePlays') totalPlays = parseFloat(s.displayValue.replace(/,/g, ''));
+        if (s.name === 'turnOverDifferential') turnoverDiff = parseFloat(s.displayValue.replace(/,/g, ''));
+      });
+    });
+
+    let rawYpp = totalPlays > 0 ? (totalYards / totalPlays) : 5.6;
+    if (rawYpp < 4.0 || rawYpp > 7.5) {
+      rawYpp = 5.6 + ((fallbackElo - 1500) / 320);
+    }
+    const ypp = Math.min(7.4, Math.max(4.0, rawYpp));
+
+    const result = {
+      ypp: Number(ypp.toFixed(2)),
+      to: turnoverDiff,
+      elo: fallbackElo,
+      qb: fallbackQb
+    };
+    
+    ncaafLiveStatsCache[teamId] = result;
+    return result;
+  } catch (err) {
+    return { ypp: 5.6, to: 0, elo: fallbackElo, qb: fallbackQb };
+  }
+}
+
+/**
+ * Obtiene partidos de la semana en NCAAF (Colegial FBS)
+ * @param {object} options - { weekNumber, top25Only }
+ */
+export async function fetchNcaafWeekSchedule(options = {}) {
+  const { weekNumber = null, top25Only = false } = (typeof options === 'object' && options !== null) ? options : {};
+  
+  const baseUrl = top25Only
+    ? `https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard${weekNumber ? `?week=${weekNumber}` : ''}`
+    : `https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?groups=80&limit=100${weekNumber ? `&week=${weekNumber}` : ''}`;
+
+  const [res, standingsMap] = await Promise.all([
+    fetch(baseUrl),
+    fetchLiveNcaafStandings()
+  ]);
+
+  if (!res.ok) throw new Error("No se pudo conectar a la API de NCAAF Colegial");
+  const data = await res.json();
+
+  const actualWeek = data.week?.number || weekNumber || 1;
+  const seasonYear = data.season?.year || new Date().getFullYear();
+
+  const gamePromises = (data.events || []).map(async (ev) => {
+    const comp = ev.competitions?.[0];
+    if (!comp) return null;
+
+    const home = comp.competitors?.find(c => c.homeAway === 'home');
+    const away = comp.competitors?.find(c => c.homeAway === 'away');
+    if (!home || !away) return null;
+
+    const homeBaseName = home.team?.displayName || "Home Team";
+    const awayBaseName = away.team?.displayName || "Away Team";
+    const homeAbbr = home.team?.abbreviation || "";
+    const awayAbbr = away.team?.abbreviation || "";
+    const homeLogo = home.team?.logo || "";
+    const awayLogo = away.team?.logo || "";
+    const homeId = home.team?.id;
+    const awayId = away.team?.id;
+
+    const homeRank = (home.curatedRank?.current && home.curatedRank.current <= 25) ? home.curatedRank.current : null;
+    const awayRank = (away.curatedRank?.current && away.curatedRank.current <= 25) ? away.curatedRank.current : null;
+
+    const homeName = homeRank ? `#${homeRank} ${homeBaseName}` : homeBaseName;
+    const awayName = awayRank ? `#${awayRank} ${awayBaseName}` : awayBaseName;
+
+    const liveHStanding = standingsMap[homeBaseName] || Object.values(standingsMap).find(t => isTeamMatch(t.teamName, homeBaseName));
+    const liveAStanding = standingsMap[awayBaseName] || Object.values(standingsMap).find(t => isTeamMatch(t.teamName, awayBaseName));
+
+    const liveHomeQb = home.leaders?.find(l => l.name === 'passingLeader')?.leaders?.[0]?.athlete?.displayName;
+    const liveAwayQb = away.leaders?.find(l => l.name === 'passingLeader')?.leaders?.[0]?.athlete?.displayName;
+
+    const baseEloHome = homeRank ? 1680 - (homeRank * 4) : 1500;
+    const baseEloAway = awayRank ? 1680 - (awayRank * 4) : 1500;
+
+    const effectiveHomeElo = liveHStanding?.elo || baseEloHome;
+    const effectiveAwayElo = liveAStanding?.elo || baseEloAway;
+    const effectiveHomeQb = liveHomeQb || 'QB Titular';
+    const effectiveAwayQb = liveAwayQb || 'QB Titular';
+    const effectiveHomeEpa = liveHStanding?.epaNet !== undefined ? liveHStanding.epaNet : (homeRank ? 0.12 : 0.0);
+    const effectiveAwayEpa = liveAStanding?.epaNet !== undefined ? liveAStanding.epaNet : (awayRank ? 0.12 : 0.0);
+
+    const [hStats, aStats, weather] = await Promise.all([
+      fetchLiveNcaafTeamStats(homeId, effectiveHomeElo, effectiveHomeQb),
+      fetchLiveNcaafTeamStats(awayId, effectiveAwayElo, effectiveAwayQb),
+      fetchStadiumWeather(homeBaseName)
+    ]);
+
+    const odds = comp.odds?.find(Boolean);
+    const espnSharp = extractEspnSharpMarket(odds, homeBaseName, awayBaseName);
+    let rawSpread = odds?.spread !== undefined ? parseFloat(odds.spread) : -3.5;
+    const favoredAbbr = odds?.details?.split(' ')?.[0] || homeAbbr;
+    let spread = rawSpread;
+    if (favoredAbbr && awayAbbr && favoredAbbr.toUpperCase() === awayAbbr.toUpperCase()) {
+      spread = Math.abs(rawSpread);
+    } else if (favoredAbbr && homeAbbr && favoredAbbr.toUpperCase() === homeAbbr.toUpperCase()) {
+      spread = -Math.abs(rawSpread);
+    }
+    const overUnder = odds?.overUnder || 52.5;
+
+    const homeRecord = liveHStanding?.record || home.records?.[0]?.summary || "0-0";
+    const awayRecord = liveAStanding?.record || away.records?.[0]?.summary || "0-0";
+
+    const gameStatus = comp.status?.type?.name || "STATUS_SCHEDULED";
+    const isCompleted = comp.status?.type?.completed === true;
+    const homeScore = isCompleted ? parseInt(home.score || 0, 10) : null;
+    const awayScore = isCompleted ? parseInt(away.score || 0, 10) : null;
+
+    return {
+      id: `ncaaf-${ev.id}`,
+      sport: 'ncaaf',
+      isCollege: true,
+      homeRank,
+      awayRank,
+      gameDate: ev.date,
+      gameStatus,
+      isCompleted,
+      homeScore,
+      awayScore,
+      weather: weather || { windMph: 0, tempC: 22, isDome: false, notice: "Clima estándar colegial" },
+      home: {
+        name: homeName,
+        baseName: homeBaseName,
+        abbr: homeAbbr,
+        logo: homeLogo,
+        record: homeRecord,
+        rank: homeRank,
+        streak: liveHStanding?.streak,
+        qb: effectiveHomeQb,
+        ypp: hStats.ypp,
+        turnoverDiff: hStats.to,
+        elo: getDynamicElo(homeBaseName, effectiveHomeElo),
+        epaNet: effectiveHomeEpa
+      },
+      away: {
+        name: awayName,
+        baseName: awayBaseName,
+        abbr: awayAbbr,
+        logo: awayLogo,
+        record: awayRecord,
+        rank: awayRank,
+        streak: liveAStanding?.streak,
+        qb: effectiveAwayQb,
+        ypp: aStats.ypp,
+        turnoverDiff: aStats.to,
+        elo: getDynamicElo(awayBaseName, effectiveAwayElo),
+        epaNet: effectiveAwayEpa
+      },
+      vegas: {
+        spread,
+        overUnder,
+        details: odds?.details || `${spread > 0 ? '+' : ''}${spread}`,
+        favoredTeam: odds?.details?.split(' ')?.[0] || homeAbbr
+      },
+      market: {
+        ...(espnSharp || {}),
+        vegasSpread: spread,
+        vegasOverUnder: overUnder,
+        open: espnSharp?.openHome || "1.90",
+        current: espnSharp?.homeOdds || "1.90",
+        hasRealOdds: Boolean(espnSharp?.hasRealML || odds?.spread !== undefined),
+        details: odds?.details || `${spread > 0 ? '+' : ''}${spread}`,
+        provider: espnSharp?.provider || "DraftKings"
+      }
+    };
+  });
+
+  const resolvedGames = await Promise.all(gamePromises);
+  const games = resolvedGames.filter(Boolean);
+
+  // ================= INTEGRAR THE ODDS API (NCAAF) =================
+  try {
+    const oddsData = await fetchTheOdds('americanfootball_ncaaf');
+    if (oddsData && Array.isArray(oddsData)) {
+      games.forEach(game => {
+        const match = oddsData.find(o =>
+          (o.home_team === game.home.baseName || o.home_team.includes(game.home.baseName.split(' ').pop())) &&
+          (o.away_team === game.away.baseName || o.away_team.includes(game.away.baseName.split(' ').pop()))
+        );
+        if (match && match.bookmakers && match.bookmakers.length > 0) {
+          const bookie = match.bookmakers.find(b => b.key === 'pinnacle') || match.bookmakers.find(b => b.key === 'draftkings') || match.bookmakers.find(b => b.key === 'bet365') || match.bookmakers[0];
+          const h2h = bookie.markets.find(m => m.key === 'h2h');
+          const spreadsM = bookie.markets.find(m => m.key === 'spreads');
+          const totalsM = bookie.markets.find(m => m.key === 'totals');
+
+          if (!game.market) game.market = {};
+
+          if (h2h && h2h.outcomes) {
+            const hOutcome = h2h.outcomes.find(o => o.name === match.home_team);
+            const aOutcome = h2h.outcomes.find(o => o.name === match.away_team);
+            if (hOutcome && aOutcome) {
+              game.market.homeOdds = hOutcome.price.toString();
+              game.market.awayOdds = aOutcome.price.toString();
+              game.market.current = game.market.homeOdds;
+              game.market.bookmaker = bookie.title;
+              game.market.hasRealOdds = true;
+            }
+          }
+          if (spreadsM && spreadsM.outcomes) {
+            const hSpread = spreadsM.outcomes.find(o => o.name === match.home_team);
+            if (hSpread && hSpread.point !== undefined) {
+              game.vegas.spread = parseFloat(hSpread.point);
+              game.market.vegasSpread = game.vegas.spread;
+              game.market.homeSpreadOdds = hSpread.price?.toString() || '1.91';
+            }
+          }
+          if (totalsM && totalsM.outcomes) {
+            const overOut = totalsM.outcomes.find(o => o.name.toLowerCase() === 'over');
+            if (overOut && overOut.point !== undefined) {
+              game.vegas.overUnder = parseFloat(overOut.point);
+              game.market.vegasOverUnder = game.vegas.overUnder;
+            }
+          }
+        }
+      });
+    }
+  } catch (e) {
+    console.warn("Aviso obteniendo cuotas TheOdds NCAAF:", e.message);
+  }
+
+  return { weekNumber: actualWeek, seasonYear, games };
+}
+
+/**
+ * Obtiene partidos reales de NCAAF Colegial FBS para el Radar de Oportunidades
+ */
+async function fetchRealNcaafSchedule(dateRange = "hoy", options = {}) {
+  const weekData = await fetchNcaafWeekSchedule(options);
+  let games = weekData.games || [];
+
+  return games.map(g => {
+    const absSpread = Math.abs(g.vegas?.spread !== undefined ? g.vegas.spread : 3.5);
+    const isOpeningHunt = absSpread === 2.5 || absSpread === 3.5 || absSpread === 7.5;
+    const openingHuntAlert = absSpread === 2.5 
+      ? "💎 OPORTUNIDAD APERTURA: Favorito en -2.5 (antes del número clave 3)" 
+      : (absSpread === 3.5 ? "⚠️ OPORTUNIDAD APERTURA: Underdog en +3.5 (colchón clave de FG)" : "⚠️ OPORTUNIDAD APERTURA: Underdog en +7.5 (colchón clave de TD)");
+
+    return {
+      ...g,
+      sport: 'ncaaf',
+      isCollege: true,
+      league: `NCAAF Colegial FBS (Semana ${weekData.weekNumber})`,
+      lineupStatus: getMatchLineupStatus(g.gameDate, 'ncaaf', g.home, g.away),
+      home: {
+        ...g.home,
+        recentForm: g.home.streak ? `Racha: ${g.home.streak} (${g.home.record})` : (g.home.elo > 1580 ? "W W W W W" : "L W L L W"),
+        netYardsPerPlay: g.home.ypp ? g.home.ypp.toFixed(1) : "5.8",
+        turnoverDifferential: g.home.turnoverDiff !== undefined ? g.home.turnoverDiff : 0,
+        epaNet: g.home.epaNet !== undefined ? g.home.epaNet : 0.0,
+        daysRest: 7,
+        keyPlayer: { name: g.home.qb, passYardsAvg: Math.round((g.home.ypp || 5.8) * 45) }
+      },
+      away: {
+        ...g.away,
+        recentForm: g.away.streak ? `Racha: ${g.away.streak} (${g.away.record})` : (g.away.elo > 1580 ? "W W W W W" : "L L W L L"),
+        netYardsPerPlay: g.away.ypp ? g.away.ypp.toFixed(1) : "5.4",
+        turnoverDifferential: g.away.turnoverDiff !== undefined ? g.away.turnoverDiff : 0,
+        epaNet: g.away.epaNet !== undefined ? g.away.epaNet : 0.0,
+        daysRest: 7,
+        keyPlayer: { name: g.away.qb, passYardsAvg: Math.round((g.away.ypp || 5.4) * 42) }
+      },
+      vegas: {
+        ...g.vegas,
+        isOpeningHunt,
+        openingHuntAlert
+      },
+      market: {
+        ...(g.market || {}),
+        vegasSpread: g.vegas.spread,
+        vegasOverUnder: g.vegas.overUnder,
+        open: g.market?.openHome || g.market?.open || "1.90",
+        current: g.market?.homeOdds || g.market?.current || "1.90",
+        isSteamMove: g.market?.isSteamMove || false,
+        steamTeam: g.market?.steamTeam || null,
+        steamDetails: g.market?.steamDetails || null,
+        details: g.vegas.details,
+        provider: g.market?.provider || "DraftKings"
+      }
+    };
+  });
+}
+
 /**
  * Descarga la jornada real para el Radar de Oportunidades
  */
-export async function fetchDailySchedule(sport, dateRange = "hoy") {
+export async function fetchDailySchedule(sport, dateRange = "hoy", options = {}) {
   try {
     let schedule = [];
     if (sport === 'mlb') {
       schedule = await fetchRealMlbSchedule(dateRange);
     } else if (sport === 'nfl') {
       schedule = await fetchRealNflSchedule(dateRange);
+    } else if (sport === 'ncaaf') {
+      schedule = await fetchRealNcaafSchedule(dateRange, options);
     } else {
       schedule = await fetchRealSoccerSchedule(dateRange);
     }
@@ -2032,27 +2408,29 @@ export async function fetchMatchData(query, sport) {
       },
       market: { open: "1.95", current: "1.85", isSteamMove: true }
     };
-  } else if (sport === 'nfl') {
+  } else if (sport === 'nfl' || sport === 'ncaaf') {
+    const isCol = sport === 'ncaaf';
     return {
-      sport: 'nfl',
-      league: 'NFL (Simulación)',
+      sport,
+      isCollege: isCol,
+      league: isCol ? 'NCAAF Colegial (Simulación)' : 'NFL (Simulación)',
       home: {
         name: homeName,
         recentForm: "W W L W W",
-        netYardsPerPlay: "5.8",
+        netYardsPerPlay: isCol ? "6.2" : "5.8",
         turnoverDifferential: 2,
-        elo: 1560,
+        elo: isCol ? 1580 : 1560,
         daysRest: 7,
-        keyPlayer: { name: "QB Titular", passYardsAvg: 260 }
+        keyPlayer: { name: "QB Titular", passYardsAvg: isCol ? 280 : 260 }
       },
       away: {
         name: awayName,
         recentForm: "L L W L W",
-        netYardsPerPlay: "5.1",
+        netYardsPerPlay: isCol ? "5.4" : "5.1",
         turnoverDifferential: -1,
-        elo: 1470,
+        elo: isCol ? 1490 : 1470,
         daysRest: 7,
-        keyPlayer: { name: "RB Estrella", rushYardsAvg: 70 }
+        keyPlayer: { name: "RB Estrella", rushYardsAvg: isCol ? 85 : 70 }
       },
       market: { open: "2.10", current: "1.90", isSteamMove: true }
     };

@@ -3,7 +3,7 @@ import { toPng } from "html-to-image";
 import { calculateMatchProbabilities, getFairOddsDecimal, calculatePropProbabilities } from "./utils/poisson";
 import { calculateMlbProbabilities } from "./utils/sabermetrics";
 import { calculateNflProbabilities, calculateSpreadCoverProbability } from "./utils/gridiron";
-import { simulateSoccerMatch, simulateMlbMatch, simulateNflMatch, bayesianCalibrate } from "./utils/monteCarlo";
+import { simulateSoccerMatch, simulateMlbMatch, simulateNflMatch } from "./utils/monteCarlo";
 import { evaluateEnsembleConsensus } from "./utils/ensemble";
 import { calculateKellyStake } from "./utils/kelly";
 import { generateDailyMlbProps } from "./utils/mlbProps";
@@ -46,6 +46,8 @@ function buildSystemPrompt() {
 export default function App() {
   const [activeTab, setActiveTab] = useState("simulador");
   const [activeSport, setActiveSport] = useState("futbol"); 
+  const [footballLeague, setFootballLeague] = useState("nfl"); // "nfl" | "ncaaf"
+  const [ncaafFilter, setNcaafFilter] = useState("top25"); // "top25" | "all"
   
   // Simulador State
   const [query, setQuery] = useState("");
@@ -272,7 +274,7 @@ export default function App() {
     if (activeTab === 'radar') {
       runRadar();
     }
-  }, [activeTab, activeSport]);
+  }, [activeTab, activeSport, footballLeague, ncaafFilter]);
 
   function loadHistoryAndLessons() {
     setHistory(getHistory(activeSport));
@@ -460,7 +462,8 @@ export default function App() {
     setRadarLoading(true);
     setRadarResults([]);
     try {
-      const schedule = await fetchDailySchedule(activeSport, radarDateRange);
+      const targetSport = (activeSport === 'nfl' && footballLeague === 'ncaaf') ? 'ncaaf' : activeSport;
+      const schedule = await fetchDailySchedule(targetSport, radarDateRange, { top25Only: ncaafFilter === 'top25' });
       setRawScheduleCount(schedule.length);
 
       if (activeSport === 'mlb') {
@@ -498,10 +501,11 @@ export default function App() {
             }
           };
         } else if (activeSport === 'nfl') {
+          const isCol = m.isCollege || m.sport === 'ncaaf' || footballLeague === 'ncaaf';
           const spread = m.vegas?.spread !== undefined ? m.vegas.spread : -3.5;
-          const total = m.vegas?.overUnder !== undefined ? m.vegas.overUnder : 44.5;
+          const total = m.vegas?.overUnder !== undefined ? m.vegas.overUnder : (isCol ? 52.5 : 44.5);
           const wind = m.weather?.windMph || 0;
-          return { id: mKey, sport: 'nfl', params: { lead: 0, spread, total, wind, iterations: 10000 } };
+          return { id: mKey, sport: isCol ? 'ncaaf' : 'nfl', params: { lead: 0, spread, total, wind, iterations: 10000, isCollege: isCol } };
         }
         return null;
       }).filter(Boolean);
@@ -1093,11 +1097,12 @@ export default function App() {
           }
 
         } else if (activeSport === 'nfl') {
-          const vegasSpread = matchData.vegas?.spread !== undefined ? matchData.vegas.spread : -3.5;
-          const vegasTotal = matchData.vegas?.overUnder !== undefined ? matchData.vegas.overUnder : (matchData.market?.vegasOverUnder || null);
+          const isCol = Boolean(matchData.isCollege || matchData.sport === 'ncaaf' || footballLeague === 'ncaaf');
+          const vegasSpread = matchData.vegas?.spread !== undefined ? matchData.vegas.spread : (isCol ? -7.0 : -3.5);
+          const vegasTotal = matchData.vegas?.overUnder !== undefined ? matchData.vegas.overUnder : (matchData.market?.vegasOverUnder || (isCol ? 52.8 : null));
           const windMph = matchData.weather?.windMph || 0;
-          const homeYpp = matchData.home?.ypp !== undefined ? matchData.home.ypp : (matchData.home?.netYardsPerPlay || 5.2);
-          const awayYpp = matchData.away?.ypp !== undefined ? matchData.away.ypp : (matchData.away?.netYardsPerPlay || 5.2);
+          const homeYpp = matchData.home?.ypp !== undefined ? matchData.home.ypp : (matchData.home?.netYardsPerPlay || (isCol ? 5.8 : 5.2));
+          const awayYpp = matchData.away?.ypp !== undefined ? matchData.away.ypp : (matchData.away?.netYardsPerPlay || (isCol ? 5.8 : 5.2));
           const homeTo = matchData.home?.turnoverDiff !== undefined ? matchData.home.turnoverDiff : (matchData.home?.turnoverDifferential || 0);
           const awayTo = matchData.away?.turnoverDiff !== undefined ? matchData.away.turnoverDiff : (matchData.away?.turnoverDifferential || 0);
           const homeEpa = matchData.home?.epaNet !== undefined ? matchData.home.epaNet : null;
@@ -1110,18 +1115,19 @@ export default function App() {
             vegasSpread,
             homeEpa, awayEpa,
             vegasTotal,
-            windMph
+            windMph,
+            isCol
           );
           const expectedHomeLead = parseFloat(probs.expectedHomeLead);
-          const mcNfl = mcResultsMap[mKey] || simulateNflMatch(expectedHomeLead, vegasSpread, vegasTotal || 44.5, windMph, 10000);
+          const mcNfl = mcResultsMap[mKey] || simulateNflMatch(expectedHomeLead, vegasSpread, vegasTotal || (isCol ? 52.8 : 44.5), windMph, 10000, isCol);
           const awaySpread = -vegasSpread;
           const homeSpreadFmt = vegasSpread > 0 ? `+${vegasSpread}` : `${vegasSpread}`;
           const awaySpreadFmt = awaySpread > 0 ? `+${awaySpread}` : `${awaySpread}`;
 
           const homeCoversVegas = (expectedHomeLead + vegasSpread) > 0;
           const keyEval = probs.keyEvaluation || {};
-          const homeCoverProb = parseFloat(probs.homeCoverProb || calculateSpreadCoverProbability(expectedHomeLead, vegasSpread, true));
-          const awayCoverProb = parseFloat(probs.awayCoverProb || calculateSpreadCoverProbability(expectedHomeLead, vegasSpread, false));
+          const homeCoverProb = parseFloat(probs.homeCoverProb || calculateSpreadCoverProbability(expectedHomeLead, vegasSpread, true, isCol));
+          const awayCoverProb = parseFloat(probs.awayCoverProb || calculateSpreadCoverProbability(expectedHomeLead, vegasSpread, false, isCol));
 
           const underdogIsAway = vegasSpread < 0;
           const underdogTeam = underdogIsAway ? matchData.away.name : matchData.home.name;
@@ -1133,22 +1139,24 @@ export default function App() {
           const favSpreadFmt = favIsHome ? homeSpreadFmt : awaySpreadFmt;
           const is25 = Math.abs(vegasSpread) === 2.5;
           const openingChosenProb = is25 ? favCoverProb : underdogCoverProb;
+          const maxFavSpread = isCol ? 17.5 : 7.0;
+          const maxDogSpread = isCol ? 24.0 : 7.5;
 
-          // 1. Detección de Trampa de Medio Punto en Números Clave (3.5 o 7.5) -> Tier 1 (solo si el Underdog tiene >= 55.5% de cubrir)
-          if (keyEval.trapWarning && underdogCoverProb >= 55.5) {
+          // 1. Detección de Trampa de Medio Punto en Números Clave o Colchón Colegial -> Tier 1
+          if (keyEval.trapWarning && underdogCoverProb >= 55.5 && underdogSpread <= maxDogSpread) {
             opportunities.push({
               match: matchData,
               probs,
               mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel },
               tier: 1,
-              type: '🏈 PROTECCIÓN NÚMERO CLAVE (SHARP)',
+              type: isCol ? '🎓 PROTECCIÓN UNDERDOG COLEGIAL (NCAAF)' : '🏈 PROTECCIÓN NÚMERO CLAVE (SHARP)',
               pick: `${underdogTeam} +${underdogSpread} (Hándicap Positivo)`,
-              reason: `${keyEval.trapWarning} El juego proyecta un margen de ${expectedHomeLead.toFixed(1)} pts, protegiéndonos con el colchón del número clave.`,
+              reason: `${keyEval.trapWarning} El juego proyecta un margen de ${expectedHomeLead.toFixed(1)} pts, protegiéndonos con el colchón de puntos en ${isCol ? 'fútbol colegial' : 'número clave'}.`,
               prob: `${underdogCoverProb.toFixed(1)}%`,
               odds: "1.91",
               edgeVal: Math.max(4.0, underdogCoverProb - 52.4),
               color: "#10b981",
-              meta: `Número Clave NFL (+${underdogSpread})`
+              meta: isCol ? `Colchón Colegial (+${underdogSpread})` : `Número Clave NFL (+${underdogSpread})`
             });
           }
           // 2. Oportunidad Clave (Favorito en -2.5 por debajo del 3 con >= 55.5% de cubrir)
@@ -1158,7 +1166,7 @@ export default function App() {
               probs,
               mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel },
               tier: 1,
-              type: '💎 NÚMERO CLAVE FAVORABLE',
+              type: isCol ? '💎 NÚMERO CLAVE COLEGIAL (-2.5)' : '💎 NÚMERO CLAVE FAVORABLE',
               pick: `${favTeam} ${favSpreadFmt} (Cubre Línea)`,
               reason: `${keyEval.keyAlert} Proyección favorable superando la línea corta de ${favSpreadFmt}.`,
               prob: `${favCoverProb.toFixed(1)}%`,
@@ -1169,7 +1177,7 @@ export default function App() {
             });
           }
           // 3. Detección Caza-Líneas de Apertura en NFL (solo si el lado cazado supera >= 56.0% de probabilidad de cubrir)
-          else if (matchData.vegas?.isOpeningHunt && openingChosenProb >= 56.0) {
+          else if (!isCol && matchData.vegas?.isOpeningHunt && openingChosenProb >= 56.0) {
             const pickText = is25 
               ? `${favTeam} -2.5 (Cubre Línea)`
               : `${underdogTeam} +${Math.abs(vegasSpread)} (Hándicap Apertura)`;
@@ -1189,15 +1197,17 @@ export default function App() {
               meta: `Apertura Clave: ${homeSpreadFmt}`
             });
           }
-          // 4. Ventaja Clara contra el Spread Local o Visitante (ya sea favorito <= 7.0 o underdog +pts, >= 55.5% prob)
-          else if (homeCoversVegas && homeCoverProb >= 55.5 && (vegasSpread > 0 || Math.abs(vegasSpread) <= 7.0)) {
+          // 4. Ventaja Clara contra el Spread Local o Visitante
+          else if (homeCoversVegas && homeCoverProb >= 55.5 && (vegasSpread > 0 ? Math.abs(vegasSpread) <= maxDogSpread : Math.abs(vegasSpread) <= maxFavSpread)) {
             const isHomeUnderdog = vegasSpread > 0;
             opportunities.push({
               match: matchData,
               probs,
               mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel },
               tier: 1,
-              type: isHomeUnderdog ? '🛡️ HÁNDICAP POSITIVO NFL (UNDERDOG PROTEGIDO)' : '🏈 VENTAJA CONTRA EL SPREAD (NFL)',
+              type: isHomeUnderdog 
+                ? (isCol ? '🛡️ HÁNDICAP POSITIVO LOCAL (NCAAF)' : '🛡️ HÁNDICAP POSITIVO NFL (UNDERDOG PROTEGIDO)')
+                : (isCol ? '🎓 VENTAJA SPREAD COLEGIAL (NCAAF)' : '🏈 VENTAJA CONTRA EL SPREAD (NFL)'),
               pick: `${matchData.home.name} ${homeSpreadFmt} (${isHomeUnderdog ? 'Hándicap Positivo' : 'Cubre Línea de Vegas'})`,
               reason: `El modelo proyecta margen local de ${expectedHomeLead.toFixed(1)} puntos frente a la línea de ${homeSpreadFmt} de Las Vegas (Prob. Cubrir: ${homeCoverProb.toFixed(1)}%, Edge: +${(homeCoverProb - 52.4).toFixed(1)}%).`,
               prob: `${homeCoverProb.toFixed(1)}%`,
@@ -1206,7 +1216,7 @@ export default function App() {
               color: isHomeUnderdog ? "#10b981" : "#3b82f6",
               meta: `Vegas: ${homeSpreadFmt} | Edge: +${(homeCoverProb - 52.4).toFixed(1)}%`
             });
-          } else if (!homeCoversVegas && awayCoverProb >= 55.5 && (awaySpread > 0 || Math.abs(awaySpread) <= 7.0)) {
+          } else if (!homeCoversVegas && awayCoverProb >= 55.5 && (awaySpread > 0 ? Math.abs(awaySpread) <= maxDogSpread : Math.abs(awaySpread) <= maxFavSpread)) {
             const isAwayUnderdog = awaySpread > 0;
             const isHeavySpread = Math.abs(vegasSpread) >= 7.5;
             opportunities.push({
@@ -1215,12 +1225,12 @@ export default function App() {
               mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel },
               tier: isAwayUnderdog ? 1 : 2,
               type: isAwayUnderdog
-                ? (isHeavySpread ? '🛡️ PROTECCIÓN UNDERDOG ANTE SPREAD PESADO' : '🛡️ HÁNDICAP POSITIVO NFL (UNDERDOG PROTEGIDO)')
-                : '🏈 VENTAJA CONTRA EL SPREAD (NFL)',
+                ? (isCol ? '🛡️ HÁNDICAP POSITIVO VISITANTE (NCAAF)' : (isHeavySpread ? '🛡️ PROTECCIÓN UNDERDOG ANTE SPREAD PESADO' : '🛡️ HÁNDICAP POSITIVO NFL (UNDERDOG PROTEGIDO)'))
+                : (isCol ? '🎓 VENTAJA SPREAD COLEGIAL (NCAAF)' : '🏈 VENTAJA CONTRA EL SPREAD (NFL)'),
               pick: `${matchData.away.name} ${awaySpreadFmt} (${isAwayUnderdog ? 'Hándicap Positivo' : 'Cubre Línea de Vegas'})`,
               reason: isAwayUnderdog
-                ? `Valor defensivo en ${matchData.away.name} con colchón de puntos (${awaySpreadFmt}) ante la línea de Las Vegas (+${(awayCoverProb - 52.4).toFixed(1)}% Edge).`
-                : `Superioridad en EPA/Net YPP de ${matchData.away.name} para cubrir la línea corta (${awaySpreadFmt}) como visitante (+${(awayCoverProb - 52.4).toFixed(1)}% Edge).`,
+                ? `Valor en ${matchData.away.name} con colchón de puntos (${awaySpreadFmt}) ante la línea de Las Vegas (+${(awayCoverProb - 52.4).toFixed(1)}% Edge).`
+                : `Superioridad de ${matchData.away.name} para cubrir la línea (${awaySpreadFmt}) como visitante (+${(awayCoverProb - 52.4).toFixed(1)}% Edge).`,
               prob: `${awayCoverProb.toFixed(1)}%`,
               odds: "1.91",
               edgeVal: Math.max(4.0, awayCoverProb - 52.4),
@@ -1237,9 +1247,11 @@ export default function App() {
               probs,
               mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel },
               tier: parseFloat(totalsEval.edge) >= 6.5 ? 1 : 2,
-              type: totalsEval.isUnder ? '💨 TOTALES NFL (VALOR UNDER)' : '🔥 TOTALES NFL (VALOR OVER)',
+              type: totalsEval.isUnder 
+                ? (isCol ? '💨 TOTALES COLEGIAL (VALOR UNDER)' : '💨 TOTALES NFL (VALOR UNDER)') 
+                : (isCol ? '🔥 TOTALES COLEGIAL (VALOR OVER)' : '🔥 TOTALES NFL (VALOR OVER)'),
               pick: totalsEval.pick,
-              reason: `El modelo proyecta un total calibrado de ${totalsEval.effectiveTotal} pts frente a los ${vegasTotal} pts de Las Vegas (Edge: +${totalsEval.edge}%). ${parseFloat(totalsEval.windPenalty) > 0 ? `Viento adverso de ${windMph} mph en estadio abierto reduce anotación y FGs.` : 'Diferencial en ritmo ofensivo y eficiencia neta.'}`,
+              reason: `El modelo proyecta un total calibrado de ${totalsEval.effectiveTotal} pts frente a los ${vegasTotal} pts de Las Vegas (Edge: +${totalsEval.edge}%). ${parseFloat(totalsEval.windPenalty) > 0 ? `Viento adverso de ${windMph} mph en estadio abierto reduce anotación y FGs.` : 'Diferencial en ritmo ofensivo y tempo colegial/profesional.'}`,
               prob: `${totalsEval.isUnder ? totalsEval.underProb : totalsEval.overProb}%`,
               odds: totalsEval.odds || "1.91",
               edgeVal: parseFloat(totalsEval.edge),
@@ -1357,8 +1369,9 @@ export default function App() {
     setAnalysisResult(null);
 
     try {
-      setStep(`📥 Consultando Big Data en vivo de ${activeSport.toUpperCase()}...`);
-      const matchData = await fetchMatchData(targetQuery, activeSport);
+      const targetSport = (activeSport === 'nfl' && footballLeague === 'ncaaf') ? 'ncaaf' : activeSport;
+      setStep(`📥 Consultando Big Data en vivo de ${targetSport === 'ncaaf' ? 'NCAAF Colegial' : activeSport.toUpperCase()}...`);
+      const matchData = await fetchMatchData(targetQuery, targetSport);
 
       const learned = getLearnedAdjustmentsForMatch(matchData.home.name, matchData.away.name);
 
@@ -1514,15 +1527,16 @@ export default function App() {
         Total Carreras Esperadas: ${probs.expectedTotal} | Over 8.5 Carreras: ${probs.over85}%
         `;
       } else if (activeSport === 'nfl') {
-        backgroundColor = "#022c22"; 
-        accentColor = "#f59e0b";
-        const homeYpp = matchData.home?.ypp !== undefined ? matchData.home.ypp : (matchData.home?.netYardsPerPlay || 5.2);
-        const awayYpp = matchData.away?.ypp !== undefined ? matchData.away.ypp : (matchData.away?.netYardsPerPlay || 5.2);
+        const isCol = Boolean(matchData.isCollege || matchData.sport === 'ncaaf' || footballLeague === 'ncaaf');
+        backgroundColor = isCol ? "#1e1b4b" : "#022c22"; 
+        accentColor = isCol ? "#8b5cf6" : "#f59e0b";
+        const homeYpp = matchData.home?.ypp !== undefined ? matchData.home.ypp : (matchData.home?.netYardsPerPlay || (isCol ? 5.8 : 5.2));
+        const awayYpp = matchData.away?.ypp !== undefined ? matchData.away.ypp : (matchData.away?.netYardsPerPlay || (isCol ? 5.8 : 5.2));
         const homeTo = matchData.home?.turnoverDiff !== undefined ? matchData.home.turnoverDiff : (matchData.home?.turnoverDifferential || 0);
         const awayTo = matchData.away?.turnoverDiff !== undefined ? matchData.away.turnoverDiff : (matchData.away?.turnoverDifferential || 0);
 
-        const vegasSpread = parseFloat(matchData.vegas?.spread !== undefined ? matchData.vegas.spread : (matchData.market?.spread || -3.5));
-        const vegasTotal = parseFloat(matchData.vegas?.overUnder !== undefined ? matchData.vegas.overUnder : (matchData.market?.vegasOverUnder || 44.5));
+        const vegasSpread = parseFloat(matchData.vegas?.spread !== undefined ? matchData.vegas.spread : (matchData.market?.spread || (isCol ? -7.0 : -3.5)));
+        const vegasTotal = parseFloat(matchData.vegas?.overUnder !== undefined ? matchData.vegas.overUnder : (matchData.market?.vegasOverUnder || (isCol ? 52.8 : 44.5)));
         const windMph = parseFloat(matchData.weather?.windMph || 0);
 
         const probs = calculateNflProbabilities(
@@ -1532,13 +1546,14 @@ export default function App() {
           vegasSpread,
           matchData.home?.epaNet, matchData.away?.epaNet,
           vegasTotal,
-          windMph
+          windMph,
+          isCol
         );
-        mathProbs = { type: 'nfl', probs };
+        mathProbs = { type: isCol ? 'ncaaf' : 'nfl', probs };
 
         const expectedLead = parseFloat(probs.expectedHomeLead);
-        const homeCover = parseFloat(probs.homeCoverProb || calculateSpreadCoverProbability(expectedLead, vegasSpread, true));
-        const awayCover = parseFloat(probs.awayCoverProb || calculateSpreadCoverProbability(expectedLead, vegasSpread, false));
+        const homeCover = parseFloat(probs.homeCoverProb || calculateSpreadCoverProbability(expectedLead, vegasSpread, true, isCol));
+        const awayCover = parseFloat(probs.awayCoverProb || calculateSpreadCoverProbability(expectedLead, vegasSpread, false, isCol));
         const keyEval = probs.keyEvaluation || {};
         const awaySpread = -vegasSpread;
         const homeSpreadFmt = vegasSpread > 0 ? `+${vegasSpread}` : `${vegasSpread}`;
@@ -1551,7 +1566,7 @@ export default function App() {
           recommendedPick = `${underdogTeam} +${underdogSpread} (Hándicap Positivo)`;
           simProbVal = underdogIsAway ? awayCover : homeCover;
           simOdds = "1.91";
-          simPickType = '🏈 PROTECCIÓN NÚMERO CLAVE (SHARP)';
+          simPickType = isCol ? '🎓 PROTECCIÓN UNDERDOG COLEGIAL (NCAAF)' : '🏈 PROTECCIÓN NÚMERO CLAVE (SHARP)';
           simEdgeVal = Math.max(4.0, simProbVal - 52.4);
         } else if (keyEval.keyAlert) {
           const favIsHome = vegasSpread < 0;
@@ -1560,25 +1575,31 @@ export default function App() {
           recommendedPick = `${favTeam} ${favSpreadFmt} (Cubre Línea)`;
           simProbVal = favIsHome ? homeCover : awayCover;
           simOdds = "1.91";
-          simPickType = '💎 NÚMERO CLAVE FAVORABLE';
+          simPickType = isCol ? '💎 NÚMERO CLAVE COLEGIAL (-2.5)' : '💎 NÚMERO CLAVE FAVORABLE';
           simEdgeVal = Math.max(4.0, simProbVal - 52.4);
         } else if (probs.totalsEvaluation?.isValue && parseFloat(probs.totalsEvaluation?.edge) >= 6.0) {
           recommendedPick = probs.totalsEvaluation.pick;
           simProbVal = parseFloat(probs.totalsEvaluation.isUnder ? probs.totalsEvaluation.underProb : probs.totalsEvaluation.overProb);
           simOdds = probs.totalsEvaluation.odds || "1.91";
-          simPickType = probs.totalsEvaluation.isUnder ? '💨 TOTALES NFL (VALOR UNDER)' : '🔥 TOTALES NFL (VALOR OVER)';
+          simPickType = probs.totalsEvaluation.isUnder 
+            ? (isCol ? '💨 TOTALES COLEGIAL (VALOR UNDER)' : '💨 TOTALES NFL (VALOR UNDER)') 
+            : (isCol ? '🔥 TOTALES COLEGIAL (VALOR OVER)' : '🔥 TOTALES NFL (VALOR OVER)');
           simEdgeVal = parseFloat(probs.totalsEvaluation.edge);
         } else if (homeCover >= awayCover) {
           recommendedPick = `${matchData.home.name} ${homeSpreadFmt} (${vegasSpread > 0 ? 'Hándicap Positivo' : 'Cubre Línea de Vegas'})`;
           simProbVal = homeCover;
           simOdds = "1.91";
-          simPickType = vegasSpread > 0 ? '🛡️ HÁNDICAP POSITIVO NFL (UNDERDOG PROTEGIDO)' : '🏈 VENTAJA CONTRA EL SPREAD (NFL)';
+          simPickType = vegasSpread > 0 
+            ? (isCol ? '🛡️ HÁNDICAP POSITIVO LOCAL (NCAAF)' : '🛡️ HÁNDICAP POSITIVO NFL (UNDERDOG PROTEGIDO)') 
+            : (isCol ? '🎓 VENTAJA SPREAD COLEGIAL (NCAAF)' : '🏈 VENTAJA CONTRA EL SPREAD (NFL)');
           simEdgeVal = Math.max(3.5, homeCover - 52.4);
         } else {
           recommendedPick = `${matchData.away.name} ${awaySpreadFmt} (${awaySpread > 0 ? 'Hándicap Positivo' : 'Cubre Línea de Vegas'})`;
           simProbVal = awayCover;
           simOdds = "1.91";
-          simPickType = awaySpread > 0 ? '🛡️ HÁNDICAP POSITIVO NFL (UNDERDOG PROTEGIDO)' : '🏈 VENTAJA CONTRA EL SPREAD (NFL)';
+          simPickType = awaySpread > 0 
+            ? (isCol ? '🛡️ HÁNDICAP POSITIVO VISITANTE (NCAAF)' : '🛡️ HÁNDICAP POSITIVO NFL (UNDERDOG PROTEGIDO)') 
+            : (isCol ? '🎓 VENTAJA SPREAD COLEGIAL (NCAAF)' : '🏈 VENTAJA CONTRA EL SPREAD (NFL)');
           simEdgeVal = Math.max(3.5, awayCover - 52.4);
         }
 
@@ -1630,17 +1651,19 @@ export default function App() {
           );
           simMcStats = { stability: mc.f5Stability, risk: mc.bullpenRisk };
         } else if (activeSport === 'nfl') {
-          const spread = matchData.vegas?.spread !== undefined ? matchData.vegas.spread : -3.5;
-          const total = matchData.vegas?.overUnder !== undefined ? matchData.vegas.overUnder : 44.5;
+          const isCol = Boolean(matchData.isCollege || matchData.sport === 'ncaaf' || footballLeague === 'ncaaf');
+          const spread = matchData.vegas?.spread !== undefined ? matchData.vegas.spread : (isCol ? -7.0 : -3.5);
+          const total = matchData.vegas?.overUnder !== undefined ? matchData.vegas.overUnder : (isCol ? 52.8 : 44.5);
           const wind = matchData.weather?.windMph || 0;
           const lead = parseFloat(mathProbs.probs?.expectedHomeLead || 0);
-          const mc = simulateNflMatch(lead, spread, total, wind, 10000);
+          const mc = simulateNflMatch(lead, spread, total, wind, 10000, isCol);
           simMcStats = { stability: mc.stabilityScore, risk: mc.riskLevel };
         }
       } catch (e) {}
 
+      const isColSport = activeSport === 'nfl' && (matchData.isCollege || matchData.sport === 'ncaaf' || footballLeague === 'ncaaf');
       const simConsensus = evaluateEnsembleConsensus({
-        sport: activeSport,
+        sport: isColSport ? 'ncaaf' : activeSport,
         match: matchData,
         probs: mathProbs.probs || {},
         mcStats: simMcStats,
@@ -1833,11 +1856,88 @@ export default function App() {
         )}
 
         {/* Sport Selector */}
-        <div style={{ display: "flex", gap: 10, marginBottom: 25, justifyContent: "center" }}>
+        <div style={{ display: "flex", gap: 10, marginBottom: activeSport === 'nfl' ? 12 : 25, justifyContent: "center", flexWrap: "wrap" }}>
           <SportBtn id="futbol" icon="⚽" label="Fútbol (Ligas, Femenil, Nations League)" active={activeSport} set={setActiveSport} />
           <SportBtn id="mlb" icon="⚾" label="MLB (Grandes Ligas)" active={activeSport} set={setActiveSport} />
-          <SportBtn id="nfl" icon="🏈" label="NFL" active={activeSport} set={setActiveSport} />
+          <SportBtn id="nfl" icon="🏈" label="Fútbol Americano (NFL / NCAAF)" active={activeSport} set={setActiveSport} />
         </div>
+
+        {/* Sub-Liga Selector (NFL vs NCAAF Colegial) */}
+        {activeSport === 'nfl' && (
+          <div style={{ display: "flex", gap: 10, justifyContent: "center", alignItems: "center", marginBottom: 25, flexWrap: "wrap" }}>
+            <div style={{ background: "#0f172a", padding: "4px", borderRadius: 10, border: "1px solid #1e293b", display: "flex", gap: 6 }}>
+              <button
+                onClick={() => setFootballLeague("nfl")}
+                style={{
+                  padding: "7px 16px",
+                  background: footballLeague === "nfl" ? "#3b82f6" : "transparent",
+                  color: footballLeague === "nfl" ? "#fff" : "#94a3b8",
+                  border: "none",
+                  borderRadius: 7,
+                  fontWeight: 700,
+                  fontSize: 12,
+                  cursor: "pointer",
+                  transition: "all 0.2s"
+                }}
+              >
+                🏈 NFL Profesional
+              </button>
+              <button
+                onClick={() => setFootballLeague("ncaaf")}
+                style={{
+                  padding: "7px 16px",
+                  background: footballLeague === "ncaaf" ? "#8b5cf6" : "transparent",
+                  color: footballLeague === "ncaaf" ? "#fff" : "#94a3b8",
+                  border: "none",
+                  borderRadius: 7,
+                  fontWeight: 700,
+                  fontSize: 12,
+                  cursor: "pointer",
+                  transition: "all 0.2s"
+                }}
+              >
+                🎓 NCAAF Colegial FBS
+              </button>
+            </div>
+
+            {footballLeague === "ncaaf" && (
+              <div style={{ background: "#0f172a", padding: "4px", borderRadius: 10, border: "1px solid #312e81", display: "flex", gap: 6 }}>
+                <button
+                  onClick={() => setNcaafFilter("top25")}
+                  style={{
+                    padding: "7px 14px",
+                    background: ncaafFilter === "top25" ? "#f59e0b" : "transparent",
+                    color: ncaafFilter === "top25" ? "#000" : "#94a3b8",
+                    border: "none",
+                    borderRadius: 7,
+                    fontWeight: 800,
+                    fontSize: 11,
+                    cursor: "pointer",
+                    transition: "all 0.2s"
+                  }}
+                >
+                  ⭐ Top 25 Rankings
+                </button>
+                <button
+                  onClick={() => setNcaafFilter("all")}
+                  style={{
+                    padding: "7px 14px",
+                    background: ncaafFilter === "all" ? "#6366f1" : "transparent",
+                    color: ncaafFilter === "all" ? "#fff" : "#94a3b8",
+                    border: "none",
+                    borderRadius: 7,
+                    fontWeight: 700,
+                    fontSize: 11,
+                    cursor: "pointer",
+                    transition: "all 0.2s"
+                  }}
+                >
+                  🌐 Todos los FBS
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Tabs */}
         <div className="tabs-container" style={{ display: "flex", gap: 10, marginBottom: 25, borderBottom: "1px solid #1e293b", paddingBottom: 10, flexWrap: "wrap" }}>
@@ -1855,7 +1955,7 @@ export default function App() {
             <div style={{ background: "linear-gradient(to right, #0f172a, #1e1b4b)", padding: 30, borderRadius: 16, border: "1px solid #312e81", textAlign: "center" }}>
               <div style={{ fontSize: 32, marginBottom: 10 }}>📡</div>
               <h2 style={{ margin: "0 0 10px 0", color: "#a5b4fc" }}>
-                Radar de Oportunidades en Vivo ({activeSport.toUpperCase()})
+                Radar de Oportunidades en Vivo ({activeSport === 'nfl' ? (footballLeague === 'ncaaf' ? 'NCAAF COLEGIAL FBS' : 'NFL') : activeSport.toUpperCase()})
               </h2>
               <p style={{ color: "#94a3b8", fontSize: 14, maxWidth: 580, margin: "0 auto 20px auto" }}>
                 Revisión de partidos en tiempo real integrando <b>Big Data</b>, <b>Líneas de Vegas</b> y <b>Memoria de Aprendizaje IA</b> sobre fallos previos.
@@ -2839,7 +2939,7 @@ export default function App() {
                 value={query} 
                 onChange={e => setQuery(e.target.value)} 
                 onKeyDown={e => e.key === "Enter" && !loading && analyze()}
-                placeholder={`Buscar partido real (Ej. ${activeSport === 'futbol' ? 'América vs Cruz Azul o Real Madrid' : activeSport === 'mlb' ? 'Yankees vs Red Sox o Dodgers' : 'Chiefs vs Ravens'})`} 
+                placeholder={`Buscar partido real (Ej. ${activeSport === 'futbol' ? 'América vs Cruz Azul o Real Madrid' : activeSport === 'mlb' ? 'Yankees vs Red Sox o Dodgers' : (footballLeague === 'ncaaf' ? 'Georgia vs Alabama o Ohio State' : 'Chiefs vs Ravens')})`} 
                 disabled={loading}
                 style={{ flex: 1, padding: "14px 18px", borderRadius: 8, border: "1px solid #1e293b", background: "#0b1120", color: "#fff", fontSize: 15, outline: "none" }} 
               />

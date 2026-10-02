@@ -40,8 +40,8 @@ export const KEY_NUMBERS = [
  * @param {boolean} forHome - True para calcular cobertura del local, False para visitante
  * @returns {number} Probabilidad porcentual entre 5% y 95%
  */
-export function calculateSpreadCoverProbability(expectedHomeLead, vegasHomeSpread, forHome = true) {
-  const sigma = 13.45; // Desviación estándar empírica de márgenes en NFL moderna (Stern 1991 / NFELO)
+export function calculateSpreadCoverProbability(expectedHomeLead, vegasHomeSpread, forHome = true, isCollege = false) {
+  const sigma = isCollege ? 16.5 : 13.45; // Desviación estándar: 16.5 en Colegial FBS / 13.45 en NFL
   const spread = parseFloat(vegasHomeSpread);
   const lead = parseFloat(expectedHomeLead);
 
@@ -50,21 +50,20 @@ export function calculateSpreadCoverProbability(expectedHomeLead, vegasHomeSprea
   // P(Local Cubre) = P(Margen > -vegasHomeSpread) = 1 - Φ((-spread - lead) / σ) = Φ((lead + spread) / σ)
   let homeCoverProb = normalCdf(lead + spread, 0, sigma);
 
-  // Calibración fina empírica en números clave (clusters discontinuos de 3 y 7 tanto para favorito local como visitante)
+  // Calibración fina empírica en números clave
   const absSpread = Math.abs(spread);
   const favMargin = spread < 0 ? lead : -lead;
+  const keyFactor = isCollege ? 0.6 : 1.0;
+
   if (absSpread === 3.5 && favMargin <= 3.8) {
-    // Underdog +3.5 tiene el colchón del número clave 3 (15.2% de los juegos terminan por 3)
-    if (spread < 0) homeCoverProb = Math.max(0.35, homeCoverProb - 0.04);
-    else homeCoverProb = Math.min(0.75, homeCoverProb + 0.04);
+    if (spread < 0) homeCoverProb = Math.max(0.35, homeCoverProb - (0.04 * keyFactor));
+    else homeCoverProb = Math.min(0.75, homeCoverProb + (0.04 * keyFactor));
   } else if (absSpread === 7.5 && favMargin <= 7.8) {
-    // Underdog +7.5 tiene el colchón del touchdown (7 puntos)
-    if (spread < 0) homeCoverProb = Math.max(0.38, homeCoverProb - 0.035);
-    else homeCoverProb = Math.min(0.74, homeCoverProb + 0.035);
+    if (spread < 0) homeCoverProb = Math.max(0.38, homeCoverProb - (0.035 * keyFactor));
+    else homeCoverProb = Math.min(0.74, homeCoverProb + (0.035 * keyFactor));
   } else if (absSpread === 2.5 && favMargin >= 2.6) {
-    // Favorito -2.5 (por debajo de 3): un gol de campo cubre
-    if (spread < 0) homeCoverProb = Math.min(0.70, homeCoverProb + 0.035);
-    else homeCoverProb = Math.max(0.30, homeCoverProb - 0.035);
+    if (spread < 0) homeCoverProb = Math.min(0.70, homeCoverProb + (0.035 * keyFactor));
+    else homeCoverProb = Math.max(0.30, homeCoverProb - (0.035 * keyFactor));
   }
 
   const resultProb = forHome ? homeCoverProb : (1 - homeCoverProb);
@@ -72,15 +71,10 @@ export function calculateSpreadCoverProbability(expectedHomeLead, vegasHomeSprea
 }
 
 /**
- * Calcula la probabilidad cuantitativa de Over / Under en NFL
- * usando Distribución Normal con σ = 13.80 y factor de frenado por viento sostenido.
- *
- * @param {number} predictedTotal - Total de puntos estimado por el modelo
- * @param {number} vegasTotal - Línea de total de Las Vegas (ej: 44.5)
- * @param {number} windSpeedMph - Velocidad del viento sostenido en mph
+ * Calcula la probabilidad cuantitativa de Over / Under en Fútbol Americano (NFL / NCAAF)
  */
-export function calculateTotalOverUnderProbability(predictedTotal, vegasTotal, windSpeedMph = 0) {
-  const pTot = parseFloat(predictedTotal) || 43.5;
+export function calculateTotalOverUnderProbability(predictedTotal, vegasTotal, windSpeedMph = 0, isCollege = false) {
+  const pTot = parseFloat(predictedTotal) || (isCollege ? 53.5 : 43.5);
   const vTot = parseFloat(vegasTotal);
   if (isNaN(vTot) || vTot <= 0) {
     return {
@@ -95,16 +89,15 @@ export function calculateTotalOverUnderProbability(predictedTotal, vegasTotal, w
     };
   }
 
-  // Factor de degradación climática por viento en estadios abiertos:
-  // Viento sostenido >= 14 mph reduce pases largos y acierto de field goals (~0.35 pts menos por cada mph sobre 12 mph)
+  // Factor de degradación climática por viento en estadios abiertos
   let windPenalty = 0;
   const wind = parseFloat(windSpeedMph) || 0;
   if (wind >= 14) {
     windPenalty = Math.min(6.5, (wind - 12) * 0.35);
   }
 
-  const effectiveTotal = Math.max(28.0, pTot - windPenalty);
-  const sigmaTotal = 13.80; // Desviación estándar empírica de totales combinados en NFL
+  const effectiveTotal = Math.max(25.0, pTot - windPenalty);
+  const sigmaTotal = isCollege ? 15.20 : 13.80;
 
   // P(Under) = P(Puntos < vegasTotal) = Φ((vegasTotal - effectiveTotal) / σ)
   const underProb = normalCdf(vTot - effectiveTotal, 0, sigmaTotal);
@@ -133,7 +126,7 @@ export function calculateTotalOverUnderProbability(predictedTotal, vegasTotal, w
   };
 }
 
-export function evaluateNflSpreadValue(expectedHomeLead, vegasSpread) {
+export function evaluateNflSpreadValue(expectedHomeLead, vegasSpread, isCollege = false) {
   const marginDiff = expectedHomeLead + vegasSpread;
   const absVegas = Math.abs(vegasSpread);
   let keyAlert = null;
@@ -157,11 +150,11 @@ export function evaluateNflSpreadValue(expectedHomeLead, vegasSpread) {
     }
   }
 
-  // 2. Filtro de Seguridad Preventivo: Spreads Pesados (>= 7.5 pts)
-  // En la NFL moderna, los favoritos pesados juegan prevent defense al final y sufren Backdoor Covers frecuentes.
-  if (absVegas >= 7.5) {
+  // 2. Filtro de Seguridad Preventivo: Spreads Pesados (>= 7.5 pts en NFL / >= 17.5 pts en Colegial)
+  const heavySpreadThreshold = isCollege ? 17.5 : 7.5;
+  if (absVegas >= heavySpreadThreshold) {
     vetoFavoriteSpread = true;
-    heavySpreadWarning = `⚠️ Veto Preventivo de Spread Pesado (${absVegas} pts >= 7.5): Alto riesgo de Backdoor Cover en 4to cuarto. No apostar al favorito en hándicap abultado.`;
+    heavySpreadWarning = `⚠️ Veto Preventivo de Spread Pesado (${absVegas} pts >= ${heavySpreadThreshold}): Alto riesgo de Backdoor Cover en 4to cuarto. No apostar al favorito en hándicap abultado.`;
   }
 
   return {
@@ -180,33 +173,32 @@ export function calculateNflProbabilities(
   vegasSpread = -3.5,
   homeEpa = null, awayEpa = null,
   vegasTotal = null,
-  windSpeedMph = 0
+  windSpeedMph = 0,
+  isCollege = false
 ) {
-  const adjHomeYPP = Math.min(6.6, Math.max(4.2, parseFloat(homeYPP) || 5.3));
-  const adjAwayYPP = Math.min(6.6, Math.max(4.2, parseFloat(awayYPP) || 5.3));
+  const maxYpp = isCollege ? 7.4 : 6.6;
+  const minYpp = isCollege ? 3.8 : 4.2;
+  const defaultYpp = isCollege ? 5.6 : 5.3;
+  const adjHomeYPP = Math.min(maxYpp, Math.max(minYpp, parseFloat(homeYPP) || defaultYpp));
+  const adjAwayYPP = Math.min(maxYpp, Math.max(minYpp, parseFloat(awayYPP) || defaultYpp));
 
-  // En NFL, una ventaja de 1.0 en Net Yards Per Play equivale aprox a 7 puntos de diferencia.
+  // En fútbol americano colegial la ventaja de localía (HFA) es más pronunciada (~3.2 pts) vs NFL (~2.2 pts)
+  const homeFieldAdvantage = isCollege ? 3.2 : 2.2;
   const yppDiff = adjHomeYPP - adjAwayYPP;
-  // Un diferencial de Turnover de +1 equivale aprox a 3 puntos por partido.
-  const toDiff = (parseFloat(homeTO || 0) - parseFloat(awayTO || 0)) / 17; // Temporada 17 juegos
-
-  const homeFieldAdvantage = 2.2; // Puntos estándar de ventaja de local empírica en NFL moderna
+  const toDiff = (parseFloat(homeTO || 0) - parseFloat(awayTO || 0)) / (isCollege ? 12 : 17);
 
   let rawModelSpread;
-  // Si disponemos de métricas de eficiencia EPA (Expected Points Added)
   if (homeEpa !== null && awayEpa !== null && !isNaN(parseFloat(homeEpa)) && !isNaN(parseFloat(awayEpa))) {
     const epaDiff = parseFloat(homeEpa) - parseFloat(awayEpa);
-    // Ponderación cuantitativa: 60% EPA Net Efficiency + 25% Net YPP + 15% Turnover Differential
-    const epaPts = epaDiff * 55;
-    const yppPts = yppDiff * 4.2;
-    const toPts = toDiff * 2.5;
+    const epaPts = epaDiff * (isCollege ? 50 : 55);
+    const yppPts = yppDiff * (isCollege ? 4.8 : 4.2);
+    const toPts = toDiff * (isCollege ? 3.0 : 2.5);
     rawModelSpread = epaPts + yppPts + toPts + homeFieldAdvantage;
   } else {
-    rawModelSpread = (yppDiff * 6.5) + (toDiff * 3) + homeFieldAdvantage;
+    rawModelSpread = (yppDiff * (isCollege ? 7.2 : 6.5)) + (toDiff * (isCollege ? 3.5 : 3.0)) + homeFieldAdvantage;
   }
 
   // Anclaje Bayesiano con el Spread de Las Vegas (65% Modelo Estructural + 35% Implied Vegas Lead)
-  // Evita divergencias irreales de 10+ puntos contra la línea de cierre institucional
   const spreadNum = parseFloat(vegasSpread) || -3.5;
   const vegasImpliedHomeLead = -spreadNum;
   let predictedPointSpread = (rawModelSpread * 0.65) + (vegasImpliedHomeLead * 0.35);
@@ -219,31 +211,32 @@ export function calculateNflProbabilities(
   const penaltySpreadAdjustment = (Math.min(hPen, 0.08) - Math.min(aPen, 0.08)) * 32;
   predictedPointSpread -= penaltySpreadAdjustment;
 
-  // Convertir el Point Spread a Probabilidad de Victoria (Win Probability) vía Normal CDF (σ = 13.45)
-  const homeWinProb = normalCdf(predictedPointSpread, 0, 13.45) * 100;
+  // Convertir el Point Spread a Probabilidad de Victoria (Win Probability) vía Normal CDF
+  const sigma = isCollege ? 16.5 : 13.45;
+  const homeWinProb = normalCdf(predictedPointSpread, 0, sigma) * 100;
   const awayWinProb = 100 - homeWinProb;
 
   // Probabilidad de Cobertura de Spread (True Normal CDF)
-  const homeCoverProb = calculateSpreadCoverProbability(predictedPointSpread, spreadNum, true);
-  const awayCoverProb = calculateSpreadCoverProbability(predictedPointSpread, spreadNum, false);
+  const homeCoverProb = calculateSpreadCoverProbability(predictedPointSpread, spreadNum, true, isCollege);
+  const awayCoverProb = calculateSpreadCoverProbability(predictedPointSpread, spreadNum, false, isCollege);
 
   // Total de Puntos Estimado Calibrado:
-  // En la NFL moderna, el promedio combinado de YPP es ~10.8 (5.4 por equipo) y el total medio es 43.8 pts.
+  const baseAvgTotal = isCollege ? 52.8 : 43.8;
   const totalYpp = adjHomeYPP + adjAwayYPP;
   const epaTotalAdj = (homeEpa !== null && awayEpa !== null && !isNaN(parseFloat(homeEpa)) && !isNaN(parseFloat(awayEpa)))
     ? (parseFloat(homeEpa) + parseFloat(awayEpa)) * 28
     : 0;
-  const rawModelTotal = 43.8 + ((totalYpp - 10.8) * 3.0) + epaTotalAdj;
+  const rawModelTotal = baseAvgTotal + ((totalYpp - (isCollege ? 11.2 : 10.8)) * 3.2) + epaTotalAdj;
   const vTotNum = parseFloat(vegasTotal);
-  const predictedTotalPoints = (!isNaN(vTotNum) && vTotNum > 28)
-    ? Math.max(vTotNum - 5.0, Math.min(vTotNum + 5.0, (rawModelTotal * 0.60) + (vTotNum * 0.40)))
-    : Math.max(33.0, Math.min(54.0, rawModelTotal));
+  const predictedTotalPoints = (!isNaN(vTotNum) && vTotNum > 24)
+    ? Math.max(vTotNum - 7.0, Math.min(vTotNum + 7.0, (rawModelTotal * 0.60) + (vTotNum * 0.40)))
+    : Math.max(28.0, Math.min(75.0, rawModelTotal));
 
   // Evaluación de Totales (Over/Under) contra Las Vegas y Viento
-  const totalsEvaluation = calculateTotalOverUnderProbability(predictedTotalPoints, vegasTotal, windSpeedMph);
+  const totalsEvaluation = calculateTotalOverUnderProbability(predictedTotalPoints, vegasTotal, windSpeedMph, isCollege);
 
   // Evaluación de Números Clave respecto a Las Vegas
-  const keyEvaluation = evaluateNflSpreadValue(predictedPointSpread, spreadNum);
+  const keyEvaluation = evaluateNflSpreadValue(predictedPointSpread, spreadNum, isCollege);
 
   return {
     homeWin: homeWinProb.toFixed(1),

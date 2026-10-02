@@ -94,6 +94,7 @@ export function updateDynamicElo(sport, homeTeam, awayTeam, homeScore, awayScore
   // 1. Ventaja de Localía (Home Field Advantage) en puntos Elo
   let hfa = 0;
   if (sport === 'futbol') hfa = 65;       // ~0.35 goles esperados
+  else if (sport === 'ncaaf') hfa = 75;   // ~3.2 - 3.5 pts de spread colegial
   else if (sport === 'nfl') hfa = 55;     // ~2.5 - 3.0 pts de spread
   else if (sport === 'mlb') hfa = 25;     // ~54% win rate base de local
 
@@ -119,6 +120,7 @@ export function updateDynamicElo(sport, homeTeam, awayTeam, homeScore, awayScore
   // 5. K-Factors calibrados según volatilidad del deporte:
   let baseK = 22;
   if (sport === 'futbol') baseK = 25;
+  else if (sport === 'ncaaf') baseK = 24;
   else if (sport === 'nfl') baseK = 20;
   else if (sport === 'mlb') baseK = 14;   // Temporada de 162 juegos
 

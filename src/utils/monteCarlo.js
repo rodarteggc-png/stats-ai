@@ -284,15 +284,20 @@ export function simulateNflMatch(
   vegasSpread = -3.5,
   vegasTotal = 44.5,
   windMph = 0,
-  iterations = 10000
+  iterations = 10000,
+  isCollege = false
 ) {
-  const numIterations = (typeof iterations === 'number' && iterations > 0) ? iterations : 10000;
-  const lead = (typeof iterations === 'object' && iterations?.expectedHomeLead !== undefined)
+  const isObj = typeof iterations === 'object' && iterations !== null;
+  const numIterations = isObj
+    ? (iterations.iterations || 10000)
+    : ((typeof iterations === 'number' && iterations > 0) ? iterations : 10000);
+  const lead = isObj && iterations.expectedHomeLead !== undefined
     ? parseFloat(iterations.expectedHomeLead)
     : (parseFloat(expectedHomeLead) || 0);
   const spread = parseFloat(vegasSpread) || -3.5;
-  const total = parseFloat(vegasTotal) || 44.5;
+  const total = parseFloat(vegasTotal) || (isCollege ? 53.5 : 44.5);
   const wind = parseFloat(windMph) || 0;
+  const isCol = isObj ? Boolean(iterations.isCollege) : Boolean(isCollege);
 
   let homeCovers = 0;
   let awayCovers = 0;
@@ -304,29 +309,34 @@ export function simulateNflMatch(
 
   // Penalización por viento en puntos totales si es estadio abierto
   const windPen = wind > 14 ? (wind - 14) * 0.35 : 0;
-  const adjTotal = Math.max(30, total - windPen);
+  const adjTotal = Math.max(25, total - windPen);
+  const sigma = isCol ? 16.5 : 13.45;
+  const sigmaTot = isCol ? 14.5 : 9.8;
+  const blowoutThresh = isCol ? 14.5 : 10.5;
 
   for (let i = 0; i < numIterations; i++) {
-    // Varianza 1: Diferencial de puntos con distribución Normal NFL (σ = 13.45)
-    let simLead = randomNormal(lead, 13.45);
+    // Varianza 1: Diferencial de puntos con distribución Normal (σ = 16.5 en Colegial / 13.45 en NFL)
+    let simLead = randomNormal(lead, sigma);
 
-    // Varianza 2: Entregas de balón inesperadas (Turnovers aleatorios: ~3.5 pts por pérdida)
-    const toSwing = (Math.random() - 0.5) * 2.2; // Rango de turnover swing
-    simLead += toSwing * 3.5;
+    // Varianza 2: Entregas de balón inesperadas (Turnovers aleatorios: ~3.5-4.0 pts por pérdida)
+    const toSwing = (Math.random() - 0.5) * (isCol ? 2.5 : 2.2);
+    simLead += toSwing * (isCol ? 4.0 : 3.5);
 
-    // Cluster empírico en números clave de la NFL (Atracción matemática simétrica hacia ±3 y ±7)
+    // Cluster empírico en números clave (3 y 7 más acentuados en NFL, presentes pero más dispersos en Colegial)
     const rounded = Math.round(simLead);
-    if (Math.abs(Math.abs(rounded) - 3) <= 1 && Math.random() < 0.20) simLead = rounded >= 0 ? 3 : -3;
-    if (Math.abs(Math.abs(rounded) - 7) <= 1 && Math.random() < 0.18) simLead = rounded >= 0 ? 7 : -7;
+    const keyProb3 = isCol ? 0.12 : 0.20;
+    const keyProb7 = isCol ? 0.12 : 0.18;
+    if (Math.abs(Math.abs(rounded) - 3) <= 1 && Math.random() < keyProb3) simLead = rounded >= 0 ? 3 : -3;
+    if (Math.abs(Math.abs(rounded) - 7) <= 1 && Math.random() < keyProb7) simLead = rounded >= 0 ? 7 : -7;
 
     // Cobertura de spread
     const atsMargin = simLead + spread;
     if (atsMargin > 0) homeCovers++;
     else awayCovers++;
 
-    // Medir riesgo de cola real (fallar el spread por más de 10 puntos en contra)
-    if (atsMargin < -10.5) homeBlowoutLoss++;
-    if (atsMargin > 10.5) awayBlowoutLoss++;
+    // Medir riesgo de cola real (fallar el spread por más de blowoutThresh puntos en contra)
+    if (atsMargin < -blowoutThresh) homeBlowoutLoss++;
+    if (atsMargin > blowoutThresh) awayBlowoutLoss++;
 
     if (simLead > 0) homeWins++;
 
@@ -334,7 +344,7 @@ export function simulateNflMatch(
     if (absMargin === 3 || absMargin === 7) keyNumberHits++;
 
     // Total de puntos simulado
-    const simTotal = Math.max(16, randomNormal(adjTotal, 9.8));
+    const simTotal = Math.max(16, randomNormal(adjTotal, sigmaTot));
     if (simTotal > total) overHits++;
   }
 
@@ -348,13 +358,13 @@ export function simulateNflMatch(
   const relevantBlowoutEvents = hCoverProb >= aCoverProb ? homeBlowoutLoss : awayBlowoutLoss;
   const upsetRate = Number(((relevantBlowoutEvents / numIterations) * 100).toFixed(1));
 
-  // Escala calibrada de estabilidad ATS en NFL (donde 56%+ de cover equivale a >=65% de estabilidad estructural)
+  // Escala calibrada de estabilidad ATS (donde 56%+ de cover equivale a >=65% de estabilidad estructural)
   const maxCover = Math.max(hCoverProb, aCoverProb);
   const stabilityScore = Number(Math.min(92, Math.max(48, Math.round(maxCover * 1.16))).toFixed(0));
 
   let riskLevel = 'Bajo';
-  if (upsetRate > 34 || stabilityScore < 58) riskLevel = 'Alto';
-  else if (upsetRate > 25 || stabilityScore < 64) riskLevel = 'Medio';
+  if (upsetRate > (isCol ? 38 : 34) || stabilityScore < 58) riskLevel = 'Alto';
+  else if (upsetRate > (isCol ? 28 : 25) || stabilityScore < 64) riskLevel = 'Medio';
 
   return {
     iterations: numIterations,
@@ -363,14 +373,14 @@ export function simulateNflMatch(
     homeWinProb: hWinProb,
     overProb: oProb,
     underProb: Number((100 - oProb).toFixed(1)),
-    calibratedHomeCover: bayesianCalibrate(hCoverProb, 0.88, 50),
-    calibratedAwayCover: bayesianCalibrate(aCoverProb, 0.88, 50),
+    calibratedHomeCover: bayesianCalibrate(hCoverProb, isCol ? 0.84 : 0.88, 50),
+    calibratedAwayCover: bayesianCalibrate(aCoverProb, isCol ? 0.84 : 0.88, 50),
     keyNumberHitRate: keyHitRate,
     upsetRate,
     stabilityScore,
     riskLevel,
-    keyNumberNotice: keyHitRate > 20 
-      ? `📌 Alta Densidad en Números Clave: ${keyHitRate}% de probabilidad de definirse por 3 o 7 puntos.` 
+    keyNumberNotice: keyHitRate > 18 
+      ? `📌 ${isCol ? 'Colegial FBS' : 'NFL'} - Densidad en Números Clave: ${keyHitRate}% de probabilidad en 3 o 7 pts.` 
       : null
   };
 }

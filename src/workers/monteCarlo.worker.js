@@ -22,10 +22,11 @@ self.onmessage = (event) => {
             params.iterations || 10000,
             params.homeElo, params.awayElo
           );
-        } else if (sport === 'nfl') {
+        } else if (sport === 'nfl' || sport === 'ncaaf') {
           results[id] = simulateNflMatch(
             params.lead, params.spread, params.total, params.wind,
-            params.iterations || 10000
+            params.iterations || 10000,
+            params.isCollege || (sport === 'ncaaf')
           );
         }
       }

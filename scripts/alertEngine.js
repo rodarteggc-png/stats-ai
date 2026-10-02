@@ -428,7 +428,8 @@ export function buildOpportunitiesAndTopSlate({
   soccerMatches = [],
   mlbMatches = [],
   nflMatches = [],
-  maxPicksToSend = 6,
+  ncaafMatches = [],
+  maxPicksToSend = 8,
   runtimePenalties = {},
   sentCache = {},
   isForce = false
@@ -966,7 +967,158 @@ export function buildOpportunitiesAndTopSlate({
     }
   });
 
-  // ================= D. TRIBUNAL DE CONSENSO Y ORDENAMIENTO CON PRIORIDAD AL DÍA ACTUAL (CDMX) =================
+  // ================= C.2 EVALUACIÓN DE NCAAF COLEGIAL FBS (SPREADS VOLÁTILES, VALOR EN UNDERDOG Y TOTALES) =================
+  ncaafMatches.forEach(m => {
+    const spread = m.vegas?.spread !== undefined ? parseFloat(m.vegas.spread) : -3.5;
+    const totalLine = m.vegas?.overUnder !== undefined ? parseFloat(m.vegas.overUnder) : 52.5;
+    const homeYpp = m.home?.ypp !== undefined ? m.home.ypp : 5.8;
+    const awayYpp = m.away?.ypp !== undefined ? m.away.ypp : 5.4;
+    const homeTo = m.home?.turnoverDiff !== undefined ? m.home.turnoverDiff : 0;
+    const awayTo = m.away?.turnoverDiff !== undefined ? m.away.turnoverDiff : 0;
+    const homeEpa = m.home?.epaNet !== undefined ? m.home.epaNet : null;
+    const awayEpa = m.away?.epaNet !== undefined ? m.away.epaNet : null;
+    const windMph = m.weather?.windMph || 0;
+
+    const learned = getLearnedAdjustmentsForMatch(m.home.baseName || m.home.name, m.away.baseName || m.away.name);
+    const hPen = getPenalty(m.home.baseName || m.home.name, learned.homePenalty);
+    const aPen = getPenalty(m.away.baseName || m.away.name, learned.awayPenalty);
+
+    const ncaafProbs = calculateNflProbabilities(
+      homeYpp, homeTo,
+      awayYpp, awayTo,
+      hPen, aPen,
+      spread,
+      homeEpa, awayEpa,
+      totalLine,
+      windMph,
+      true // isCollege = true
+    );
+
+    const expectedHomeLead = parseFloat(ncaafProbs.expectedHomeLead);
+    const keyEval = ncaafProbs.keyEvaluation || {};
+    const absSpread = Math.abs(spread);
+    const homeSpreadFmt = spread > 0 ? `+${spread}` : `${spread}`;
+    const awaySpreadVal = -spread;
+    const awaySpreadFmt = awaySpreadVal > 0 ? `+${awaySpreadVal}` : `${awaySpreadVal}`;
+
+    const mcNcaaf = simulateNflMatch(expectedHomeLead, spread, totalLine, windMph, 10000, true);
+    const homeCoverProb = mcNcaaf.calibratedHomeCover;
+    const awayCoverProb = mcNcaaf.calibratedAwayCover;
+
+    const isHomeUnderdog = spread > 0;
+    const underdogTeam = isHomeUnderdog ? m.home.name : m.away.name;
+    const underdogCoverProb = isHomeUnderdog ? homeCoverProb : awayCoverProb;
+    const isHomeFav = spread < 0;
+    const favTeam = isHomeFav ? m.home.name : m.away.name;
+    const favSpreadFmt = isHomeFav ? homeSpreadFmt : awaySpreadFmt;
+    const favCoverProb = isHomeFav ? homeCoverProb : awayCoverProb;
+
+    // 1. Trampa o Protección de Underdog en Colegial
+    if (keyEval.trapWarning && absSpread <= 14.0 && underdogCoverProb >= 55.5) {
+      const ev = Number((underdogCoverProb - 52.4).toFixed(1));
+      rawOpportunities.push({
+        id: `ncaaf-trap-${m.id}`,
+        sport: 'NCAAF',
+        league: m.league || 'NCAAF Colegial FBS',
+        game: `${m.home.name} vs ${m.away.name}`,
+        gameDate: m.gameDate,
+        type: '🎓 PROTECCIÓN UNDERDOG COLEGIAL (NCAAF)',
+        pick: `${underdogTeam} +${absSpread} (Hándicap Positivo)`,
+        prob: `${underdogCoverProb.toFixed(0)}%`,
+        odds: '1.91',
+        edgeVal: Math.max(ev, 4.5),
+        edgeStr: `Colchón Colegial (+${absSpread}) | Edge: +${ev}%`,
+        argument: `Encuentro colegial con valor en puntos: ${keyEval.trapWarning} El modelo proyecta margen cerrado para ${underdogTeam}.`,
+        mcStats: { stability: mcNcaaf.stabilityScore, risk: mcNcaaf.riskLevel, iterations: 10000 },
+        match: m,
+        probs: ncaafProbs
+      });
+    } else if (keyEval.keyAlert && favCoverProb >= 55.5) {
+      const ev = Number((favCoverProb - 52.4).toFixed(1));
+      rawOpportunities.push({
+        id: `ncaaf-key-${m.id}`,
+        sport: 'NCAAF',
+        league: m.league || 'NCAAF Colegial FBS',
+        game: `${m.home.name} vs ${m.away.name}`,
+        gameDate: m.gameDate,
+        type: '💎 NÚMERO CLAVE COLEGIAL (-2.5)',
+        pick: `${favTeam} ${favSpreadFmt} (Cubre Línea)`,
+        prob: `${favCoverProb.toFixed(0)}%`,
+        odds: '1.91',
+        edgeVal: Math.max(ev, 4.5),
+        edgeStr: `Línea por debajo de 3 | Edge: +${ev}%`,
+        argument: `Ventaja corta para ${favTeam} superando el gol de campo clave en fútbol colegial.`,
+        mcStats: { stability: mcNcaaf.stabilityScore, risk: mcNcaaf.riskLevel, iterations: 10000 },
+        match: m,
+        probs: ncaafProbs
+      });
+    } else if (homeCoverProb >= 56.0 && ((spread < 0 && absSpread <= 17.5) || (spread > 0 && absSpread <= 24.0))) {
+      const ev = Number((homeCoverProb - 52.4).toFixed(1));
+      rawOpportunities.push({
+        id: `ncaaf-spread-h-${m.id}`,
+        sport: 'NCAAF',
+        league: m.league || 'NCAAF Colegial FBS',
+        game: `${m.home.name} vs ${m.away.name}`,
+        gameDate: m.gameDate,
+        type: isHomeUnderdog ? '🛡️ HÁNDICAP POSITIVO LOCAL (NCAAF)' : '🎓 VENTAJA SPREAD COLEGIAL (NCAAF)',
+        pick: `${m.home.name} ${homeSpreadFmt} (${isHomeUnderdog ? 'Hándicap Positivo' : 'Cubre Línea'})`,
+        prob: `${homeCoverProb.toFixed(0)}%`,
+        odds: '1.91',
+        edgeVal: Math.max(4.0, ev),
+        edgeStr: `Prob. Cubrir: ${homeCoverProb.toFixed(0)}% | Edge: +${ev}%`,
+        argument: `Monte Carlo proyecta margen local de ${expectedHomeLead.toFixed(1)} pts frente a línea de ${homeSpreadFmt} de Las Vegas en colegial.`,
+        mcStats: { stability: mcNcaaf.stabilityScore, risk: mcNcaaf.riskLevel, iterations: 10000 },
+        match: m,
+        probs: ncaafProbs
+      });
+    } else if (awayCoverProb >= 56.0 && ((spread > 0 && absSpread <= 17.5) || (spread < 0 && absSpread <= 24.0))) {
+      const ev = Number((awayCoverProb - 52.4).toFixed(1));
+      const isAwayUnderdog = spread < 0;
+      rawOpportunities.push({
+        id: `ncaaf-spread-a-${m.id}`,
+        sport: 'NCAAF',
+        league: m.league || 'NCAAF Colegial FBS',
+        game: `${m.home.name} vs ${m.away.name}`,
+        gameDate: m.gameDate,
+        type: isAwayUnderdog ? '🛡️ HÁNDICAP POSITIVO VISITANTE (NCAAF)' : '🎓 VENTAJA SPREAD COLEGIAL (NCAAF)',
+        pick: `${m.away.name} ${awaySpreadFmt} (${isAwayUnderdog ? 'Hándicap Positivo' : 'Cubre Línea'})`,
+        prob: `${awayCoverProb.toFixed(0)}%`,
+        odds: '1.91',
+        edgeVal: Math.max(4.0, ev),
+        edgeStr: `Prob. Cubrir: ${awayCoverProb.toFixed(0)}% | Edge: +${ev}%`,
+        argument: isAwayUnderdog
+          ? `Eficiencia colegial respalda a ${m.away.name} con colchón de puntos (${awaySpreadFmt}) ante la línea de Las Vegas.`
+          : `Superioridad en ritmo y ofensiva de ${m.away.name} para cubrir el spread (${awaySpreadFmt}) como visitante en NCAAF.`,
+        mcStats: { stability: mcNcaaf.stabilityScore, risk: mcNcaaf.riskLevel, iterations: 10000 },
+        match: m,
+        probs: ncaafProbs
+      });
+    }
+
+    const totalsEval = ncaafProbs.totalsEvaluation;
+    if (totalsEval && totalsEval.isValue && parseFloat(totalsEval.edge) >= 5.5) {
+      const tProb = totalsEval.isUnder ? totalsEval.underProb : totalsEval.overProb;
+      rawOpportunities.push({
+        id: `ncaaf-tot-${m.id}`,
+        sport: 'NCAAF',
+        league: m.league || 'NCAAF Colegial FBS',
+        game: `${m.home.name} vs ${m.away.name}`,
+        gameDate: m.gameDate,
+        type: totalsEval.isUnder ? '💨 TOTALES COLEGIAL (VALOR UNDER)' : '🔥 TOTALES COLEGIAL (VALOR OVER)',
+        pick: totalsEval.pick,
+        prob: `${tProb}%`,
+        odds: totalsEval.odds || '1.91',
+        edgeVal: parseFloat(totalsEval.edge),
+        edgeStr: `Edge Totales Colegial: +${totalsEval.edge}%`,
+        argument: `Proyección calibrada de ${totalsEval.effectiveTotal} pts frente a línea de ${totalLine} de Las Vegas. Modelo colegial con ajuste de tempo.`,
+        mcStats: { stability: mcNcaaf.stabilityScore, risk: mcNcaaf.riskLevel, iterations: 10000 },
+        match: m,
+        probs: ncaafProbs
+      });
+    }
+  });
+
+  // ================= D. TRIBUNAL DE CONSENSO Y ORDENAMIENTO ESTRICTO POR EFECTIVIDAD =================
   rawOpportunities.forEach(opp => {
     opp.isToday = isMatchTodayInCdmx(opp.gameDate);
     opp.consensus = evaluateEnsembleConsensus({
@@ -982,77 +1134,113 @@ export function buildOpportunitiesAndTopSlate({
     });
   });
 
-  const approvedOpps = rawOpportunities.filter(opp => opp.consensus && opp.consensus.votesPassed >= 2);
+  // Candado de Certeza Inquebrantable:
+  // Solo se aprueban selecciones con mínimo 2 de 3 votos del Tribunal.
+  // Para Spreads/Totales se exige prob >= 55.5% y para 1X2/ML/BTTS prob >= 60.0%
+  const approvedOpps = rawOpportunities.filter(opp => {
+    if (!opp.consensus || opp.consensus.votesPassed < 2) return false;
+    const probNum = parseFloat(opp.prob) || 0;
+    const pickStr = (opp.pick || '').toLowerCase();
+    const isSpreadOrTotal = pickStr.includes('cubre') || pickStr.includes('hándicap') || pickStr.includes('handicap') || pickStr.includes('over') || pickStr.includes('under') || /[+-]\d+/.test(pickStr);
+    if (isSpreadOrTotal && probNum < 55.5) return false;
+    if (!isSpreadOrTotal && probNum < 60.0) return false;
+    return true;
+  });
 
-  // Ordenar: 1) Partidos que se juegan HOY (CDMX) primero, 2) Unanimidad 3/3 antes que 2/3, 3) Mayor +EV
+  // ORDENAMIENTO 100% BASADO EN MÁXIMA PROBABILIDAD DE ACIERTO Y EFECTIVIDAD:
+  // 1) Partidos de HOY (CDMX) van primero para ejecutarse de inmediato en la jornada activa
+  // 2) Mayor probabilidad de acierto calibrada (la efectividad es la prioridad absoluta del sistema)
+  // 3) Desempate por Unanimidad del Tribunal (3/3 antes que 2/3)
+  // 4) Desempate final por mayor ventaja matemática (+EV Edge)
   approvedOpps.sort((a, b) => {
     if (a.isToday !== b.isToday) {
       return a.isToday ? -1 : 1;
     }
+    const probDiff = (parseFloat(b.prob) || 0) - (parseFloat(a.prob) || 0);
+    if (Math.abs(probDiff) >= 0.8) {
+      return probDiff;
+    }
     if (b.consensus.votesPassed !== a.consensus.votesPassed) {
       return b.consensus.votesPassed - a.consensus.votesPassed;
     }
-    return b.edgeVal - a.edgeVal;
+    return (b.edgeVal || 0) - (a.edgeVal || 0);
   });
 
-  // Filtrar primero las que NO se han enviado aún a Telegram para que las enviadas a las 9:30 AM
-  // nunca bloqueen los lugares del Top 6 en el corte de las 3:30 PM
+  // Filtrar las que no se hayan enviado aún a Telegram (a menos que se use isForce)
   const eligibleForTop = isForce
     ? approvedOpps
     : approvedOpps.filter(pick => !sentCache[pick.id] || sentCache[pick.id].dispatchedToTelegram === false);
 
-  const todayEligible = eligibleForTop.filter(o => o.isToday);
-  const tomorrowEligible = eligibleForTop.filter(o => !o.isToday);
   const topSlate = [];
-  const usedGames = new Set();
+  const gamePicksMap = new Map();
 
-  // Paso 1: Llenar el Top 6 dando prioridad 100% a los partidos de HOY (diversificando por deporte y máximo 1 pick por partido)
-  const todaySports = [...new Set(todayEligible.map(o => o.sport))];
-  for (const sport of todaySports) {
-    if (topSlate.length >= maxPicksToSend) break;
-    const bestOfSportToday = todayEligible.find(o => o.sport === sport && !usedGames.has(o.game));
-    if (bestOfSportToday && !topSlate.some(p => p.id === bestOfSportToday.id)) {
-      topSlate.push(bestOfSportToday);
-      usedGames.add(bestOfSportToday.game);
+  function getPickMarketCategory(p) {
+    const type = (p.type || '').toUpperCase();
+    const pickText = (p.pick || '').toLowerCase();
+    if (
+      type.includes('TOTALES') ||
+      type.includes('OVER') ||
+      type.includes('UNDER') ||
+      type.includes('AMBOS EQUIPOS ANOTAN') ||
+      type.includes('BTTS') ||
+      pickText.includes('over ') ||
+      pickText.includes('under ') ||
+      pickText.includes('más de ') ||
+      pickText.includes('menos de ') ||
+      pickText.includes('ambos equipos')
+    ) {
+      return 'TOTALS';
     }
+    if (
+      type.includes('PROP') ||
+      type.includes('BASES TOTALES') ||
+      type.includes('CORNER') ||
+      type.includes('TARJETA')
+    ) {
+      return 'PROPS';
+    }
+    return 'SIDE';
   }
 
-  for (const pick of todayEligible) {
+  // SELECCIÓN PURAMENTE POR MÉRITO Y PROBABILIDAD DE ACIERTO:
+  // Cero cuotas artificiales de deportes.
+  // Regla dinámica por partido: Si un juego ofrece 2 selecciones de alto valor en mercados independientes
+  // (ej. Ganador/Hándicap + Totales/BTTS/Props), ambas se aprueban para aprovechar la oportunidad completa.
+  // Solo se limita si intentaran entrar selecciones redundantes o contradictorias del mismo mercado.
+  for (const pick of eligibleForTop) {
     if (topSlate.length >= maxPicksToSend) break;
-    if (!topSlate.some(p => p.id === pick.id) && !usedGames.has(pick.game)) {
+    if (topSlate.some(p => p.id === pick.id)) continue;
+
+    const currentPicks = gamePicksMap.get(pick.game) || [];
+    if (currentPicks.length === 0) {
       topSlate.push(pick);
-      usedGames.add(pick.game);
+      gamePicksMap.set(pick.game, [pick]);
+    } else if (currentPicks.length === 1) {
+      const existing = currentPicks[0];
+      const existingCat = getPickMarketCategory(existing);
+      const newCat = getPickMarketCategory(pick);
+
+      // Permitir segunda selección si es de un mercado complementario (ej. Side + Total o Prop)
+      if (existingCat !== newCat) {
+        topSlate.push(pick);
+        gamePicksMap.set(pick.game, [...currentPicks, pick]);
+      }
     }
   }
 
-  // Paso 2: Únicamente si HOY ya no tiene suficientes partidos para completar los 6 lugares,
-  // rellenar los huecos restantes con los de mañana temprano (diversificando primero por deporte)
-  const tomorrowSports = [...new Set(tomorrowEligible.map(o => o.sport))];
-  for (const sport of tomorrowSports) {
-    if (topSlate.length >= maxPicksToSend) break;
-    const bestOfSportTomorrow = tomorrowEligible.find(o => o.sport === sport && !usedGames.has(o.game));
-    if (bestOfSportTomorrow && !topSlate.some(p => p.id === bestOfSportTomorrow.id)) {
-      topSlate.push(bestOfSportTomorrow);
-      usedGames.add(bestOfSportTomorrow.game);
-    }
-  }
-
-  for (const pick of tomorrowEligible) {
-    if (topSlate.length >= maxPicksToSend) break;
-    if (!topSlate.some(p => p.id === pick.id) && !usedGames.has(pick.game)) {
-      topSlate.push(pick);
-      usedGames.add(pick.game);
-    }
-  }
-
+  // Orden final del slate para el despacho a Telegram (mayor probabilidad de acierto al frente)
   topSlate.sort((a, b) => {
     if (a.isToday !== b.isToday) {
       return a.isToday ? -1 : 1;
     }
+    const probDiff = (parseFloat(b.prob) || 0) - (parseFloat(a.prob) || 0);
+    if (Math.abs(probDiff) >= 0.8) {
+      return probDiff;
+    }
     if (b.consensus.votesPassed !== a.consensus.votesPassed) {
       return b.consensus.votesPassed - a.consensus.votesPassed;
     }
-    return b.edgeVal - a.edgeVal;
+    return (b.edgeVal || 0) - (a.edgeVal || 0);
   });
 
   return { rawOpportunities, approvedOpps, topSlate };
@@ -1071,12 +1259,13 @@ export async function runDailyTelegramAudit(options = {}) {
   const providedCache = options.ledger || await loadCloudLedger();
 
   // Descargar marcadores oficiales de ayer y hoy para cruzar contra las alertas enviadas
-  const [soccerYest, soccerToday, mlbYest, mlbToday, nflWeek] = await Promise.all([
+  const [soccerYest, soccerToday, mlbYest, mlbToday, nflWeek, ncaafWeek] = await Promise.all([
     fetchDailySchedule('futbol', 'ayer').catch(() => []),
     fetchDailySchedule('futbol', 'hoy').catch(() => []),
     fetchDailySchedule('mlb', 'ayer').catch(() => []),
     fetchDailySchedule('mlb', 'hoy').catch(() => []),
-    fetchDailySchedule('nfl', 'ayer').catch(() => [])
+    fetchDailySchedule('nfl', 'ayer').catch(() => []),
+    fetchDailySchedule('ncaaf', 'ayer').catch(() => [])
   ]);
 
   const allCompletedMatches = [
@@ -1084,7 +1273,8 @@ export async function runDailyTelegramAudit(options = {}) {
     ...soccerToday,
     ...mlbYest,
     ...mlbToday,
-    ...nflWeek
+    ...nflWeek,
+    ...ncaafWeek
   ].filter(m => m && m.isCompleted);
 
   const ledgerEntries = Object.keys(providedCache)
@@ -1342,18 +1532,14 @@ export async function runAlertEngine(options = {}) {
   const isVerbose = options.verbose || process.argv.includes('--verbose');
   const isForce = options.force || process.argv.includes('--force');
   const forceAudit = options.audit || process.argv.includes('--audit');
-  const maxPicksToSend = options.maxPicks || 6;
-
-  // Determinar hora actual en CDMX para calibrar la ventana:
-  // 1. Turno Nocturno de Fin de Semana (Viernes y Sábados a las 11:00 PM / 23h o con shift='nocturno'):
-  //    Mira exclusivamente partidos de fútbol europeo que arrancan temprano la mañana siguiente (5:00 a 9:00 AM CDMX)
-  //    conservando sus Player Props y líneas con valor para poder meterlas con calma la noche anterior.
-  // 2. Corte Matutino (ej. 9:30 AM, antes de las 14:00): Mira partidos de HOY (próximas 16h), omitiendo los que ya iniciaron.
-  // 3. Corte Vespertino (ej. 3:30 PM, 14:00 en adelante): Prioriza 100% la tarde/noche de HOY y mira máximo 18h adelante.
   const cdmxNow = new Date();
   const cdmxHour = parseInt(cdmxNow.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', timeZone: 'America/Mexico_City' }), 10);
   const cdmxDateStr = cdmxNow.toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
   const cdmxDayOfWeek = cdmxNow.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'America/Mexico_City' });
+
+  // En fines de semana (Sábado y Domingo con NCAAF + NFL + Fútbol), el límite de selecciones élite se amplía a 10
+  const isWeekend = cdmxDayOfWeek === 'Sat' || cdmxDayOfWeek === 'Sun';
+  const maxPicksToSend = options.maxPicks || (isWeekend ? 10 : 8);
 
   const isWeekendNight = (cdmxDayOfWeek === 'Fri' || cdmxDayOfWeek === 'Sat') && cdmxHour >= 21;
   const isNightShift = options.shift === 'nocturno' || process.argv.includes('--nocturno') || isWeekendNight;
@@ -1367,7 +1553,7 @@ export async function runAlertEngine(options = {}) {
   const maxHoursAhead = options.maxHoursAhead !== undefined ? options.maxHoursAhead : defaultHorizon;
 
   const shiftLabel = isNightShift ? '🌙 NOCTURNO (Cartelera Europea 5:30-8:30 AM)' : (isMorningShift ? '☀️ MATUTINO' : '🌆 VESPERTINO');
-  console.log(`[${new Date().toISOString()}] 🚀 Iniciando Escaneo Cuantitativo Stats-AI Pro (Turno CDMX ${cdmxHour}h [${shiftLabel}], Rango: ${dateRange}, Horizonte: ${maxHoursAhead}h)...`);
+  console.log(`[${new Date().toISOString()}] 🚀 Iniciando Escaneo Cuantitativo Stats-AI Pro (Turno CDMX ${cdmxHour}h [${shiftLabel}], Rango: ${dateRange}, Cupo Máximo: ${maxPicksToSend})...`);
   if (isDryRun) console.log('⚠️ Modo Dry-Run activo: no se mandarán mensajes reales.');
 
   const sentCache = await loadCloudLedger();
@@ -1396,11 +1582,12 @@ export async function runAlertEngine(options = {}) {
     console.error('Aviso en auditoría previa:', err.message);
   }
 
-  // Descargar programación dentro de la ventana calibrada del turno
-  const [soccerRaw, mlbRaw, nflRaw] = await Promise.all([
+  // Descargar programación completa (Fútbol, MLB, NFL y NCAAF Colegial FBS)
+  const [soccerRaw, mlbRaw, nflRaw, ncaafRaw] = await Promise.all([
     fetchDailySchedule('futbol', dateRange).catch(() => []),
     fetchDailySchedule('mlb', dateRange).catch(() => []),
-    fetchDailySchedule('nfl', dateRange).catch(() => [])
+    fetchDailySchedule('nfl', dateRange).catch(() => []),
+    fetchDailySchedule('ncaaf', dateRange).catch(() => [])
   ]);
 
   const filterUpcoming = (m) => {
@@ -1416,15 +1603,17 @@ export async function runAlertEngine(options = {}) {
   const soccerMatches = soccerRaw.filter(filterUpcoming);
   const mlbMatches = mlbRaw.filter(filterUpcoming);
   const nflMatches = nflRaw.filter(filterUpcoming);
+  const ncaafMatches = ncaafRaw.filter(filterUpcoming);
 
   if (isVerbose) {
-    console.log(`⚽ Fútbol en ventana: ${soccerMatches.length} | ⚾ MLB: ${mlbMatches.length} | 🏈 NFL: ${nflMatches.length}`);
+    console.log(`⚽ Fútbol en ventana: ${soccerMatches.length} | ⚾ MLB: ${mlbMatches.length} | 🏈 NFL: ${nflMatches.length} | 🎓 NCAAF: ${ncaafMatches.length}`);
   }
 
   const { rawOpportunities, approvedOpps, topSlate } = buildOpportunitiesAndTopSlate({
     soccerMatches,
     mlbMatches,
     nflMatches,
+    ncaafMatches,
     maxPicksToSend,
     runtimePenalties: auditResult.runtimePenalties,
     sentCache,
