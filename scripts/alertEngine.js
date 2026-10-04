@@ -12,7 +12,7 @@ import { generateDailySoccerProps } from '../src/utils/soccerProps.js';
 import { calculateNflProbabilities } from '../src/utils/gridiron.js';
 import { simulateSoccerMatch, simulateMlbMatch, simulateNflMatch } from '../src/utils/monteCarlo.js';
 import { evaluateEnsembleConsensus } from '../src/utils/ensemble.js';
-import { applyPlattCalibration } from '../src/utils/calibration.js';
+import { applyPlattCalibration, recalibrateFromAudit } from '../src/utils/calibration.js';
 import { getPairCorrelation } from '../src/utils/correlationMatrix.js';
 import { detectReverseLineMovement } from '../src/utils/rlmDetector.js';
 import {
@@ -1520,6 +1520,21 @@ export async function runDailyTelegramAudit(options = {}) {
     }));
   hydrateCloudLessons(cloudLessonsForMemory);
 
+  // ================= AREA 11: AUTO-CALIBRACIÓN MATEMÁTICA (PLATT SCALING) =================
+  const mlbCal = recalibrateFromAudit(allAuditedRecent, 'mlb');
+  const nflCal = recalibrateFromAudit(allAuditedRecent, 'nfl');
+  const ncaafCal = recalibrateFromAudit(allAuditedRecent, 'ncaaf');
+  const soccerCal = recalibrateFromAudit(allAuditedRecent, 'futbol');
+
+  if (!providedCache._meta) providedCache._meta = {};
+  providedCache._meta.plattCoefficients = {
+    mlb: mlbCal,
+    nfl: nflCal,
+    ncaaf: ncaafCal,
+    futbol: soccerCal
+  };
+  ledgerModified = true;
+
   if (ledgerModified && !isDryRun) {
     await saveCloudLedger(providedCache);
   }
@@ -1531,6 +1546,7 @@ export async function runDailyTelegramAudit(options = {}) {
     pendingPicks: pendingStillPlaying,
     runtimePenalties,
     dynamicElo: getDynamicEloStore(),
+    plattCoefficients: providedCache._meta.plattCoefficients,
     summary: {
       total: picksToReport.length,
       won,
@@ -1731,6 +1747,10 @@ export async function runAlertEngine(options = {}) {
       ? [`🧩 *Sinergia Bivariada:* \`${pick.correlationNote}\``, ``]
       : [];
 
+    const isWhalePick = pick.consensus?.votesPassed === 3 && pick.edgeVal >= 6.0 && 
+      (pick.mcStats?.stability >= 78 || pick.mcStats?.bttsStability >= 78 || pick.mcStats?.f5Stability >= 78);
+    const selectionLabel = isWhalePick ? `📌 *SELECCIÓN CONFIRMADA:*` : `📌 *SELECCIÓN RECOMENDADA:*`;
+
     const message = [
       headerTitle,
       ``,
@@ -1738,7 +1758,7 @@ export async function runAlertEngine(options = {}) {
       `⚔️ *${pick.game}*`,
       `⏰ *Fecha y Hora:* ${timeStr} (CDMX)`,
       ``,
-      `📌 *SELECCIÓN RECOMENDADA:*`,
+      selectionLabel,
       `👉 *${pick.pick}*`,
       ``,
       `📊 *Probabilidad Calibrada:* \`${pick.prob}\``,
