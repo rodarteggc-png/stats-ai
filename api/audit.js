@@ -14,9 +14,10 @@ export default async function handler(req, res) {
     }
 
     const sendToTelegram = req.query?.notify === 'true' || req.query?.notify === '1';
+    const forceAudit = req.query?.force === 'true' || req.query?.force === '1';
     const result = await runDailyTelegramAudit({
       sendToTelegram,
-      forceAudit: sendToTelegram
+      forceAudit
     });
 
     return res.status(200).json({
@@ -27,7 +28,8 @@ export default async function handler(req, res) {
       auditedPicks: result.auditedPicks,
       pendingPicks: result.pendingPicks,
       runtimePenalties: result.runtimePenalties,
-      dynamicElo: result.dynamicElo || {}
+      dynamicElo: result.dynamicElo || {},
+      plattCoefficients: result.plattCoefficients || null
     });
   } catch (error) {
     console.error('Error en api/audit:', error);
