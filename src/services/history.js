@@ -613,11 +613,45 @@ export function clearAllHistory() {
   localStorage.removeItem(LESSONS_KEY);
 }
 
+export async function getGeminiEmbedding(text) {
+  if (!text) return null;
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${GEMINI_API_KEY}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "models/text-embedding-004",
+        content: { parts: [{ text }] }
+      })
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.embedding?.values || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+export function cosineSimilarity(vecA, vecB) {
+  if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
+  let dotProduct = 0, normA = 0, normB = 0;
+  for (let i = 0; i < vecA.length; i++) {
+    dotProduct += vecA[i] * vecB[i];
+    normA += vecA[i] * vecA[i];
+    normB += vecB[i] * vecB[i];
+  }
+  if (normA === 0 || normB === 0) return 0;
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
 /**
  * Consulta la base de conocimiento para ver si hay aprendizajes activos para un partido.
- * Implementa DECAIMIENTO TEMPORAL: las lecciones pierden peso con el tiempo.
+ * Implementa DECAIMIENTO TEMPORAL y SIMILITUD SEMÁNTICA (Embeddings).
  */
-export function getLearnedAdjustmentsForMatch(homeTeam = '', awayTeam = '') {
+export async function getLearnedAdjustmentsForMatch(matchData = {}) {
+  const homeTeam = matchData.home?.name || '';
+  const awayTeam = matchData.away?.name || '';
   const allLessons = getAllLessons();
   const now = Date.now();
   let needsSave = false;
@@ -653,20 +687,46 @@ export function getLearnedAdjustmentsForMatch(homeTeam = '', awayTeam = '') {
     return 0.25;                        // 25% (35-45 días)
   };
 
-  lessons.forEach(l => {
-    const lTeam = l.team || '';
-    const decay = getDecayFactor(l);
-    const effectivePenalty = (l.penaltyModifier || 0.04) * decay;
+  const relevantLessons = lessons.filter(l => isTeamMatch(homeTeam, l.team) || isTeamMatch(awayTeam, l.team));
 
-    if (isTeamMatch(homeTeam, lTeam)) {
-      homePenalty += effectivePenalty;
-      matchLessons.push({ ...l, decayFactor: decay, effectivePenalty });
+  if (relevantLessons.length > 0) {
+    // 1. Generar contexto textual del partido actual
+    const currentContext = `Partido de ${matchData.sport || 'Fútbol'}: ${homeTeam} vs ${awayTeam}. ` +
+      `Local (xG: ${matchData.home?.xG || 'N/A'}, Descanso: ${matchData.home?.daysRest || 0} días). ` +
+      `Visitante (xG: ${matchData.away?.xG || 'N/A'}, Descanso: ${matchData.away?.daysRest || 0} días). ` +
+      `Clima: ${matchData.weather?.details || 'N/A'}. ` +
+      `Bajas Local: ${matchData.home?.injuries || 'Ninguna'}. ` +
+      `Bajas Visitante: ${matchData.away?.injuries || 'Ninguna'}.`;
+    
+    // 2. Extraer el Vector Semántico (Embedding)
+    const currentEmbedding = await getGeminiEmbedding(currentContext);
+
+    // 3. Comparar con las lecciones
+    for (const l of relevantLessons) {
+      const decay = getDecayFactor(l);
+      let effectivePenalty = (l.penaltyModifier || 0.04) * decay;
+
+      if (l.embedding && currentEmbedding) {
+        const sim = cosineSimilarity(l.embedding, currentEmbedding);
+        l.semanticSimilarity = sim;
+        // Escalar el castigo basado en la similitud matemática del contexto
+        if (sim < 0.65) {
+          effectivePenalty *= 0.2; // Contexto distinto -> Poco castigo
+        } else if (sim > 0.85) {
+          effectivePenalty *= 1.5; // Mismo contexto exacto -> Castigo amplificado
+        }
+      }
+
+      if (isTeamMatch(homeTeam, l.team)) {
+        homePenalty += effectivePenalty;
+        matchLessons.push({ ...l, decayFactor: decay, effectivePenalty });
+      }
+      if (isTeamMatch(awayTeam, l.team)) {
+        awayPenalty += effectivePenalty;
+        matchLessons.push({ ...l, decayFactor: decay, effectivePenalty });
+      }
     }
-    if (isTeamMatch(awayTeam, lTeam)) {
-      awayPenalty += effectivePenalty;
-      matchLessons.push({ ...l, decayFactor: decay, effectivePenalty });
-    }
-  });
+  }
 
   // Cap de seguridad estricto (máximo 3.5% o 0.035) para evitar sesgo de recencia desmedido
   const boundedHomePenalty = Number(Math.min(homePenalty, 0.035).toFixed(3));
@@ -738,6 +798,10 @@ export async function diagnoseFailureWithAI(predictionId, actualResult = '') {
   const parsedPenaltyPct = adjMatch ? parseFloat(adjMatch[1]) : 5.0;
   const parsedPenaltyDec = Number(Math.min(0.10, Math.max(0.03, parsedPenaltyPct / 100)).toFixed(3));
 
+  // Extraer Embedding (Vector Matemático) para la nueva lección
+  const lessonContext = `Diagnóstico: ${aiText}. Equipo: ${failedTeam}. Rival: ${opponentTeam}. Deporte: ${item.sport || item.match?.sport || 'futbol'}.`;
+  const lessonEmbedding = await getGeminiEmbedding(lessonContext);
+
   const newLesson = {
     id: `lesson-${Date.now()}`,
     predictionId: predictionId,
@@ -749,7 +813,8 @@ export async function diagnoseFailureWithAI(predictionId, actualResult = '') {
     actualResult: actualResult || "Fallo del pick",
     diagnosisText: aiText,
     penaltyModifier: parsedPenaltyDec,
-    active: true
+    active: true,
+    embedding: lessonEmbedding // Vector de 768 dimensiones
   };
 
   saveTeamLesson(newLesson);
@@ -787,6 +852,12 @@ export async function syncTelegramLedgerToHistory() {
 
     if (data.dynamicElo && typeof data.dynamicElo === 'object') {
       hydrateDynamicEloFromCloud(data.dynamicElo);
+    }
+    
+    if (data.plattCoefficients) {
+      try {
+        localStorage.setItem('fstats_platt_coefs', JSON.stringify(data.plattCoefficients));
+      } catch (e) {}
     }
 
     const allTelegramPicks = [

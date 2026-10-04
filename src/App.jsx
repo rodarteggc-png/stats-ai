@@ -519,7 +519,7 @@ export default function App() {
 
       for (const matchData of activeSchedule) {
         const mKey = matchData.id || `${matchData.home?.name}_${matchData.away?.name}`;
-        const learned = getLearnedAdjustmentsForMatch(matchData.home?.name, matchData.away?.name);
+        const learned = await getLearnedAdjustmentsForMatch(matchData);
 
         if (activeSport === 'futbol') {
           const probs = calculateMatchProbabilities(
@@ -1391,7 +1391,7 @@ export default function App() {
       setStep(`📥 Consultando Big Data en vivo de ${targetSport === 'ncaaf' ? 'NCAAF Colegial' : activeSport.toUpperCase()}...`);
       const matchData = await fetchMatchData(targetQuery, targetSport);
 
-      const learned = getLearnedAdjustmentsForMatch(matchData.home.name, matchData.away.name);
+      const learned = await getLearnedAdjustmentsForMatch(matchData);
 
       setStep("🧮 Corriendo modelo matemático con Memoria IA...");
       let mathProbs = {};

@@ -202,9 +202,9 @@ export function evaluateEnsembleConsensus({
       vote2Reason = `Rechazado por Varianza: Riesgo Alto (${stability}% de estabilidad). Riesgo de colapso excesivo.`;
     }
   } else {
-    // Si no vino precalculado, se asume neutro con voto condicional
-    vote2Passed = true;
-    vote2Reason = `Simulación no reportó alertas críticas de colapso.`;
+    // Si no vino precalculado, abstención explícita (no regalar el voto)
+    vote2Passed = null;
+    vote2Reason = `Monte Carlo pendiente de ejecución o sin datos. Voto en abstención.`;
   }
 
   breakdown.push({
@@ -272,58 +272,8 @@ export function evaluateEnsembleConsensus({
     vote3Reason = `${rlm.badgeText}: ${rlm.reason}`;
   } else if (rlm.isRlmDetected && rlm.rlmType === 'FAVORABLE') {
     vote3Reason = `${rlm.badgeText}: ${rlm.reason}`;
-  } else if (vote3Passed) {
-    const totalDelta = parseFloat(mkt.totalDelta) || 0;
-    const spreadDeltaHome = parseFloat(mkt.spreadDeltaHome) || 0;
-    const homeDropPct = parseFloat(mkt.homeDropPct) || 0;
-    const awayDropPct = parseFloat(mkt.awayDropPct) || 0;
-    const bookName = mkt.provider || mkt.bookmaker || 'DraftKings';
-
-    if (isTotalsMarket && totalDelta !== 0) {
-      const vetoThreshold = sLower.includes('nfl') ? 2.0 : 1.0;
-      const confirmThreshold = sLower.includes('nfl') ? 1.0 : 0.5;
-      if ((isOverPick || isBttsPick) && totalDelta <= -vetoThreshold) {
-        vote3Passed = false;
-        vote3Reason = `⛔ Veto Sharp Money (${bookName}): Buscamos OVER/Goles, pero el dinero profesional desplomó la línea de ${mkt.totalOpen} a ${mkt.totalClose} (${totalDelta} pts).`;
-      } else if (isUnderPick && totalDelta >= vetoThreshold) {
-        vote3Passed = false;
-        vote3Reason = `⛔ Veto Sharp Money (${bookName}): Buscamos UNDER, pero el dinero profesional infló la línea de ${mkt.totalOpen} a ${mkt.totalClose} (+${totalDelta} pts).`;
-      } else if ((isOverPick || isBttsPick) && totalDelta >= confirmThreshold) {
-        vote3Reason = `🔥 Confirmado por Sharp Money (${bookName}): Dinero profesional empujando el Total al alza (Apertura ${mkt.totalOpen} -> Actual ${mkt.totalClose}).`;
-      } else if (isUnderPick && totalDelta <= -confirmThreshold) {
-        vote3Reason = `🔥 Confirmado por Sharp Money (${bookName}): Dinero profesional tumbando el Total a la baja (Apertura ${mkt.totalOpen} -> Actual ${mkt.totalClose}).`;
-      }
-    } else if (!isTotalsMarket && sLower.includes('nfl') && spreadDeltaHome !== 0) {
-      if (isHomeSidePick && spreadDeltaHome >= 2.0) {
-        vote3Passed = false;
-        vote3Reason = `⛔ Veto Sharp Money (Reverse Line): Dinero profesional movió el Spread ${spreadDeltaHome.toFixed(1)} pts en contra de ${match.home?.name} (Apertura ${mkt.spreadOpenFmt} -> Actual ${mkt.spreadCloseFmt}).`;
-      } else if (isAwaySidePick && spreadDeltaHome <= -2.0) {
-        vote3Passed = false;
-        vote3Reason = `⛔ Veto Sharp Money (Reverse Line): Dinero profesional movió el Spread ${Math.abs(spreadDeltaHome).toFixed(1)} pts en contra de ${match.away?.name} (Local ${mkt.spreadOpenFmt} -> ${mkt.spreadCloseFmt}).`;
-      } else if (isHomeSidePick && spreadDeltaHome <= -1.0) {
-        vote3Reason = `🔥 Confirmado por Sharp Money (${bookName}): Línea de Spread movida ${Math.abs(spreadDeltaHome).toFixed(1)} pts a favor de ${match.home?.name} (${mkt.spreadOpenFmt} -> ${mkt.spreadCloseFmt}).`;
-      } else if (isAwaySidePick && spreadDeltaHome >= 1.0) {
-        vote3Reason = `🔥 Confirmado por Sharp Money (${bookName}): Línea de Spread movida ${spreadDeltaHome.toFixed(1)} pts a favor de ${match.away?.name} (Local ${mkt.spreadOpenFmt} -> ${mkt.spreadCloseFmt}).`;
-      }
-    } else if (!isTotalsMarket) {
-      if (isHomeSidePick && awayDropPct >= 8.0 && (parseFloat(mkt.awayOdds) || 3.0) <= 2.35) {
-        vote3Passed = false;
-        vote3Reason = `⛔ Veto Sharp Money (Reverse Line): Fuerte entrada de dinero profesional en el rival ${match.away?.name} (cuota cayó -${awayDropPct}% de ${mkt.openAway} a ${mkt.awayOdds}).`;
-      } else if (isAwaySidePick && homeDropPct >= 8.0 && (parseFloat(mkt.homeOdds) || 3.0) <= 2.35) {
-        vote3Passed = false;
-        vote3Reason = `⛔ Veto Sharp Money (Reverse Line): Fuerte entrada de dinero profesional en el local ${match.home?.name} (cuota cayó -${homeDropPct}% de ${mkt.openHome} a ${mkt.homeOdds}).`;
-      } else if (isHomeSidePick && homeDropPct >= 3.5) {
-        vote3Reason = `🔥 Confirmado por Sharp Money (${bookName}): Cuota de ${match.home?.name} cayó -${homeDropPct}% desde apertura (${mkt.openHome} -> ${mkt.homeOdds}).`;
-      } else if (isAwaySidePick && awayDropPct >= 3.5) {
-        vote3Reason = `🔥 Confirmado por Sharp Money (${bookName}): Cuota de ${match.away?.name} cayó -${awayDropPct}% desde apertura (${mkt.openAway} -> ${mkt.awayOdds}).`;
-      } else if (mkt.isSteamMove) {
-        const steamTeam = mkt.steamTeam || '';
-        const isPickAligned = (isHomeSidePick && match.home?.name?.includes(steamTeam)) || (isAwaySidePick && match.away?.name?.includes(steamTeam));
-        if (isPickAligned) {
-          vote3Reason = `🔥 Confirmado por Smart Money: Caída institucional de línea (-${mkt.steamDropPct || '5'}%) en cuota competitiva (${numericOdds.toFixed(2)}).`;
-        }
-      }
-    }
+    // Toda la lógica de movimientos de línea y RLM avanzado ahora está delegada
+    // de forma exclusiva al módulo `rlmDetector.js` para evitar solapamientos.
   }
 
   // 3. Consulta de Memoria de Lecciones Aprendidas (history.js + Auditoría Telegram)
@@ -399,18 +349,20 @@ export function evaluateEnsembleConsensus({
   // =========================================================================
   // CÓMPUTO FINAL DEL VEREDICTO DE CONSENSO
   // =========================================================================
-  const votesPassed = breakdown.filter(b => b.passed).length;
+  const votesActive = breakdown.filter(b => b.passed !== null);
+  const votesPassed = votesActive.filter(b => b.passed === true).length;
+  const totalVotes = votesActive.length;
   let verdict = 'VETADO';
-  let badgeText = `${votesPassed}/3 Votos (Veto por Discrepancia)`;
+  let badgeText = `${votesPassed}/${totalVotes} Votos (Veto por Discrepancia)`;
   let badgeColor = '#ef4444';
 
-  if (votesPassed === 3) {
+  if (votesPassed === totalVotes && totalVotes >= 2) {
     verdict = 'UNANIMIDAD_ELITE';
-    badgeText = '3/3 Votos (Unanimidad Élite)';
+    badgeText = `${votesPassed}/${totalVotes} Votos (Unanimidad Élite)`;
     badgeColor = '#10b981';
-  } else if (votesPassed === 2) {
+  } else if (votesPassed >= 2) {
     verdict = 'CONSENSO_MAYORITARIO';
-    badgeText = '2/3 Votos (Consenso con Cobertura)';
+    badgeText = `${votesPassed}/${totalVotes} Votos (Consenso con Cobertura)`;
     badgeColor = '#f59e0b';
   }
 
@@ -435,16 +387,17 @@ export function evaluateEnsembleConsensus({
     votesPassed
   });
 
+  const isUnanimous = votesPassed === totalVotes && totalVotes >= 2;
   const kellyData = calculateKellyStake(
     effectiveProb,
     effectiveOdds,
-    votesPassed === 3 ? 0.10 : 0.05,
-    votesPassed === 3 ? 2.0 : 1.0
+    isUnanimous ? 0.10 : 0.05,
+    isUnanimous ? 2.0 : 1.0
   );
 
   return {
     votesPassed,
-    isUnanimous: votesPassed === 3,
+    isUnanimous,
     verdict,
     badgeText,
     badgeColor,

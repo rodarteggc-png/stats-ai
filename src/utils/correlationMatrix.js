@@ -205,11 +205,13 @@ export function evaluateCorrelatedCombo(picks = []) {
   // Si hay sinergia positiva en mismo juego, elevar la probabilidad conjunta
   let realJointProbPct = independentJointProb * 100;
   if (positiveSynergies.length > 0) {
-    const avgRho = positiveSynergies.reduce((acc, s) => acc + s.rho, 0) / positiveSynergies.length;
-    // Elevar probabilidad conjunta según la correlación acumulada
-    const probA = parseFloat(picks[0].prob) || 60;
-    const probB = parseFloat(picks[1].prob) || 60;
-    realJointProbPct = calculateJointBivariateProb(probA, probB, avgRho);
+    // Encadenar probabilidad bivariada para combos de N picks
+    let runningProbPct = parseFloat(picks[0].prob) || 60;
+    for (let k = 1; k < picks.length; k++) {
+      const pairCorrelation = getPairCorrelation(picks[k - 1], picks[k]);
+      runningProbPct = calculateJointBivariateProb(runningProbPct, parseFloat(picks[k].prob) || 60, pairCorrelation.rho);
+    }
+    realJointProbPct = runningProbPct;
   }
 
   const fairOdds = Number((100 / realJointProbPct).toFixed(2));

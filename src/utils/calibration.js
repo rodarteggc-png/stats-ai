@@ -8,12 +8,55 @@
  * Calibrados a partir de los datos históricos de auditoría forense para mitigar sesgos de cola.
  * Formulación: P_calibrada = 1 / (1 + exp(A * logit(P_raw) + B))
  */
-const PLATT_COEFFICIENTS = {
+let PLATT_COEFFICIENTS = {
   futbol: { A: 0.88, B: -0.04 }, // Ajusta riesgo de empate en favoritos inflados
   nfl: { A: 0.92, B: 0.00 },    // Calibrado con números clave 3 y 7
   ncaaf: { A: 0.85, B: 0.00 },  // Mayor regresión a la media por volatilidad colegial
   mlb: { A: 0.82, B: 0.02 }     // Suaviza sobreestimaciones provocadas por bullpen tardío
 };
+
+// Cargar coeficientes auto-aprendidos (Área 11) de memoria local si existen
+if (typeof window !== 'undefined' && window.localStorage) {
+  try {
+    const saved = localStorage.getItem('fstats_platt_coefs');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      PLATT_COEFFICIENTS = { ...PLATT_COEFFICIENTS, ...parsed };
+    }
+  } catch (e) {}
+}
+
+export function recalibrateFromAudit(auditedPicks, sport) {
+  const sLower = (sport || 'futbol').toLowerCase();
+  let key = 'futbol';
+  if (sLower.includes('ncaaf') || sLower.includes('colegial')) key = 'ncaaf';
+  else if (sLower.includes('nfl')) key = 'nfl';
+  else if (sLower.includes('mlb') || sLower.includes('beisbol')) key = 'mlb';
+
+  const valid = auditedPicks.filter(p => p && (p.status === 'won' || p.status === 'lost'));
+  if (valid.length < 30) return PLATT_COEFFICIENTS[key]; // Mín. 30 datos
+  
+  // Gradient Descent sobre la log-loss para encontrar A,B óptimos
+  let A = 1.0, B = 0.0, lr = 0.01;
+  for (let epoch = 0; epoch < 500; epoch++) {
+    let dA = 0, dB = 0;
+    valid.forEach(p => {
+      const rawP = Math.max(0.01, Math.min(0.99, parseFloat(p.prob) / 100));
+      const logit = Math.log(rawP / (1 - rawP));
+      const calP = 1 / (1 + Math.exp(-(A * logit + B)));
+      const y = p.status === 'won' ? 1 : 0;
+      const err = calP - y;
+      dA += err * logit;
+      dB += err;
+    });
+    A -= lr * (dA / valid.length);
+    B -= lr * (dB / valid.length);
+  }
+  
+  const newCoefs = { A: +A.toFixed(4), B: +B.toFixed(4) };
+  PLATT_COEFFICIENTS[key] = newCoefs;
+  return newCoefs;
+}
 
 /**
  * Aplica una transformación logística de Platt Scaling a una probabilidad porcentual.

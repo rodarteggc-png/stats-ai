@@ -28,7 +28,8 @@ export function detectReverseLineMovement({
   sport = 'futbol',
   match = {},
   pick = '',
-  pickType = ''
+  pickType = '',
+  publicData = null
 }) {
   const sLower = (sport || '').toLowerCase();
   const mkt = match.market || {};
@@ -81,9 +82,23 @@ export function detectReverseLineMovement({
       result.isRlmDetected = true;
       if (isUnderPick) {
         result.rlmType = 'FAVORABLE';
-        result.confidenceBonus = isNflOrCollege ? 3.5 : 2.5;
-        result.badgeText = '🚨 RLM CONFIRMADO (UNDER INSTITUCIONAL)';
-        result.reason = `El público masivo suele respaldar el Over, pero el dinero profesional tumbó la línea ${Math.abs(totalDelta).toFixed(1)} pts (${totalOpen} -> ${totalClose}), confirmando valor en el Under.`;
+        if (publicData && publicData.total_under_public) {
+          const uTickets = parseFloat(publicData.total_under_public);
+          const uMoney = parseFloat(publicData.total_under_money) || uTickets;
+          if (uTickets < 45 && uMoney > 55) {
+            result.confidenceBonus = isNflOrCollege ? 4.5 : 3.5;
+            result.badgeText = '💎 RLM VERDADERO (UNDER VERIFICADO)';
+            result.reason = `Línea tumbada ${Math.abs(totalDelta).toFixed(1)} pts. El público apoya el Over (${(100-uTickets).toFixed(0)}%), pero el dinero fuerte (${uMoney}%) está con el Under.`;
+          } else {
+            result.confidenceBonus = isNflOrCollege ? 2.5 : 1.5;
+            result.badgeText = '🚨 SHARP STEAM (UNDER)';
+            result.reason = `Línea tumbada ${Math.abs(totalDelta).toFixed(1)} pts, pero el público también apoya el Under (${uTickets}%). Steam puro, no RLM genuino.`;
+          }
+        } else {
+          result.confidenceBonus = isNflOrCollege ? 3.5 : 2.5;
+          result.badgeText = '🚨 RLM CONFIRMADO (UNDER INSTITUCIONAL)';
+          result.reason = `El público masivo suele respaldar el Over, pero el dinero profesional tumbó la línea ${Math.abs(totalDelta).toFixed(1)} pts (${totalOpen} -> ${totalClose}), confirmando valor en el Under.`;
+        }
       } else {
         result.rlmType = 'TRAMPA_ADVERSA';
         result.isTrapForPick = true;
@@ -117,9 +132,23 @@ export function detectReverseLineMovement({
 
       if ((isHomeSide && favoredSide === 'home') || (isAwaySide && favoredSide === 'away')) {
         result.rlmType = 'FAVORABLE';
-        result.confidenceBonus = 3.5;
-        result.badgeText = '🚨 RLM CONFIRMADO (DINERO SINDICATO)';
-        result.reason = `Línea de spread movida ${Math.abs(spreadDeltaHome).toFixed(1)} pts a favor de ${favoredTeamName} contra el flujo general de retail.`;
+        if (publicData && publicData[`spread_${favoredSide}_public`]) {
+          const tickets = parseFloat(publicData[`spread_${favoredSide}_public`]);
+          const money = parseFloat(publicData[`spread_${favoredSide}_money`]) || tickets;
+          if (tickets < 45 && money > 55) {
+            result.confidenceBonus = 5.0;
+            result.badgeText = '💎 RLM VERDADERO (SPREAD VERIFICADO)';
+            result.reason = `Línea de spread movida ${Math.abs(spreadDeltaHome).toFixed(1)} pts a favor de ${favoredTeamName}. El público apoya al rival (${(100-tickets).toFixed(0)}%) pero el dinero fuerte (${money}%) está de nuestro lado.`;
+          } else {
+            result.confidenceBonus = 2.5;
+            result.badgeText = '🚨 SHARP STEAM (SPREAD)';
+            result.reason = `Línea de spread movida ${Math.abs(spreadDeltaHome).toFixed(1)} pts a favor de ${favoredTeamName}, pero el público también apoya (${tickets}%). Steam puro, no RLM genuino.`;
+          }
+        } else {
+          result.confidenceBonus = 3.5;
+          result.badgeText = '🚨 RLM CONFIRMADO (DINERO SINDICATO)';
+          result.reason = `Línea de spread movida ${Math.abs(spreadDeltaHome).toFixed(1)} pts a favor de ${favoredTeamName} contra el flujo general de retail.`;
+        }
       } else {
         result.rlmType = 'TRAMPA_ADVERSA';
         result.isTrapForPick = true;
@@ -158,16 +187,44 @@ export function detectReverseLineMovement({
   if (isHomeSide && homeDropPct >= 5.0) {
     result.isRlmDetected = true;
     result.rlmType = 'FAVORABLE';
-    result.confidenceBonus = 3.0;
-    result.badgeText = '🔥 SHARP STEAM CONFIRMADO';
-    result.reason = `Cuota de ${match.home?.name} colapsó -${homeDropPct.toFixed(1)}% desde apertura por absorción de liquidez institucional.`;
+    if (publicData && publicData.ml_home_public) {
+      const tickets = parseFloat(publicData.ml_home_public);
+      const money = parseFloat(publicData.ml_home_money) || tickets;
+      if (tickets < 45 && money > 55) {
+        result.confidenceBonus = 5.0;
+        result.badgeText = '💎 RLM VERDADERO (VERIFICADO)';
+        result.reason = `Cuota colapsó -${homeDropPct.toFixed(1)}% pese a que el público apoya al rival (${(100-tickets).toFixed(0)}%). El dinero fuerte (${money}%) respaldó a ${match.home?.name}.`;
+      } else {
+        result.confidenceBonus = 2.0;
+        result.badgeText = '🔥 STEAM (FLUJO DE MERCADO)';
+        result.reason = `Cuota de ${match.home?.name} colapsó -${homeDropPct.toFixed(1)}% pero el público también la apoya (${tickets}%). Es flujo positivo, pero no RLM puro.`;
+      }
+    } else {
+      result.confidenceBonus = 3.0;
+      result.badgeText = '🔥 SHARP STEAM CONFIRMADO';
+      result.reason = `Cuota de ${match.home?.name} colapsó -${homeDropPct.toFixed(1)}% desde apertura por absorción de liquidez institucional.`;
+    }
     return result;
   } else if (isAwaySide && awayDropPct >= 5.0) {
     result.isRlmDetected = true;
     result.rlmType = 'FAVORABLE';
-    result.confidenceBonus = 3.0;
-    result.badgeText = '🔥 SHARP STEAM CONFIRMADO';
-    result.reason = `Cuota de ${match.away?.name} colapsó -${awayDropPct.toFixed(1)}% desde apertura por absorción de liquidez institucional.`;
+    if (publicData && publicData.ml_away_public) {
+      const tickets = parseFloat(publicData.ml_away_public);
+      const money = parseFloat(publicData.ml_away_money) || tickets;
+      if (tickets < 45 && money > 55) {
+        result.confidenceBonus = 5.0;
+        result.badgeText = '💎 RLM VERDADERO (VERIFICADO)';
+        result.reason = `Cuota colapsó -${awayDropPct.toFixed(1)}% pese a que el público apoya al rival (${(100-tickets).toFixed(0)}%). El dinero fuerte (${money}%) respaldó a ${match.away?.name}.`;
+      } else {
+        result.confidenceBonus = 2.0;
+        result.badgeText = '🔥 STEAM (FLUJO DE MERCADO)';
+        result.reason = `Cuota de ${match.away?.name} colapsó -${awayDropPct.toFixed(1)}% pero el público también la apoya (${tickets}%). Es flujo positivo, pero no RLM puro.`;
+      }
+    } else {
+      result.confidenceBonus = 3.0;
+      result.badgeText = '🔥 SHARP STEAM CONFIRMADO';
+      result.reason = `Cuota de ${match.away?.name} colapsó -${awayDropPct.toFixed(1)}% desde apertura por absorción de liquidez institucional.`;
+    }
     return result;
   }
 

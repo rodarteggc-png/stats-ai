@@ -160,9 +160,22 @@ export function calculateMatchProbabilities(
 export function getFairOddsDecimal(probability) {
   const p = parseFloat(probability);
   if (isNaN(p) || p <= 0) return "1.90";
-  // Estima la línea de mercado regresando ligeramente la proyección del modelo (-4.5% implícito) para no anular el Edge en mercados sin momio directo de ESPN
-  const marketImplied = Math.max(12, Math.min(88, p - 4.5));
-  return (100 / marketImplied).toFixed(2);
+  // Cuota justa real del modelo (100 / prob), sin suposiciones de mercado
+  return (100 / Math.min(p, 99.5)).toFixed(2);
+}
+
+export function calculateTrueEdge(modelProb, realMarketOdds) {
+  const p = parseFloat(modelProb) / 100;
+  const odds = parseFloat(realMarketOdds);
+  if (!odds || odds <= 1.0) return { edge: 0, isPositiveEV: false, impliedProb: 0 };
+  
+  const impliedProb = 1 / odds;
+  const trueEdge = (p - impliedProb) * 100;
+  return {
+    edge: +trueEdge.toFixed(1),
+    isPositiveEV: trueEdge > 2.0, // Mínimo 2% de Edge real
+    impliedProb: +(impliedProb * 100).toFixed(1)
+  };
 }
 
 /**

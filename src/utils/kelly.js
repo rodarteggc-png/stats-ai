@@ -72,7 +72,8 @@ export function calculateKellyStake(modelProb, decimalOdds, fraction = 0.10, max
   // Escalamiento a unidades de banca:
   // 1 Unidad = 1% del bankroll.
   const unroundedUnits = adjKelly * 100;
-  const boundedUnits = Math.min(Math.max(unroundedUnits, 0.4), maxUnitsCap);
+  const minStake = edge >= 3.0 ? 0.4 : 0.0;
+  const boundedUnits = Math.min(Math.max(unroundedUnits, minStake), maxUnitsCap);
   const units = boundedUnits.toFixed(1);
 
   let riskLevel;

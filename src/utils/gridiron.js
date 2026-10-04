@@ -198,10 +198,13 @@ export function calculateNflProbabilities(
     rawModelSpread = (yppDiff * (isCollege ? 7.2 : 6.5)) + (toDiff * (isCollege ? 3.5 : 3.0)) + homeFieldAdvantage;
   }
 
-  // Anclaje Bayesiano con el Spread de Las Vegas (65% Modelo Estructural + 35% Implied Vegas Lead)
+  // Anclaje Bayesiano con el Spread de Las Vegas
+  // Peso dinámico: si el modelo y Vegas discrepan por más de 3 puntos, confiamos más en el modelo (menor anclaje).
   const spreadNum = parseFloat(vegasSpread) || -3.5;
   const vegasImpliedHomeLead = -spreadNum;
-  let predictedPointSpread = (rawModelSpread * 0.65) + (vegasImpliedHomeLead * 0.35);
+  const spreadDiff = Math.abs(rawModelSpread - vegasImpliedHomeLead);
+  const anchorWeight = spreadDiff > 3.0 ? 0.20 : 0.40;
+  let predictedPointSpread = (rawModelSpread * (1 - anchorWeight)) + (vegasImpliedHomeLead * anchorWeight);
 
   // Modificador de Memoria de Lecciones Aprendidas (IA con Cap de Seguridad)
   const rawHPen = parseFloat(homePenalty) || 0;

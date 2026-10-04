@@ -40,14 +40,27 @@ function randomNormal(mean = 0, stdDev = 1) {
  * históricamente ganan entre el 68% y el 73% de las veces debido a la varianza inherente.
  * Esta función comprime los extremos para evitar sobre-apostar con Kelly inflado.
  */
-export function bayesianCalibrate(rawProb, sampleConfidence = 0.82, priorBaseline = 50) {
-  const p = Math.max(1, Math.min(99, parseFloat(rawProb) || 50));
-  let shrinkage = sampleConfidence;
+const SPORT_PRIORS = {
+  futbol_1x2: 46.0,    // Tasa base victoria directa favorito en casa
+  futbol_btts: 52.0,    // Tasa base BTTS en ligas top
+  futbol_dc: 72.0,      // Tasa base Doble Oportunidad favorito
+  mlb_ml: 56.8,          // Tasa base ML favorito
+  mlb_f5: 54.2,          // Tasa base F5 favorito
+  nfl_ats: 51.5,         // Tasa base ATS (ni favorito ni underdog)
+  nfl_totals: 50.0       // Over/Under sin sesgo direccional
+};
+
+export function bayesianCalibrate(rawProb, sampleSize = 50, sport = 'mlb_ml') {
+  const prior = SPORT_PRIORS[sport] || 50.0;
+  // Confidence dinámico basado en tamaño muestral (más partidos = menos shrinkage)
+  let shrinkage = Math.min(0.95, 0.60 + (sampleSize / 500));
+  const p = Math.max(1, Math.min(99, parseFloat(rawProb) || prior));
+  
   // Mayor compresión en extremos (> 75% o < 25%) donde el sesgo de sobreconfianza es más severo
   if (p > 75 || p < 25) {
-    shrinkage = sampleConfidence * 0.88;
+    shrinkage = shrinkage * 0.88;
   }
-  const calibrated = (p * shrinkage) + (priorBaseline * (1 - shrinkage));
+  const calibrated = (p * shrinkage) + (prior * (1 - shrinkage));
   return Number(calibrated.toFixed(1));
 }
 
@@ -91,8 +104,24 @@ export function simulateSoccerMatch(homeXg, awayXg, iterations = 10000) {
     if (Math.random() < 0.09) curHLambda += 0.4;
     if (Math.random() < 0.09) curALambda += 0.4;
 
-    const hGoals = randomPoisson(curHLambda);
-    const aGoals = randomPoisson(curALambda);
+    let hGoals = randomPoisson(curHLambda);
+    let aGoals = randomPoisson(curALambda);
+
+    // Aplicar corrección Dixon-Coles estocásticamente
+    if (hGoals <= 1 && aGoals <= 1) {
+      let dcAdj = 1.0;
+      if (hGoals === 0 && aGoals === 0) dcAdj = 1 - (-0.15 * curHLambda * curALambda);
+      else if (hGoals === 0 && aGoals === 1) dcAdj = 1 + (-0.15 * curHLambda);
+      else if (hGoals === 1 && aGoals === 0) dcAdj = 1 + (-0.15 * curALambda);
+      else if (hGoals === 1 && aGoals === 1) dcAdj = 1 - (-0.15);
+      
+      if (dcAdj < 1.0 && Math.random() > dcAdj) {
+        // Rechazar este resultado y re-simular (rejection sampling)
+        hGoals = randomPoisson(curHLambda);
+        aGoals = randomPoisson(curALambda);
+      }
+    }
+
     const totalGoals = hGoals + aGoals;
 
     if (hGoals > aGoals) homeWins++;
@@ -123,9 +152,15 @@ export function simulateSoccerMatch(homeXg, awayXg, iterations = 10000) {
   const bttsProb = Number(((btts / numIterations) * 100).toFixed(1));
   const collapseRate = Number(((collapseEvents / numIterations) * 100).toFixed(1));
 
-  // Puntuación de Estabilidad (0 a 100)
-  const maxWin = Math.max(hProb, aProb);
-  const stabilityScore = Number(Math.max(30, Math.min(95, maxWin + (100 - dProb) * 0.2)).toFixed(0));
+  // Puntuación de Estabilidad (0 a 100) basada en el Coeficiente de Variación (CV) real
+  const p1 = homeWins / numIterations;
+  const pX = draws / numIterations;
+  const p2 = awayWins / numIterations;
+  const mean = (p1 + pX + p2) / 3;
+  const variance = (Math.pow(p1 - mean, 2) + Math.pow(pX - mean, 2) + Math.pow(p2 - mean, 2)) / 3;
+  const cv = Math.sqrt(variance) / mean; // Máx CV aprox 1.41 (100% win)
+  // Escalar CV al rango 30-95
+  const stabilityScore = Number(Math.max(30, Math.min(95, 30 + (cv / 1.41) * 65)).toFixed(0));
 
   // Estabilidad específica para Ambos Anotan (BTTS) cuando ambos equipos atacan
   const bttsStability = Number(Math.max(40, Math.min(92, bttsProb * 1.12)).toFixed(0));
