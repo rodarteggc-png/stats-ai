@@ -103,9 +103,10 @@ export function generateDailySoccerProps(games = []) {
     
     // Candado Comercial: Solo generar Player Props en ligas donde las casas realmente abren el mercado
     const leagueName = game.league || '';
+    const isFemenil = leagueName.toLowerCase().includes('femenil') || leagueName.toLowerCase().includes('women');
     const isCommercialPropLeague = SOCCER_PROPS_ALLOWED_LEAGUES.some(l => 
       leagueName.toLowerCase().includes(l.toLowerCase())
-    );
+    ) && !isFemenil;
     if (!isCommercialPropLeague) return;
 
     const hAttack = parseFloat(game.home.xG) || 1.35;
