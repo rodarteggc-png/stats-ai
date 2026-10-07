@@ -1677,12 +1677,22 @@ export async function fetchStadiumWeather(homeTeamName) {
  * Obtiene partidos reales de la NFL usando ESPN
  */
 async function fetchRealNflSchedule(dateRange) {
-  // En NFL no usamos dateRange por ahora, traemos la semana actual y sus datos dinámicos
+  // Traemos la semana actual completa y luego filtramos por dateRange para respetar los rangos de fecha
   const weekData = await fetchNflWeekSchedule(null);
   
-  // Como Radar usa un formato específico para meta/league, lo mapeamos ligeramente si es necesario.
-  // Pero el formato que devuelve fetchNflWeekSchedule ya es compatible.
-  return weekData.games.map(g => {
+  // Calcular las fechas objetivo en zona horaria CDMX para filtrar correctamente
+  const { espnDatesList } = getDateRanges(dateRange);
+  const targetDatesSet = new Set(espnDatesList); // Set de fechas en formato 'YYYYMMDD'
+
+  // Filtrar juegos por fecha del partido en zona CDMX
+  const filteredGames = weekData.games.filter(g => {
+    if (!g.gameDate) return true; // Si no tiene fecha, incluir por seguridad
+    const gameDateCdmx = new Date(g.gameDate).toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+    const gameDateEspn = gameDateCdmx.replace(/-/g, ''); // Convertir '2026-10-04' a '20261004'
+    return targetDatesSet.has(gameDateEspn);
+  });
+
+  return filteredGames.map(g => {
     const absSpread = Math.abs(g.vegas?.spread !== undefined ? g.vegas.spread : 3.5);
     const isOpeningHunt = absSpread === 2.5 || absSpread === 3.5 || absSpread === 7.5;
     const openingHuntAlert = absSpread === 2.5 
@@ -2270,6 +2280,16 @@ export async function fetchNcaafWeekSchedule(options = {}) {
 async function fetchRealNcaafSchedule(dateRange = "hoy", options = {}) {
   const weekData = await fetchNcaafWeekSchedule(options);
   let games = weekData.games || [];
+
+  // Filtrar por fechas según dateRange (ayer, hoy, etc.)
+  const { espnDatesList } = getDateRanges(dateRange);
+  const targetDatesSet = new Set(espnDatesList);
+  games = games.filter(g => {
+    if (!g.gameDate) return true;
+    const gameDateCdmx = new Date(g.gameDate).toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+    const gameDateEspn = gameDateCdmx.replace(/-/g, '');
+    return targetDatesSet.has(gameDateEspn);
+  });
 
   return games.map(g => {
     const absSpread = Math.abs(g.vegas?.spread !== undefined ? g.vegas.spread : 3.5);

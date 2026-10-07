@@ -1355,8 +1355,71 @@ export async function runDailyTelegramAudit(options = {}) {
     }
   }
 
-  // Ordenar por fecha de juego
-  const picksToReport = newlyGraded;
+  // Filtrar para el reporte diario: el Corte de Caja debe ser estrictamente de las apuestas/picks de un día antes
+  // Se calcula la fecha de "ayer" en zona horaria CDMX y una ventana máxima de 36 horas
+  const cdmxTodayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+  const [ty, tm, td] = cdmxTodayStr.split('-').map(Number);
+  const todayUtc = new Date(Date.UTC(ty, tm - 1, td));
+  const yestUtc = new Date(todayUtc);
+  yestUtc.setUTCDate(yestUtc.getUTCDate() - 1);
+  const cdmxYesterdayStr = yestUtc.toISOString().slice(0, 10);
+
+  const getCdmxDate = (dateVal) => {
+    if (!dateVal) return null;
+    const d = new Date(dateVal);
+    return isNaN(d.getTime()) ? null : d.toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+  };
+
+  const nowMs = Date.now();
+  const maxAgeHours = 36; // Ventana máxima: 36 horas cubre la jornada de ayer y la madrugada de hoy
+  const picksToReport = [];
+
+  for (const p of newlyGraded) {
+    // REGLA CRÍTICA: El Corte de Caja debe basarse ÚNICAMENTE en picks efectivamente enviados a Telegram
+    const isTelegramPick = p.dispatchedToTelegram === true || p.source === 'telegram';
+    if (!isTelegramPick) {
+      // Pick del Portal Web o Radar no enviado al chat de Telegram:
+      // Se archiva en el ledger para que no ensucie el Corte de Caja diario
+      if (providedCache[p.id]) {
+        providedCache[p.id].reportedInTelegram = true;
+        ledgerModified = true;
+      }
+      continue;
+    }
+
+    const gameCdmxDate = getCdmxDate(p.gameDate);
+    const pickCdmxDate = getCdmxDate(p.timestamp);
+
+    // Antigüedad del partido o pick en horas
+    const gameMs = p.gameDate ? new Date(p.gameDate).getTime() : (p.timestamp || 0);
+    const hoursSinceGame = (nowMs - gameMs) / (1000 * 60 * 60);
+
+    // ¿Pertenece a la jornada de ayer (CDMX)? (Emitido ayer entre mañana/tarde o jugado ayer)
+    const isSentYesterday = (pickCdmxDate === cdmxYesterdayStr);
+    const isPlayedYesterday = (gameCdmxDate === cdmxYesterdayStr);
+    const isRecentGame = !isNaN(hoursSinceGame) && hoursSinceGame >= 0 && hoursSinceGame <= maxAgeHours;
+    const isOlderThanYesterday = gameCdmxDate && (gameCdmxDate < cdmxYesterdayStr) && hoursSinceGame > maxAgeHours;
+
+    if (isOlderThanYesterday) {
+      // Es un partido viejo anterior a ayer.
+      // Se archiva en el ledger como auditado para no enviarlo en el corte diario ni dejarlo pendiente.
+      if (providedCache[p.id]) {
+        providedCache[p.id].reportedInTelegram = true;
+        ledgerModified = true;
+      }
+      continue;
+    }
+
+    if (isSentYesterday || isPlayedYesterday || isRecentGame) {
+      picksToReport.push(p);
+    } else {
+      // Si no cumple el criterio de temporalidad de ayer, archivar
+      if (providedCache[p.id]) {
+        providedCache[p.id].reportedInTelegram = true;
+        ledgerModified = true;
+      }
+    }
+  }
   let won = 0;
   let lost = 0;
   let push = 0;
@@ -1387,14 +1450,13 @@ export async function runDailyTelegramAudit(options = {}) {
 
   let auditSent = false;
   if (sendToTelegram && picksToReport.length > 0) {
-    const lines = picksToReport.slice(0, 20).map(p => {
+    const lines = picksToReport.slice(0, 25).map(p => {
       const icon = p.status === 'won' ? '✅' : (p.status === 'void' ? '➖' : '❌');
       const unitStr = p.status === 'void' ? '`0.00u (Push)`' : `\`${p.netUnits >= 0 ? '+' : ''}${Number(p.netUnits).toFixed(2)}u\``;
-      const originTag = p.dispatchedToTelegram === false ? ' _(Radar/Portal 3/3)_' : '';
-      return `${icon} *${p.sport}:* ${p.game}${originTag}\n   👉 _${p.pick}_ | \`${p.scoreDisplay}\` | ${unitStr}`;
+      return `${icon} *${p.sport}:* ${p.game}\n   👉 _${p.pick}_ | \`${p.scoreDisplay}\` | ${unitStr}`;
     });
-    if (picksToReport.length > 20) {
-      lines.push(`_...y ${picksToReport.length - 20} selección(es) 3/3 adicional(es) sincronizadas en el Portal Web._`);
+    if (picksToReport.length > 25) {
+      lines.push(`_...y ${picksToReport.length - 25} pronóstico(s) adicional(es) de la jornada de ayer._`);
     }
 
     const penalizedTeams = Object.keys(runtimePenalties);
@@ -1408,7 +1470,7 @@ export async function runDailyTelegramAudit(options = {}) {
 
     const reportMsg = [
       `📊 *CORTE DE CAJA OFICIAL — AUDITORÍA STATS-AI PRO* 📊`,
-      `🗓️ *Verificación Oficial (Telegram + Unánimes 3/3 del Portal)*`,
+      `🗓️ *Balance de Alertas Enviadas Ayer a Telegram (${cdmxYesterdayStr})*`,
       ``,
       ...lines,
       ``,
