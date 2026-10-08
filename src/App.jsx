@@ -190,7 +190,7 @@ export default function App() {
   }
 
   function handleSaveProp(prop) {
-    const cardKelly = calculateKellyStake(parseFloat(prop.prob) || 50, parseFloat(prop.marketOdds || prop.fairOdds || 1.90), 0.25);
+    const cardKelly = calculateKellyStake(parseFloat(prop.prob) || 50, parseFloat(prop.marketOdds || prop.fairOdds || 1.90), 0.10, 1.5);
     const stakeUnits = parseFloat(cardKelly.units) > 0 ? cardKelly.units : "1.0";
     const fakeMatch = {
       id: prop.matchId || `prop-${Date.now()}`,

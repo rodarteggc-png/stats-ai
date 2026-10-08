@@ -392,18 +392,27 @@ export function evaluateEnsembleConsensus({
       pick.toLowerCase().includes('ponches')
     ));
 
-  // Cálculo matemático del Criterio de Kelly Fraccional con blindaje por tipo de mercado
+  // Detección de Player Prop Élite (Opción B: Escalonado hasta 1.5u)
+  // 1. Abridores / Ponches (Strikeouts) con amplia muestra
+  // 2. O Bateador / Prop con unanimidad (3/3)
+  const isPitcherProp = pTypeUpper.includes('PONCHES') || (typeof pick === 'string' && pick.toLowerCase().includes('ponches'));
   const isUnanimous = votesPassed === totalVotes && totalVotes >= 2;
-  const maxUnitsCap = isProp ? (isUnanimous ? 1.0 : 0.75) : (isUnanimous ? 2.0 : 1.0);
+  const isEliteProp = isProp && (isPitcherProp || isUnanimous || votesPassed === 3);
+
+  // Cálculo matemático del Criterio de Kelly Fraccional con blindaje escalonado (Opción B)
+  const maxUnitsCap = isProp 
+    ? (isEliteProp ? 1.5 : (isUnanimous ? 1.0 : 0.75)) 
+    : (isUnanimous ? 2.0 : 1.0);
   const kellyFraction = isProp
-    ? (isUnanimous ? 0.05 : 0.035)
+    ? (isEliteProp ? 0.075 : (isUnanimous ? 0.05 : 0.035))
     : (isUnanimous ? 0.10 : 0.05);
 
   const recommendedStake = formatDynamicStake({
     prob: effectiveProb,
     odds: effectiveOdds,
     votesPassed,
-    isProp
+    isProp,
+    isEliteProp
   });
 
   const kellyData = calculateKellyStake(
@@ -416,6 +425,8 @@ export function evaluateEnsembleConsensus({
   return {
     votesPassed,
     isUnanimous,
+    isProp,
+    isEliteProp,
     verdict,
     badgeText,
     badgeColor,

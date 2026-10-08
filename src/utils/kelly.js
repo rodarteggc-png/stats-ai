@@ -99,33 +99,44 @@ export function calculateKellyStake(modelProb, decimalOdds, fraction = 0.10, max
  * @param {number} params.votesPassed - Cantidad de votos del Tribunal (0 a 3)
  * @returns {string} Texto formateado con unidades y justificación matemática
  */
-export function formatDynamicStake({ prob, odds, votesPassed = 3, isProp = false }) {
+export function formatDynamicStake({ prob, odds, votesPassed = 3, isProp = false, isEliteProp = false }) {
   if (votesPassed < 2) {
     return '0.0 Unidades (Veto del Tribunal — No Apostar)';
   }
 
-  // Si es Player Prop: Se impone un techo estricto (1.0u para 3/3 y 0.75u para 2/3)
-  // para evitar que la volatilidad de un solo atleta destruya el capital acumulado.
-  // Para mercados de equipo completos: 2.0u para 3/3 y 1.0u para 2/3.
-  const fraction = isProp
-    ? (votesPassed === 3 ? 0.05 : 0.035)
-    : (votesPassed === 3 ? 0.10 : 0.05);
+  // MODELO ESCALONADO DE GESTIÓN DE CAPITAL (Opción B):
+  // 1. Mercados de equipo completos: 2.0u en unanimidad 3/3, 1.0u en consenso 2/3.
+  // 2. Player Props Élite (Abridores con muestra amplia, o Bateadores con Unanimidad 3/3 y Edge alto):
+  //    Tope ampliado a 1.5 Unidades para maximizar el retorno sin exponer la banca a 2.0u.
+  // 3. Player Props Secundarios o con 2/3 votos:
+  //    Tope prudencial de 1.0 Unidad (o 0.75u) para proteger la banca.
+  let fraction;
+  let fractionLabel;
+  let cap;
 
-  const fractionLabel = isProp
-    ? (votesPassed === 3 ? 'Player Prop Cap 1.0u' : 'Player Prop Cobertura 0.75u')
-    : (votesPassed === 3 ? 'Quarter Kelly' : 'Eighth Kelly / Cobertura');
-
-  const cap = isProp
-    ? (votesPassed === 3 ? 1.0 : 0.75)
-    : (votesPassed === 3 ? 2.0 : 1.0);
+  if (isProp) {
+    if (isEliteProp || votesPassed === 3) {
+      fraction = 0.075;
+      cap = 1.5;
+      fractionLabel = 'Player Prop Élite Cap 1.5u';
+    } else {
+      fraction = 0.045;
+      cap = 1.0;
+      fractionLabel = 'Player Prop Prudencial 1.0u';
+    }
+  } else {
+    fraction = votesPassed === 3 ? 0.10 : 0.05;
+    fractionLabel = votesPassed === 3 ? 'Quarter Kelly' : 'Eighth Kelly / Cobertura';
+    cap = votesPassed === 3 ? 2.0 : 1.0;
+  }
 
   const kelly = calculateKellyStake(prob, odds, fraction, cap);
 
   if (kelly.rawUnits <= 0 || parseFloat(kelly.edge) <= 0) {
     if (isProp) {
-      return votesPassed === 3
-        ? '0.75 Unidades (Player Prop Prudencial)'
-        : '0.4 Unidades (Player Prop Cobertura)';
+      return (isEliteProp || votesPassed === 3)
+        ? '1.0 Unidad (Player Prop Élite Protegido)'
+        : '0.5 Unidades (Player Prop Prudencial)';
     }
     return votesPassed === 3 
       ? '1.0 Unidad (Stake Fijo de Protección)' 

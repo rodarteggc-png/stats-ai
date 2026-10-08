@@ -355,9 +355,15 @@ export function gradeOfficialPick(pick, match) {
                      (pick.type || '').toUpperCase().includes('PONCHES') || 
                      (pick.type || '').toUpperCase().includes('TIROS A PUERTA') || 
                      (pick.id && String(pick.id).startsWith('prop-'));
-  const stakeCap = isPickProp ? 1.0 : 2.0;
+  const isPickElite = pick.isEliteProp || 
+                      pick.consensus?.isEliteProp || 
+                      (pick.type || '').toUpperCase().includes('PONCHES') || 
+                      pickStr.includes('ponches') ||
+                      (pick.votesPassed === 3) ||
+                      (pick.consensus?.votesPassed === 3);
+  const stakeCap = isPickProp ? (isPickElite ? 1.5 : 1.0) : 2.0;
   const rawStake = parseFloat(pick.stakeUnits || pick.consensus?.recommendedStake);
-  const stakeUnits = !isNaN(rawStake) ? Math.min(stakeCap, rawStake) : (isPickProp ? 1.0 : 2.0);
+  const stakeUnits = !isNaN(rawStake) ? Math.min(stakeCap, rawStake) : (isPickProp ? (isPickElite ? 1.5 : 1.0) : 2.0);
   const oddsDec = parseFloat(pick.odds) || 1.90;
 
   let status = 'lost'; // 'won', 'lost', 'void'
@@ -1833,9 +1839,15 @@ export async function runAlertEngine(options = {}) {
         odds: uPick.odds,
         stakeUnits: (() => {
           const isUProp = (uPick.type || '').toUpperCase().includes('PROP') || (uPick.id && String(uPick.id).startsWith('prop-'));
-          const cap = isUProp ? 1.0 : 2.0;
+          const isUElite = uPick.isEliteProp || 
+                           uPick.consensus?.isEliteProp ||
+                           (uPick.type || '').toUpperCase().includes('PONCHES') || 
+                           (typeof uPick.pick === 'string' && uPick.pick.toLowerCase().includes('ponches')) ||
+                           uPick.votesPassed === 3 || 
+                           uPick.consensus?.votesPassed === 3;
+          const cap = isUProp ? (isUElite ? 1.5 : 1.0) : 2.0;
           const parsed = parseFloat(uPick.consensus?.recommendedStake);
-          return !isNaN(parsed) ? Math.min(cap, parsed) : (isUProp ? 1.0 : 2.0);
+          return !isNaN(parsed) ? Math.min(cap, parsed) : (isUProp ? (isUElite ? 1.5 : 1.0) : 2.0);
         })(),
         homeName: uPick.match?.home?.name,
         awayName: uPick.match?.away?.name,
@@ -1958,9 +1970,15 @@ export async function runAlertEngine(options = {}) {
         odds: pick.odds,
         stakeUnits: (() => {
           const isTProp = (pick.type || '').toUpperCase().includes('PROP') || (pick.id && String(pick.id).startsWith('prop-'));
-          const cap = isTProp ? 1.0 : 2.0;
+          const isTElite = pick.isEliteProp || 
+                           pick.consensus?.isEliteProp ||
+                           (pick.type || '').toUpperCase().includes('PONCHES') || 
+                           (typeof pick.pick === 'string' && pick.pick.toLowerCase().includes('ponches')) ||
+                           pick.votesPassed === 3 || 
+                           pick.consensus?.votesPassed === 3;
+          const cap = isTProp ? (isTElite ? 1.5 : 1.0) : 2.0;
           const parsed = parseFloat(pick.consensus?.recommendedStake);
-          return !isNaN(parsed) ? Math.min(cap, parsed) : (isTProp ? 1.0 : 2.0);
+          return !isNaN(parsed) ? Math.min(cap, parsed) : (isTProp ? (isTElite ? 1.5 : 1.0) : 2.0);
         })(),
         homeName: pick.match?.home?.name,
         awayName: pick.match?.away?.name,
