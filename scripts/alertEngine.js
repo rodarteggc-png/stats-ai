@@ -15,6 +15,7 @@ import { evaluateEnsembleConsensus } from '../src/utils/ensemble.js';
 import { applyPlattCalibration, recalibrateFromAudit } from '../src/utils/calibration.js';
 import { getPairCorrelation } from '../src/utils/correlationMatrix.js';
 import { detectReverseLineMovement } from '../src/utils/rlmDetector.js';
+import { auditCandidateAsTipsterPro } from '../src/utils/tipsterAuditor.js';
 import {
   getLearnedAdjustmentsForMatch,
   updateDynamicElo,
@@ -1199,6 +1200,9 @@ export function buildOpportunitiesAndTopSlate({
       prob: opp.prob,
       odds: opp.odds
     });
+
+    // Auditoría Cualitativa & Big Data de Tipster Pro (Fatiga, Clima, Motivación)
+    opp.tipsterAudit = auditCandidateAsTipsterPro(opp);
   });
 
   // Candado de Certeza Inquebrantable:
@@ -1208,6 +1212,11 @@ export function buildOpportunitiesAndTopSlate({
   const approvedOpps = rawOpportunities.filter(opp => {
     if (!opp.consensus || opp.consensus.votesPassed < 2) return false;
     if (opp.consensus.rlmInfo?.isTrapForPick) return false;
+
+    // Veto Cualitativo Tipster Pro: Rechaza trampas de fatiga, vestidor o clima adverso
+    if (opp.tipsterAudit && opp.tipsterAudit.isApproved === false) {
+      return false;
+    }
 
     // Candado de Momio Quemado (Opción C):
     // Si la selección tiene RLM institucional pero la cuota cayó tanto que el Edge remanente
@@ -1246,6 +1255,14 @@ export function buildOpportunitiesAndTopSlate({
     const bHasRlm = Boolean(b.consensus?.rlmInfo?.isRlmDetected && b.consensus?.rlmInfo?.rlmType === 'FAVORABLE');
     if (aHasRlm !== bHasRlm) {
       return bHasRlm ? 1 : -1;
+    }
+
+    // Desempate Tipster Pro por Grado Cualitativo (A+ > A > B+)
+    const gradeWeight = { 'A+': 3, 'A': 2, 'B+': 1 };
+    const aGrade = gradeWeight[a.tipsterAudit?.grade] || 1;
+    const bGrade = gradeWeight[b.tipsterAudit?.grade] || 1;
+    if (aGrade !== bGrade) {
+      return bGrade - aGrade;
     }
 
     if (b.consensus.votesPassed !== a.consensus.votesPassed) {
@@ -1913,6 +1930,7 @@ export async function runAlertEngine(options = {}) {
       selectionLabel,
       `👉 *${pick.pick}*`,
       ``,
+      ...(pick.tipsterAudit ? [pick.tipsterAudit.badgeTitle, `  _${pick.tipsterAudit.reason}_`, ``] : []),
       `📊 *Probabilidad Calibrada:* \`${pick.prob}\``,
       stabilityLine,
       `💰 *Cuota de Mercado:* \`${pick.odds}\``,
