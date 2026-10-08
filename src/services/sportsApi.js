@@ -716,7 +716,7 @@ export async function fetchLiveMlbStandings() {
  */
 async function fetchRealMlbSchedule(dateRange) {
   const { mlbStart, mlbEnd, espnDatesList } = getDateRanges(dateRange);
-  const url = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=${mlbStart}&endDate=${mlbEnd}&hydrate=probablePitcher,linescore,team,decisions`;
+  const url = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=${mlbStart}&endDate=${mlbEnd}&hydrate=probablePitcher,linescore,team,decisions,lineups`;
   
   const espnScoreboardPromises = (espnDatesList || []).map(dStr =>
     fetch(`https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=${dStr}`)
@@ -853,6 +853,11 @@ async function fetchRealMlbSchedule(dateRange) {
             }
           },
           lineupStatus: getMatchLineupStatus(g.gameDate, 'mlb', { pitcher: { name: homePitcherName } }, { pitcher: { name: awayPitcherName } }),
+          lineups: {
+            home: (g.lineups?.homePlayers || []).map(p => p.fullName || p.name).filter(Boolean),
+            away: (g.lineups?.awayPlayers || []).map(p => p.fullName || p.name).filter(Boolean),
+            hasOfficialLineup: ((g.lineups?.homePlayers || []).length >= 9) && ((g.lineups?.awayPlayers || []).length >= 9)
+          },
           market: (() => {
             const expHome = 1 / (1 + Math.pow(10, (awayElo - (homeElo + 25)) / 400));
             const fairH = (1 / Math.min(0.85, Math.max(0.20, expHome))).toFixed(2);

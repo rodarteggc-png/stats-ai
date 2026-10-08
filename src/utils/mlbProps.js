@@ -177,13 +177,30 @@ export function calculateBatterTotalBases(batter, opposingPitcher, homeTeamName 
   };
 }
 
+export function isPlayerInLineup(playerName, lineupArray = []) {
+  if (!playerName || !Array.isArray(lineupArray) || lineupArray.length === 0) return false;
+  const pLower = playerName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  const pParts = pLower.split(/\s+/);
+  const lastName = pParts[pParts.length - 1];
+
+  return lineupArray.some(item => {
+    const itemLower = (typeof item === 'string' ? item : (item.name || item.fullName || '')).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+    if (itemLower.includes(pLower) || pLower.includes(itemLower)) return true;
+    if (lastName.length >= 4 && itemLower.includes(lastName)) return true;
+    return false;
+  });
+}
+
 /**
  * Escanea la lista de partidos de MLB del día y genera los Top Picks de Props
  * inyectando la sede oficial para cada enfrentamiento.
  * @param {Array} games - Lista de partidos de MLB con datos hidratados
+ * @param {Object} options - Opciones de filtrado
+ * @param {boolean} options.requireConfirmedLineup - Exigir alineación titular confirmada (default: true)
  * @returns {{ topStrikeouts: Array, topTotalBases: Array }}
  */
-export function generateDailyMlbProps(games = []) {
+export function generateDailyMlbProps(games = [], options = {}) {
+  const requireLineup = options.requireConfirmedLineup !== false;
   const strikeoutCandidates = [];
   const totalBasesCandidates = [];
 
@@ -192,7 +209,7 @@ export function generateDailyMlbProps(games = []) {
     const homeTeamName = game.home.name;
 
     // Evaluaciones de Abridores para Ponches (Lanzador Local)
-    if (game.home.pitcher?.name && !game.home.pitcher.name.includes("por Anunciar")) {
+    if (game.home.pitcher?.name && !game.home.pitcher.name.includes("por Anunciar") && !game.home.pitcher.name.includes("TBD")) {
       const homeK = calculatePitcherKProjection(
         {
           name: game.home.pitcher.name,
@@ -211,7 +228,7 @@ export function generateDailyMlbProps(games = []) {
     }
 
     // Evaluaciones de Abridores para Ponches (Lanzador Visitante en estadio rival)
-    if (game.away.pitcher?.name && !game.away.pitcher.name.includes("por Anunciar")) {
+    if (game.away.pitcher?.name && !game.away.pitcher.name.includes("por Anunciar") && !game.away.pitcher.name.includes("TBD")) {
       const awayK = calculatePitcherKProjection(
         {
           name: game.away.pitcher.name,
@@ -230,7 +247,13 @@ export function generateDailyMlbProps(games = []) {
     }
 
     // Evaluaciones de Bateadores de Poder para Bases Totales (Bateador Local)
-    if (game.home.topHitter && game.away.pitcher) {
+    // CANDADO ESTRICTO ANTI-DNP: Si requireLineup es true, el bateador DEBE estar ratificado en el orden al bat oficial
+    const homeLineup = game.lineups?.home || [];
+    const hasHomeLineup = game.lineups?.hasOfficialLineup || homeLineup.length >= 9;
+    const isHomeConfirmed = hasHomeLineup && isPlayerInLineup(game.home.topHitter?.name, homeLineup);
+    const allowHomeBatter = requireLineup ? isHomeConfirmed : true;
+
+    if (game.home.topHitter && game.away.pitcher && allowHomeBatter) {
       const homeBatterProp = calculateBatterTotalBases(
         {
           name: game.home.topHitter.name,
@@ -247,11 +270,16 @@ export function generateDailyMlbProps(games = []) {
         },
         homeTeamName
       );
-      totalBasesCandidates.push({ ...homeBatterProp, matchId: game.id, gameDate: game.gameDate });
+      totalBasesCandidates.push({ ...homeBatterProp, matchId: game.id, gameDate: game.gameDate, isConfirmedLineup: isHomeConfirmed });
     }
 
     // Evaluaciones de Bateadores de Poder para Bases Totales (Bateador Visitante)
-    if (game.away.topHitter && game.home.pitcher) {
+    const awayLineup = game.lineups?.away || [];
+    const hasAwayLineup = game.lineups?.hasOfficialLineup || awayLineup.length >= 9;
+    const isAwayConfirmed = hasAwayLineup && isPlayerInLineup(game.away.topHitter?.name, awayLineup);
+    const allowAwayBatter = requireLineup ? isAwayConfirmed : true;
+
+    if (game.away.topHitter && game.home.pitcher && allowAwayBatter) {
       const awayBatterProp = calculateBatterTotalBases(
         {
           name: game.away.topHitter.name,
@@ -268,7 +296,7 @@ export function generateDailyMlbProps(games = []) {
         },
         homeTeamName
       );
-      totalBasesCandidates.push({ ...awayBatterProp, matchId: game.id, gameDate: game.gameDate });
+      totalBasesCandidates.push({ ...awayBatterProp, matchId: game.id, gameDate: game.gameDate, isConfirmedLineup: isAwayConfirmed });
     }
   });
 

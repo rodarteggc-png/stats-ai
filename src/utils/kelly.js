@@ -99,20 +99,34 @@ export function calculateKellyStake(modelProb, decimalOdds, fraction = 0.10, max
  * @param {number} params.votesPassed - Cantidad de votos del Tribunal (0 a 3)
  * @returns {string} Texto formateado con unidades y justificación matemática
  */
-export function formatDynamicStake({ prob, odds, votesPassed = 3 }) {
+export function formatDynamicStake({ prob, odds, votesPassed = 3, isProp = false }) {
   if (votesPassed < 2) {
     return '0.0 Unidades (Veto del Tribunal — No Apostar)';
   }
 
-  // Si 3/3 votos -> Fracción completa estándar (0.10x sobre Kelly, máx 2.0u)
-  // Si 2/3 votos -> Haircut del 50% de seguridad preventiva ante el voto discrepante (máx 1.0u)
-  const fraction = votesPassed === 3 ? 0.10 : 0.05;
-  const fractionLabel = votesPassed === 3 ? 'Quarter Kelly' : 'Eighth Kelly / Cobertura';
-  const cap = votesPassed === 3 ? 2.0 : 1.0;
+  // Si es Player Prop: Se impone un techo estricto (1.0u para 3/3 y 0.75u para 2/3)
+  // para evitar que la volatilidad de un solo atleta destruya el capital acumulado.
+  // Para mercados de equipo completos: 2.0u para 3/3 y 1.0u para 2/3.
+  const fraction = isProp
+    ? (votesPassed === 3 ? 0.05 : 0.035)
+    : (votesPassed === 3 ? 0.10 : 0.05);
+
+  const fractionLabel = isProp
+    ? (votesPassed === 3 ? 'Player Prop Cap 1.0u' : 'Player Prop Cobertura 0.75u')
+    : (votesPassed === 3 ? 'Quarter Kelly' : 'Eighth Kelly / Cobertura');
+
+  const cap = isProp
+    ? (votesPassed === 3 ? 1.0 : 0.75)
+    : (votesPassed === 3 ? 2.0 : 1.0);
 
   const kelly = calculateKellyStake(prob, odds, fraction, cap);
 
   if (kelly.rawUnits <= 0 || parseFloat(kelly.edge) <= 0) {
+    if (isProp) {
+      return votesPassed === 3
+        ? '0.75 Unidades (Player Prop Prudencial)'
+        : '0.4 Unidades (Player Prop Cobertura)';
+    }
     return votesPassed === 3 
       ? '1.0 Unidad (Stake Fijo de Protección)' 
       : '0.5 Unidades (Stake Prudente de Cobertura)';
@@ -120,3 +134,4 @@ export function formatDynamicStake({ prob, odds, votesPassed = 3 }) {
 
   return `${kelly.units} Unidades (${fractionLabel} | Edge +${kelly.edge}%)`;
 }
+

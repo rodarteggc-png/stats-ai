@@ -380,19 +380,37 @@ export function evaluateEnsembleConsensus({
     effectiveOdds = match.market?.current || match.market?.homeOdds || match.vegas?.homeMl || '1.91';
   }
 
-  // Cálculo matemático del Criterio de Kelly Fraccional
+  // Detección de selección sobre jugador individual (Player Prop)
+  const isProp = pTypeUpper.includes('PROP') || 
+    pTypeUpper.includes('JUGADOR') || 
+    pTypeUpper.includes('BASES TOTALES') || 
+    pTypeUpper.includes('PONCHES') || 
+    pTypeUpper.includes('TIROS A PUERTA') ||
+    (typeof pick === 'string' && (
+      pick.toLowerCase().includes('bases totales') || 
+      pick.toLowerCase().includes('tiros a puerta') || 
+      pick.toLowerCase().includes('ponches')
+    ));
+
+  // Cálculo matemático del Criterio de Kelly Fraccional con blindaje por tipo de mercado
+  const isUnanimous = votesPassed === totalVotes && totalVotes >= 2;
+  const maxUnitsCap = isProp ? (isUnanimous ? 1.0 : 0.75) : (isUnanimous ? 2.0 : 1.0);
+  const kellyFraction = isProp
+    ? (isUnanimous ? 0.05 : 0.035)
+    : (isUnanimous ? 0.10 : 0.05);
+
   const recommendedStake = formatDynamicStake({
     prob: effectiveProb,
     odds: effectiveOdds,
-    votesPassed
+    votesPassed,
+    isProp
   });
 
-  const isUnanimous = votesPassed === totalVotes && totalVotes >= 2;
   const kellyData = calculateKellyStake(
     effectiveProb,
     effectiveOdds,
-    isUnanimous ? 0.10 : 0.05,
-    isUnanimous ? 2.0 : 1.0
+    kellyFraction,
+    maxUnitsCap
   );
 
   return {

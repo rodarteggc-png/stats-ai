@@ -131,10 +131,40 @@ export async function loadCloudLedger() {
 export async function saveCloudLedger(cache) {
   if (!cache._meta) cache._meta = {};
   cache._meta.dynamicElo = getDynamicEloStore();
-  const clean = pruneCache(cache);
-  saveLocalCache(clean);
 
   const botToken = process.env.TELEGRAM_BOT_TOKEN || TELEGRAM_BOT_TOKEN;
+  let finalCache = cache;
+
+  // Blindaje anti-sobrescritura: intentar recuperar datos existentes en la nube para nunca perder picks previos
+  if (botToken) {
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${botToken}/getMyCommands?language_code=${CLOUD_LANG_CODE}`);
+      const data = await res.json();
+      if (data.ok && Array.isArray(data.result) && data.result.length > 0) {
+        const b64 = data.result
+          .filter(c => c.command && c.command.startsWith('s_'))
+          .sort((a, b) => parseInt(a.command.slice(2), 10) - parseInt(b.command.slice(2), 10))
+          .map(c => c.description)
+          .join('');
+        if (b64) {
+          const buf = Buffer.from(b64, 'base64');
+          const cloudData = JSON.parse(zlib.inflateRawSync(buf).toString('utf-8'));
+          finalCache = { ...cloudData, ...cache };
+          finalCache._meta = {
+            ...(cloudData._meta || {}),
+            ...(cache._meta || {}),
+            dynamicElo: { ...(cloudData._meta?.dynamicElo || {}), ...(cache._meta?.dynamicElo || {}) }
+          };
+        }
+      }
+    } catch (e) {
+      // Si falla la consulta previa, proceder con el cache recibido
+    }
+  }
+
+  const clean = pruneCache(finalCache);
+  saveLocalCache(clean);
+
   if (!botToken) return;
 
   try {
@@ -148,7 +178,7 @@ export async function saveCloudLedger(cache) {
       });
     }
 
-    await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -156,6 +186,9 @@ export async function saveCloudLedger(cache) {
         language_code: CLOUD_LANG_CODE
       })
     });
+    if (!res.ok) {
+      console.warn('Aviso guardando Cloud Ledger en Telegram:', await res.text());
+    }
   } catch (err) {
     console.warn('Aviso guardando Cloud Ledger:', err.message);
   }
@@ -297,12 +330,33 @@ export function gradeOfficialPick(pick, match) {
     return null;
   }
 
+  // Si el pick ya tiene una calificación de boxscore o forense específica (ej. Player Props individuales DNP/hits)
+  if (pick.status && pick.status !== 'pending' && pick.scoreDisplay) {
+    return {
+      status: pick.status,
+      scoreDisplay: pick.scoreDisplay,
+      failedTeam: pick.failedTeam || null,
+      opponentTeam: pick.opponentTeam || null,
+      homeScore: parseInt(m.homeScore, 10),
+      awayScore: parseInt(m.awayScore, 10),
+      netUnits: pick.netUnits !== undefined ? pick.netUnits : (pick.status === 'won' ? (parseFloat(pick.stakeUnits || 2.0) * (parseFloat(pick.odds || 1.9) - 1)) : (pick.status === 'void' ? 0 : -parseFloat(pick.stakeUnits || 2.0)))
+    };
+  }
+
   const hScore = parseInt(m.homeScore, 10);
   const aScore = parseInt(m.awayScore, 10);
   const hName = (m.home?.name || pick.homeName || '').toLowerCase();
   const aName = (m.away?.name || pick.awayName || '').toLowerCase();
   const pickStr = (pick.pick || '').toLowerCase();
-  const stakeUnits = parseFloat(pick.stakeUnits || pick.consensus?.recommendedStake) || 2.0;
+  const isPickProp = (pick.type || '').toUpperCase().includes('PROP') || 
+                     (pick.type || '').toUpperCase().includes('JUGADOR') || 
+                     (pick.type || '').toUpperCase().includes('BASES TOTALES') || 
+                     (pick.type || '').toUpperCase().includes('PONCHES') || 
+                     (pick.type || '').toUpperCase().includes('TIROS A PUERTA') || 
+                     (pick.id && String(pick.id).startsWith('prop-'));
+  const stakeCap = isPickProp ? 1.0 : 2.0;
+  const rawStake = parseFloat(pick.stakeUnits || pick.consensus?.recommendedStake);
+  const stakeUnits = !isNaN(rawStake) ? Math.min(stakeCap, rawStake) : (isPickProp ? 1.0 : 2.0);
   const oddsDec = parseFloat(pick.odds) || 1.90;
 
   let status = 'lost'; // 'won', 'lost', 'void'
@@ -432,7 +486,7 @@ export function buildOpportunitiesAndTopSlate({
   mlbMatches = [],
   nflMatches = [],
   ncaafMatches = [],
-  maxPicksToSend = 8,
+  maxPicksToSend = 6,
   runtimePenalties = {},
   sentCache = {},
   isForce = false
@@ -657,6 +711,7 @@ export function buildOpportunitiesAndTopSlate({
         game: prop.team + ' vs ' + prop.opponent,
         gameDate: prop.gameDate,
         type: '⚽ PLAYER PROP (TIROS A PUERTA)',
+        isProp: true,
         pick: prop.fullPick,
         prob: `${prop.prob}%`,
         odds: prop.marketOdds,
@@ -775,7 +830,8 @@ export function buildOpportunitiesAndTopSlate({
   });
 
   // ================= B.2 EVALUACIÓN DE PLAYER PROPS (MLB) =================
-  const mlbProps = generateDailyMlbProps(mlbMatches);
+  // Solo se generan Props de bateo si la alineación oficial titular está confirmada en el orden al bat
+  const mlbProps = generateDailyMlbProps(mlbMatches, { requireConfirmedLineup: true });
   mlbProps.topStrikeouts.forEach(prop => {
     if (prop.isSharp) {
       rawOpportunities.push({
@@ -785,6 +841,7 @@ export function buildOpportunitiesAndTopSlate({
         game: prop.team + ' vs ' + prop.opponent,
         gameDate: prop.gameDate,
         type: '🔥 PLAYER PROP (STRIKEOUTS)',
+        isProp: true,
         pick: prop.fullPick,
         prob: `${prop.prob}%`,
         odds: prop.marketOdds,
@@ -807,6 +864,7 @@ export function buildOpportunitiesAndTopSlate({
         game: prop.team + ' vs ' + prop.opponent,
         gameDate: prop.gameDate,
         type: '⚾ PLAYER PROP (BASES TOTALES)',
+        isProp: true,
         pick: prop.fullPick,
         prob: `${prop.prob}%`,
         odds: prop.marketOdds,
@@ -1150,6 +1208,16 @@ export function buildOpportunitiesAndTopSlate({
   const approvedOpps = rawOpportunities.filter(opp => {
     if (!opp.consensus || opp.consensus.votesPassed < 2) return false;
     if (opp.consensus.rlmInfo?.isTrapForPick) return false;
+
+    // Candado de Momio Quemado (Opción C):
+    // Si la selección tiene RLM institucional pero la cuota cayó tanto que el Edge remanente
+    // es inferior a +3.0% o el momio actual es menor a 1.45, se veta para evitar comprar tarde.
+    if (opp.consensus.rlmInfo?.isRlmDetected && opp.consensus.rlmInfo?.rlmType === 'FAVORABLE') {
+      const remainingEdge = parseFloat(opp.edgeVal) || 0;
+      const currentOdds = parseFloat(opp.odds) || 1.90;
+      if (remainingEdge < 3.0 || currentOdds < 1.45) return false;
+    }
+
     const probNum = parseFloat(opp.prob) || 0;
     const pickStr = (opp.pick || '').toLowerCase();
     const isSpreadOrTotal = pickStr.includes('cubre') || pickStr.includes('hándicap') || pickStr.includes('handicap') || pickStr.includes('over') || pickStr.includes('under') || /[+-]\d+/.test(pickStr);
@@ -1168,9 +1236,18 @@ export function buildOpportunitiesAndTopSlate({
       return a.isToday ? -1 : 1;
     }
     const probDiff = (parseFloat(b.prob) || 0) - (parseFloat(a.prob) || 0);
-    if (Math.abs(probDiff) >= 0.8) {
+    if (Math.abs(probDiff) >= 1.2) {
       return probDiff;
     }
+
+    // Desempate Sharp VIP: si las probabilidades están muy parejas (< 1.2%),
+    // la selección que cuente con Dinero Profesional / RLM Confirmado se antepone
+    const aHasRlm = Boolean(a.consensus?.rlmInfo?.isRlmDetected && a.consensus?.rlmInfo?.rlmType === 'FAVORABLE');
+    const bHasRlm = Boolean(b.consensus?.rlmInfo?.isRlmDetected && b.consensus?.rlmInfo?.rlmType === 'FAVORABLE');
+    if (aHasRlm !== bHasRlm) {
+      return bHasRlm ? 1 : -1;
+    }
+
     if (b.consensus.votesPassed !== a.consensus.votesPassed) {
       return b.consensus.votesPassed - a.consensus.votesPassed;
     }
@@ -1632,9 +1709,11 @@ export async function runAlertEngine(options = {}) {
   const cdmxDateStr = cdmxNow.toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
   const cdmxDayOfWeek = cdmxNow.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'America/Mexico_City' });
 
-  // En fines de semana (Sábado y Domingo con NCAAF + NFL + Fútbol), el límite de selecciones élite se amplía a 10
-  const isWeekend = cdmxDayOfWeek === 'Sat' || cdmxDayOfWeek === 'Sun';
-  const maxPicksToSend = options.maxPicks || (isWeekend ? 10 : 8);
+  // En días regulares entre semana (Lunes, Martes, Miércoles, Viernes) se mantiene el cupo de hasta Top 6 por turno.
+  // En días con cartelera de fútbol americano (Jueves con NFL TNF/NCAAF, y Sábados/Domingos con fin de semana completo),
+  // el límite por turno se amplía hasta 10 selecciones, SIEMPRE Y CUANDO cumplan estrictamente todas las reglas del Tribunal.
+  const isHighVolumeDay = cdmxDayOfWeek === 'Thu' || cdmxDayOfWeek === 'Sat' || cdmxDayOfWeek === 'Sun';
+  const maxPicksToSend = options.maxPicks || (isHighVolumeDay ? 10 : 6);
 
   const isWeekendNight = (cdmxDayOfWeek === 'Fri' || cdmxDayOfWeek === 'Sat') && cdmxHour >= 21;
   const isNightShift = options.shift === 'nocturno' || process.argv.includes('--nocturno') || isWeekendNight;
@@ -1735,7 +1814,12 @@ export async function runAlertEngine(options = {}) {
         pick: uPick.pick,
         prob: uPick.prob,
         odds: uPick.odds,
-        stakeUnits: parseFloat(uPick.consensus?.recommendedStake) || 2.0,
+        stakeUnits: (() => {
+          const isUProp = (uPick.type || '').toUpperCase().includes('PROP') || (uPick.id && String(uPick.id).startsWith('prop-'));
+          const cap = isUProp ? 1.0 : 2.0;
+          const parsed = parseFloat(uPick.consensus?.recommendedStake);
+          return !isNaN(parsed) ? Math.min(cap, parsed) : (isUProp ? 1.0 : 2.0);
+        })(),
         homeName: uPick.match?.home?.name,
         awayName: uPick.match?.away?.name,
         argument: uPick.argument,
@@ -1797,9 +1881,15 @@ export async function runAlertEngine(options = {}) {
       `💼 *Gestión de Banca:* \`${pick.consensus.recommendedStake}\``
     ].join('\n') : `_Gestión Kelly Sugerida: 1.0 a 1.5 Unidades_`;
 
-    const headerTitle = isNightShift
-      ? `🌙 *ALERTA NOCTURNA — JORNADA EUROPEA TEMPRANERA* 🌙\n🔬 *CALIBRACIÓN MONTE CARLO & CONSENSO 3v1*`
-      : `🎯 *ALERTA DE VALOR CUANTITATIVO — TIER 1* 🎯\n🔬 *CALIBRACIÓN MONTE CARLO & CONSENSO 3v1*`;
+    const isSharpRlm = Boolean(pick.consensus?.rlmInfo?.isRlmDetected && pick.consensus?.rlmInfo?.rlmType === 'FAVORABLE');
+    let headerTitle;
+    if (isNightShift) {
+      headerTitle = `🌙 *ALERTA NOCTURNA — JORNADA EUROPEA TEMPRANERA* 🌙\n🔬 *CALIBRACIÓN MONTE CARLO & CONSENSO 3v1*`;
+    } else if (isSharpRlm) {
+      headerTitle = `🚨 *SELECCIÓN SHARP VIP: DINERO PROFESIONAL (RLM)* 🚨\n💼 *RESPALDO INSTITUCIONAL & CONSENSO 3v1*`;
+    } else {
+      headerTitle = `🎯 *ALERTA DE VALOR CUANTITATIVO — TIER 1* 🎯\n🔬 *CALIBRACIÓN MONTE CARLO & CONSENSO 3v1*`;
+    }
 
     const rlmBlock = pick.consensus?.rlmInfo?.isRlmDetected
       ? [`🚨 *Dinero Inteligente (RLM):* \`${pick.consensus.rlmInfo.badgeText}\``, `  _${pick.consensus.rlmInfo.reason}_`, ``]
@@ -1848,7 +1938,12 @@ export async function runAlertEngine(options = {}) {
         pick: pick.pick,
         prob: pick.prob,
         odds: pick.odds,
-        stakeUnits: parseFloat(pick.consensus?.recommendedStake) || 2.0,
+        stakeUnits: (() => {
+          const isTProp = (pick.type || '').toUpperCase().includes('PROP') || (pick.id && String(pick.id).startsWith('prop-'));
+          const cap = isTProp ? 1.0 : 2.0;
+          const parsed = parseFloat(pick.consensus?.recommendedStake);
+          return !isNaN(parsed) ? Math.min(cap, parsed) : (isTProp ? 1.0 : 2.0);
+        })(),
         homeName: pick.match?.home?.name,
         awayName: pick.match?.away?.name,
         argument: pick.argument,
