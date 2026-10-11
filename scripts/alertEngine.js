@@ -55,6 +55,45 @@ const cacheDir = process.env.VERCEL ? '/tmp' : __dirname;
 const SENT_CACHE_FILE = path.join(cacheDir, '.sent_alerts.json');
 const CLOUD_LANG_CODE = 'eo'; // Canal oculto en metadatos del Bot para almacenar el Ledger comprimido
 
+/**
+ * Whitelist de Ligas Tier 1 para Alertas Oficiales de Telegram (Cero ligas exóticas)
+ * Solo se permiten competiciones de alta liquidez donde los modelos estadísticos
+ * y las cuotas de mercado son estables y no sufren por disparidad extrema de planteles.
+ */
+export function isTier1League(leagueName = '', sport = '') {
+  const l = (leagueName || '').toLowerCase();
+  const s = (sport || '').toLowerCase();
+
+  // Deportes de Estados Unidos (Ligas Mayores)
+  if (s === 'nfl' || l.includes('nfl')) return true;
+  if (s === 'mlb' || l.includes('mlb') || l.includes('major league baseball')) return true;
+  if (s === 'nba' || l.includes('nba')) return true;
+  if (s === 'ncaaf' || l.includes('ncaaf') || l.includes('colegial fbs')) return true;
+
+  // Fútbol Élite / Alta Liquidez Institucional
+  if (l.includes('liga mx')) return true;
+  if (l.includes('premier league')) return true;
+  if (l.includes('laliga') || l.includes('la liga') || l.includes('primera división de españa')) return true;
+  if (l.includes('serie a') && !l.includes('serie a ecuador') && !l.includes('serie a brasil')) return true;
+  if (l.includes('bundesliga')) return true;
+  if (l.includes('champions league') || l.includes('uefa champions')) return true;
+  if (l.includes('europa league')) return true;
+  if (l.includes('conference league')) return true;
+  if (l.includes('mls') || l.includes('major league soccer')) return true;
+  if (l.includes('copa libertadores') || l.includes('libertadores')) return true;
+  if (l.includes('copa sudamericana')) return true;
+  if (l.includes('ligue 1')) return true;
+  if (l.includes('eredivisie')) return true;
+  if (l.includes('primeira liga')) return true;
+  if (l.includes('nations league') || l.includes('eliminatorias') || l.includes('world cup') || l.includes('copa américa') || l.includes('euro')) return true;
+
+  // Ligas vetadas explícitamente en Telegram por baja liquidez / asimetría extrema:
+  // - Saudi Pro League (Arabia) -> VETADA
+  // - Scottish Premiership (Escocia) -> VETADA
+  // - Ligas secundarias o exóticas -> VETADAS
+  return false;
+}
+
 function getLocalCache() {
   try {
     if (!fs.existsSync(SENT_CACHE_FILE)) return {};
@@ -436,7 +475,21 @@ export function gradeOfficialPick(pick, match) {
       if (status === 'lost') failedTeam = m.away?.name || pick.awayName;
     }
   }
-  // 6. Victoria Directa (Moneyline / 1X2)
+  // 6. Player Props (Protección de Integridad: Requiere datos individuales de jugador, nunca calificar por 1X2)
+  else if (isPickProp) {
+    if (pick.actualValue !== undefined) {
+      const line = pick.propLine !== undefined ? parseFloat(pick.propLine) : 0.5;
+      status = pick.actualValue >= line ? 'won' : 'lost';
+      scoreDisplay = `${pick.actualValue} (Línea ${line})`;
+    } else if (pick.dnp === true) {
+      status = 'void';
+      scoreDisplay = 'DNP (No jugó / Anulada)';
+    } else {
+      // Sin datos de boxscore individuales todavía: mantener pendiente para resolución especializada
+      return null;
+    }
+  }
+  // 7. Victoria Directa (Moneyline / 1X2)
   else {
     if (isHomePicked) {
       status = hScore > aScore ? 'won' : 'lost';
@@ -1220,6 +1273,22 @@ export function buildOpportunitiesAndTopSlate({
     if (!opp.consensus || opp.consensus.votesPassed < 2) return false;
     if (opp.consensus.rlmInfo?.isTrapForPick) return false;
 
+    // ACCIÓN 1: WHITELIST ESTRICTA DE LIGAS TIER 1 (Cero ligas exóticas en Telegram)
+    if (!isTier1League(opp.league, opp.sport)) {
+      return false;
+    }
+
+    // ACCIÓN 3.A: VETO A FAVORITOS VISITANTES EN SPREADS COLEGIALES (NCAAF Road Favorites)
+    if (opp.sport === 'NCAAF') {
+      const isSpread = (opp.type || '').toUpperCase().includes('SPREAD') || (opp.type || '').toUpperCase().includes('VENTAJA SPREAD');
+      const pickText = (opp.pick || '').toLowerCase();
+      const awayName = (opp.match?.away?.name || '').toLowerCase();
+      // Si el pick es el equipo visitante cubriendo spread con signo negativo (-) es un favorito visitante
+      if (isSpread && awayName && pickText.includes(awayName) && /-\d+/.test(pickText)) {
+        return false;
+      }
+    }
+
     // Veto Cualitativo Tipster Pro: Rechaza trampas de fatiga, vestidor o clima adverso
     if (opp.tipsterAudit && opp.tipsterAudit.isApproved === false) {
       return false;
@@ -1356,6 +1425,18 @@ export function buildOpportunitiesAndTopSlate({
       continue;
     }
 
+    // CANDADO 3: PROTOCOLO ANTI-DNP (VENTANA DE 90 MINUTOS PARA PROPS EN TELEGRAM)
+    // Para no arriesgar saldo a ciegas sin alineaciones confirmadas, ningún Player Prop
+    // puede enviarse a Telegram con más de 90 minutos de anticipación al partido.
+    // Si falta más de 1h 30m, se descarta para priorizar mercados completos de equipo.
+    if (isPickProp && pick.gameDate) {
+      const gTime = new Date(pick.gameDate).getTime();
+      const minsToStart = (gTime - Date.now()) / (1000 * 60);
+      if (minsToStart > 90 || minsToStart < -15) {
+        continue;
+      }
+    }
+
     const currentPicks = gamePicksMap.get(pick.game) || [];
     if (currentPicks.length === 0) {
       topSlate.push(pick);
@@ -1395,6 +1476,167 @@ export function buildOpportunitiesAndTopSlate({
   });
 
   return { rawOpportunities, approvedOpps, topSlate };
+}
+
+/**
+ * Resuelve y califica Player Props de forma especializada contra APIs oficiales de boxscore (ESPN / MLB).
+ * Si el jugador no disputó minutos (0 min / DNP), se califica automáticamente como 'void' (anulada).
+ */
+export async function resolvePlayerPropBoxscore(entry, matchedGame) {
+  try {
+    const isSoccer = entry.sport === 'Fútbol' || (entry.id && entry.id.startsWith('prop-soc-'));
+    const isMlb = entry.sport === 'MLB' || (entry.id && entry.id.startsWith('prop-k-'));
+
+    const stakeUnits = parseFloat(entry.stakeUnits) || 1.0;
+    const oddsDec = parseFloat(entry.odds) || 1.90;
+
+    if (isSoccer) {
+      const eventId = String(matchedGame.id).replace('soccer-', '');
+      const leagueCode = matchedGame.leagueCode || 'mex.1';
+      const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/${leagueCode}/summary?event=${eventId}`;
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      const data = await res.json();
+
+      const playerName = (entry.pick || entry.id || '').toLowerCase();
+      let matchedPlayer = null;
+
+      for (const r of (data.rosters || [])) {
+        for (const p of (r.roster || [])) {
+          const dName = (p.athlete?.displayName || '').toLowerCase();
+          const sName = (p.athlete?.shortName || '').toLowerCase();
+          const lName = (p.athlete?.lastName || '').toLowerCase();
+          if (
+            (dName && playerName.includes(dName)) ||
+            (sName && playerName.includes(sName)) ||
+            (lName && lName.length >= 4 && playerName.includes(lName))
+          ) {
+            matchedPlayer = p;
+            break;
+          }
+        }
+        if (matchedPlayer) break;
+      }
+
+      if (!matchedPlayer) return null;
+
+      const appStat = matchedPlayer.stats?.find(s => s.name === 'appearances')?.value;
+      const subIns = matchedPlayer.subIns || 0;
+      const isStarter = matchedPlayer.starter === true;
+      const didPlay = (appStat !== undefined ? appStat > 0 : (isStarter || subIns > 0));
+
+      if (!didPlay) {
+        return {
+          id: entry.id,
+          sport: entry.sport || 'Fútbol',
+          league: entry.league || 'Fútbol',
+          type: entry.type || '⚽ PLAYER PROP',
+          game: entry.game,
+          gameDate: entry.gameDate,
+          pick: entry.pick,
+          prob: entry.prob,
+          odds: entry.odds,
+          stakeUnits,
+          status: 'void',
+          netUnits: 0,
+          scoreDisplay: 'DNP (No jugó / Anulada)',
+          resultDetails: `${matchedPlayer.athlete?.displayName} no disputó minutos. Apuesta reembolsada según reglas de bookmaker.`
+        };
+      }
+
+      const sotStat = matchedPlayer.stats?.find(s => s.name === 'shotsOnTarget')?.value ?? 0;
+      const isWon = sotStat >= 1;
+
+      return {
+        id: entry.id,
+        sport: entry.sport || 'Fútbol',
+        league: entry.league || 'Fútbol',
+        type: entry.type || '⚽ PLAYER PROP',
+        game: entry.game,
+        gameDate: entry.gameDate,
+        pick: entry.pick,
+        prob: entry.prob,
+        odds: entry.odds,
+        stakeUnits,
+        status: isWon ? 'won' : 'lost',
+        netUnits: isWon ? Number((stakeUnits * (oddsDec - 1)).toFixed(2)) : Number((-stakeUnits).toFixed(2)),
+        scoreDisplay: `${sotStat} tiro(s) a puerta`,
+        resultDetails: `${matchedPlayer.athlete?.displayName}: ${sotStat} tiro(s) a puerta registrado(s) en marcadores oficiales.`
+      };
+    } else if (isMlb) {
+      const gamePk = String(matchedGame.id).replace('mlb-', '');
+      const url = `https://statsapi.mlb.com/api/v1/game/${gamePk}/boxscore`;
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      const data = await res.json();
+
+      const allPlayers = [
+        ...Object.values(data.teams?.home?.players || {}),
+        ...Object.values(data.teams?.away?.players || {})
+      ];
+
+      const pitcherName = (entry.pick || entry.id || '').toLowerCase();
+      let matchedPitcher = null;
+
+      for (const p of allPlayers) {
+        const fullName = (p.person?.fullName || '').toLowerCase();
+        const lastName = (p.person?.lastName || '').toLowerCase();
+        if (fullName && (pitcherName.includes(fullName) || (lastName && lastName.length >= 4 && pitcherName.includes(lastName)))) {
+          matchedPitcher = p;
+          break;
+        }
+      }
+
+      if (!matchedPitcher) return null;
+
+      const pitchingStats = matchedPitcher.stats?.pitching;
+      if (!pitchingStats || pitchingStats.inningsPitched === '0.0') {
+        return {
+          id: entry.id,
+          sport: 'MLB',
+          league: 'Major League Baseball',
+          type: entry.type || '🔥 PLAYER PROP (STRIKEOUTS)',
+          game: entry.game,
+          gameDate: entry.gameDate,
+          pick: entry.pick,
+          prob: entry.prob,
+          odds: entry.odds,
+          stakeUnits,
+          status: 'void',
+          netUnits: 0,
+          scoreDisplay: 'DNP (No lanzó / Anulada)',
+          resultDetails: `${matchedPitcher.person?.fullName} no registró entradas lanzadas. Apuesta anulada.`
+        };
+      }
+
+      const strikeOuts = pitchingStats.strikeOuts || 0;
+      const lineMatch = (entry.pick || '').match(/(\d+\.?\d*)/);
+      const line = lineMatch ? parseFloat(lineMatch[1]) : 4.5;
+      const isWon = strikeOuts > line;
+
+      return {
+        id: entry.id,
+        sport: 'MLB',
+        league: 'Major League Baseball',
+        type: entry.type || '🔥 PLAYER PROP (STRIKEOUTS)',
+        game: entry.game,
+        gameDate: entry.gameDate,
+        pick: entry.pick,
+        prob: entry.prob,
+        odds: entry.odds,
+        stakeUnits,
+        status: isWon ? 'won' : 'lost',
+        netUnits: isWon ? Number((stakeUnits * (oddsDec - 1)).toFixed(2)) : Number((-stakeUnits).toFixed(2)),
+        scoreDisplay: `${strikeOuts} ponches (Línea ${line})`,
+        resultDetails: `${matchedPitcher.person?.fullName}: ${strikeOuts} ponches en ${pitchingStats.inningsPitched} IP.`
+      };
+    }
+
+    return null;
+  } catch (err) {
+    console.error('Aviso en resolvePlayerPropBoxscore:', err.message);
+    return null;
+  }
 }
 
 /**
@@ -1439,6 +1681,13 @@ export async function runDailyTelegramAudit(options = {}) {
   let ledgerModified = false;
 
   for (const entry of ledgerEntries) {
+    const isPickProp = (entry.type || '').toUpperCase().includes('PROP') || 
+                       (entry.type || '').toUpperCase().includes('JUGADOR') || 
+                       (entry.type || '').toUpperCase().includes('BASES TOTALES') || 
+                       (entry.type || '').toUpperCase().includes('PONCHES') || 
+                       (entry.type || '').toUpperCase().includes('TIROS A PUERTA') || 
+                       (entry.id && String(entry.id).startsWith('prop-'));
+
     // Buscar si el partido ya finalizó oficialmente
     const matchedGame = allCompletedMatches.find(m => {
       if (entry.id && entry.id.includes(m.id)) return true;
@@ -1448,7 +1697,13 @@ export async function runDailyTelegramAudit(options = {}) {
     });
 
     if (matchedGame) {
-      const graded = gradeOfficialPick(entry, matchedGame);
+      let graded = null;
+      if (isPickProp && (!entry.status || entry.status === 'pending')) {
+        graded = await resolvePlayerPropBoxscore(entry, matchedGame);
+      }
+      if (!graded) {
+        graded = gradeOfficialPick(entry, matchedGame);
+      }
       if (graded) {
         const wasAlreadyReported = Boolean(entry.reportedInTelegram);
         const updatedEntry = {
@@ -1938,10 +2193,35 @@ export async function runAlertEngine(options = {}) {
       ? `🎲 *Estabilidad de Simulación:* \`${pick.mcStats.stability}% (Riesgo ${pick.mcStats.risk})\`` 
       : `🎲 *Estabilidad de Simulación:* \`Alta (Calibrada)\``;
 
+    const isPickProp = (pick.type || '').toUpperCase().includes('PROP') || (pick.id && String(pick.id).startsWith('prop-'));
+    const isPickElite = pick.isEliteProp || 
+                        pick.consensus?.isEliteProp || 
+                        (pick.type || '').toUpperCase().includes('PONCHES') || 
+                        (typeof pick.pick === 'string' && pick.pick.toLowerCase().includes('ponches')) ||
+                        pick.votesPassed === 3 || 
+                        pick.consensus?.votesPassed === 3;
+    const hasRlm = Boolean(pick.consensus?.rlmInfo?.isRlmDetected && pick.consensus?.rlmInfo?.rlmType === 'FAVORABLE');
+    const isHighStabilityUnanimous = (pick.consensus?.votesPassed === 3) && (pick.mcStats?.stability >= 75);
+
+    let effectiveStake = parseFloat(pick.consensus?.recommendedStake);
+    if (isNaN(effectiveStake)) effectiveStake = isPickProp ? (isPickElite ? 1.5 : 1.0) : 1.5;
+
+    // ACCIÓN 3.B: FILTRO INSTITUCIONAL PARA STAKES >= 1.0u EN MERCADOS DE EQUIPO
+    // Si no cuenta con RLM favorable ni estabilidad Monte Carlo >= 75% con Unanimidad 3/3,
+    // se ajusta prudencialmente a 0.7u para proteger la banca
+    let stakeLabel = pick.consensus?.recommendedStake || `${effectiveStake.toFixed(1)} Unidades`;
+    if (!isPickProp && effectiveStake >= 1.0 && !hasRlm && !isHighStabilityUnanimous) {
+      effectiveStake = 0.7;
+      stakeLabel = '0.7 Unidades (Protección Institucional | Sin RLM/Estabilidad < 75%)';
+    } else if (isPickProp) {
+      const propCap = isPickElite ? 1.5 : 1.0;
+      effectiveStake = Math.min(propCap, effectiveStake);
+    }
+
     const consensusLines = pick.consensus ? [
       `🗳️ *Consenso Algorítmico:* \`${pick.consensus.badgeText}\``,
       ...pick.consensus.breakdown.map(b => `  ${b.icon} *${b.name}:* _${b.reason}_`),
-      `💼 *Gestión de Banca:* \`${pick.consensus.recommendedStake}\``
+      `💼 *Gestión de Banca:* \`${stakeLabel}\``
     ].join('\n') : `_Gestión Kelly Sugerida: 1.0 a 1.5 Unidades_`;
 
     const isSharpRlm = Boolean(pick.consensus?.rlmInfo?.isRlmDetected && pick.consensus?.rlmInfo?.rlmType === 'FAVORABLE');
@@ -2002,18 +2282,7 @@ export async function runAlertEngine(options = {}) {
         pick: pick.pick,
         prob: pick.prob,
         odds: pick.odds,
-        stakeUnits: (() => {
-          const isTProp = (pick.type || '').toUpperCase().includes('PROP') || (pick.id && String(pick.id).startsWith('prop-'));
-          const isTElite = pick.isEliteProp || 
-                           pick.consensus?.isEliteProp ||
-                           (pick.type || '').toUpperCase().includes('PONCHES') || 
-                           (typeof pick.pick === 'string' && pick.pick.toLowerCase().includes('ponches')) ||
-                           pick.votesPassed === 3 || 
-                           pick.consensus?.votesPassed === 3;
-          const cap = isTProp ? (isTElite ? 1.5 : 1.0) : 2.0;
-          const parsed = parseFloat(pick.consensus?.recommendedStake);
-          return !isNaN(parsed) ? Math.min(cap, parsed) : (isTProp ? (isTElite ? 1.5 : 1.0) : 2.0);
-        })(),
+        stakeUnits: effectiveStake,
         homeName: pick.match?.home?.name,
         awayName: pick.match?.away?.name,
         argument: pick.argument,
