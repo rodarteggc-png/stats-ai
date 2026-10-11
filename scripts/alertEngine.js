@@ -94,6 +94,28 @@ export function isTier1League(leagueName = '', sport = '') {
   return false;
 }
 
+/**
+ * Determina si una selección es estrictamente un Player Prop individual (sobre un jugador específico)
+ * en contraposición a selecciones de mercado completo de EQUIPO (Moneyline, Spreads, Totales, BTTS, F5, etc.)
+ */
+export function isPlayerIndividualProp(p) {
+  if (!p) return false;
+  if (p.isProp === true) return true;
+  if (p.id && String(p.id).startsWith('prop-')) return true;
+  const type = (p.type || '').toUpperCase();
+  if (
+    type.includes('PLAYER PROP') ||
+    type.includes('JUGADOR') ||
+    type.includes('BASES TOTALES') ||
+    type.includes('PONCHES') ||
+    type.includes('TIROS A PUERTA') ||
+    type.includes('STRIKEOUTS')
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function getLocalCache() {
   try {
     if (!fs.existsSync(SENT_CACHE_FILE)) return {};
@@ -388,12 +410,7 @@ export function gradeOfficialPick(pick, match) {
   const hName = (m.home?.name || pick.homeName || '').toLowerCase();
   const aName = (m.away?.name || pick.awayName || '').toLowerCase();
   const pickStr = (pick.pick || '').toLowerCase();
-  const isPickProp = (pick.type || '').toUpperCase().includes('PROP') || 
-                     (pick.type || '').toUpperCase().includes('JUGADOR') || 
-                     (pick.type || '').toUpperCase().includes('BASES TOTALES') || 
-                     (pick.type || '').toUpperCase().includes('PONCHES') || 
-                     (pick.type || '').toUpperCase().includes('TIROS A PUERTA') || 
-                     (pick.id && String(pick.id).startsWith('prop-'));
+  const isPickProp = isPlayerIndividualProp(pick);
   const isPickElite = pick.isEliteProp || 
                       pick.consensus?.isEliteProp || 
                       (pick.type || '').toUpperCase().includes('PONCHES') || 
@@ -1313,32 +1330,37 @@ export function buildOpportunitiesAndTopSlate({
 
   // ORDENAMIENTO 100% BASADO EN MÁXIMA PROBABILIDAD DE ACIERTO Y EFECTIVIDAD:
   // 1) Partidos de HOY (CDMX) van primero para ejecutarse de inmediato en la jornada activa
-  // 2) Mayor probabilidad de acierto calibrada (la efectividad es la prioridad absoluta del sistema)
-  // 3) Desempate por Unanimidad del Tribunal (3/3 antes que 2/3)
-  // 4) Desempate final por mayor ventaja matemática (+EV Edge)
+  // 2) PRIORIDAD MÁXIMA POR DINERO INTELIGENTE (RLM CONFIRMADO):
+  //    Si una selección cuenta con confirmación de sindicatos/sharps que movieron la línea
+  //    institucionalmente a favor de nuestro pick frente al público, se antepone prioritariamente.
+  // 3) PRIORIDAD DE EQUIPO: Mercados completos de equipo (Sides, Spreads, Totales, BTTS, F5)
+  //    van antes que los Player Props individuales de jugadores para no canibalizar el Top Slate.
+  // 4) Mayor probabilidad de acierto calibrada (la efectividad es la prioridad absoluta del sistema)
+  // 5) Desempate Tipster Pro por Grado Cualitativo (A+ > A > B+)
+  // 6) Desempate por Unanimidad del Tribunal (3/3 antes que 2/3)
+  // 7) Desempate final por mayor ventaja matemática (+EV Edge)
   approvedOpps.sort((a, b) => {
     if (a.isToday !== b.isToday) {
       return a.isToday ? -1 : 1;
     }
-    const probDiff = (parseFloat(b.prob) || 0) - (parseFloat(a.prob) || 0);
-    if (Math.abs(probDiff) >= 1.2) {
-      return probDiff;
-    }
 
-    // Desempate Sharp VIP: si las probabilidades están muy parejas (< 1.2%),
-    // la selección que cuente con Dinero Profesional / RLM Confirmado se antepone
+    // 2) PRIORIDAD MÁXIMA INSTITUCIONAL POR RLM (DINERO INTELIGENTE CONFIRMADO)
     const aHasRlm = Boolean(a.consensus?.rlmInfo?.isRlmDetected && a.consensus?.rlmInfo?.rlmType === 'FAVORABLE');
     const bHasRlm = Boolean(b.consensus?.rlmInfo?.isRlmDetected && b.consensus?.rlmInfo?.rlmType === 'FAVORABLE');
     if (aHasRlm !== bHasRlm) {
       return bHasRlm ? 1 : -1;
     }
 
-    // CANDADO DE PRIORIDAD INSTITUCIONAL: Mercados completos de equipo (Sides, Spreads, Totales)
-    // van primero para evitar que los Player Props individuales canibalicen el Top Slate de Telegram
-    const aIsProp = (a.type || '').toUpperCase().includes('PROP') || (a.id && String(a.id).startsWith('prop-'));
-    const bIsProp = (b.type || '').toUpperCase().includes('PROP') || (b.id && String(b.id).startsWith('prop-'));
+    // 3) CANDADO DE PRIORIDAD INSTITUCIONAL: Mercados de EQUIPO antes que Player Props individuales
+    const aIsProp = isPlayerIndividualProp(a);
+    const bIsProp = isPlayerIndividualProp(b);
     if (aIsProp !== bIsProp) {
       return aIsProp ? 1 : -1;
+    }
+
+    const probDiff = (parseFloat(b.prob) || 0) - (parseFloat(a.prob) || 0);
+    if (Math.abs(probDiff) >= 1.2) {
+      return probDiff;
     }
 
     // Desempate Tipster Pro por Grado Cualitativo (A+ > A > B+)
@@ -1364,6 +1386,9 @@ export function buildOpportunitiesAndTopSlate({
   const gamePicksMap = new Map();
 
   function getPickMarketCategory(p) {
+    if (isPlayerIndividualProp(p)) {
+      return 'PROPS';
+    }
     const type = (p.type || '').toUpperCase();
     const pickText = (p.pick || '').toLowerCase();
     if (
@@ -1374,19 +1399,9 @@ export function buildOpportunitiesAndTopSlate({
       type.includes('BTTS') ||
       pickText.includes('over ') ||
       pickText.includes('under ') ||
-      pickText.includes('más de ') ||
-      pickText.includes('menos de ') ||
       pickText.includes('ambos equipos')
     ) {
       return 'TOTALS';
-    }
-    if (
-      type.includes('PROP') ||
-      type.includes('BASES TOTALES') ||
-      type.includes('CORNER') ||
-      type.includes('TARJETA')
-    ) {
-      return 'PROPS';
     }
     return 'SIDE';
   }
@@ -1400,35 +1415,29 @@ export function buildOpportunitiesAndTopSlate({
     if (topSlate.length >= maxPicksToSend) break;
     if (topSlate.some(p => p.id === pick.id)) continue;
 
-    const isPickProp = (pick.type || '').toUpperCase().includes('PROP') || 
-                       (pick.type || '').toUpperCase().includes('BASES TOTALES') || 
-                       (pick.type || '').toUpperCase().includes('PONCHES') || 
-                       (pick.type || '').toUpperCase().includes('TIROS A PUERTA') ||
-                       (pick.id && String(pick.id).startsWith('prop-'));
+    const isPickProp = isPlayerIndividualProp(pick);
 
-    // CANDADO 1: FILTRO DE CUOTA RENTABLE EN PROPS (>= 1.65)
-    // Cuotas bajas (como 1.30, 1.40, 1.50) quedan terminantemente prohibidas en Telegram
+    // CANDADO 1: FILTRO DE CUOTA RENTABLE EN PROPS INDIVIDUALES (>= 1.65)
+    // Cuotas bajas (como 1.30, 1.40, 1.50) quedan terminantemente prohibidas en Telegram para props
     const pickOddsNum = parseFloat(pick.odds) || 1.90;
     if (isPickProp && pickOddsNum < 1.65) {
       continue;
     }
 
-    // CANDADO 2: CUPO MÁXIMO ESTRICTO PARA PLAYER PROPS (OPCIÓN 2)
+    // CANDADO 2: CUPO MÁXIMO ESTRICTO PARA PLAYER PROPS INDIVIDUALES
     // Máximo 1 Player Prop (o 2 si la jornada ampliada es de 10) en todo el Top Slate de Telegram
     const maxPropsAllowed = maxPicksToSend >= 10 ? 2 : 1;
-    const currentPropsInSlate = topSlate.filter(p => {
-      const t = (p.type || '').toUpperCase();
-      return t.includes('PROP') || t.includes('BASES TOTALES') || t.includes('PONCHES') || t.includes('TIROS A PUERTA') || (p.id && String(p.id).startsWith('prop-'));
-    }).length;
+    const currentPropsInSlate = topSlate.filter(p => isPlayerIndividualProp(p)).length;
 
     if (isPickProp && currentPropsInSlate >= maxPropsAllowed) {
       continue;
     }
 
-    // CANDADO 3: PROTOCOLO ANTI-DNP (VENTANA DE 90 MINUTOS PARA PROPS EN TELEGRAM)
-    // Para no arriesgar saldo a ciegas sin alineaciones confirmadas, ningún Player Prop
+    // CANDADO 3: PROTOCOLO ANTI-DNP (VENTANA DE 90 MINUTOS ENFOCADA EXCLUSIVAMENTE EN PROPS INDIVIDUALES)
+    // Para no arriesgar saldo a ciegas sin alineaciones confirmadas, ningún Player Prop individual
     // puede enviarse a Telegram con más de 90 minutos de anticipación al partido.
-    // Si falta más de 1h 30m, se descarta para priorizar mercados completos de equipo.
+    // SI EL PICK ES POR EQUIPO (Sides, Spreads, Totales, BTTS, F5, Moneyline), ESTE CANDADO NO APLICA
+    // y se envía normalmente con horas de anticipación para que los usuarios puedan meter su apuesta con calma.
     if (isPickProp && pick.gameDate) {
       const gTime = new Date(pick.gameDate).getTime();
       const minsToStart = (gTime - Date.now()) / (1000 * 60);
@@ -1460,10 +1469,20 @@ export function buildOpportunitiesAndTopSlate({
     }
   }
 
-  // Orden final del slate para el despacho a Telegram (mayor probabilidad de acierto al frente)
+  // Orden final del slate para el despacho a Telegram (RLM y mercados de equipo al frente)
   topSlate.sort((a, b) => {
     if (a.isToday !== b.isToday) {
       return a.isToday ? -1 : 1;
+    }
+    const aHasRlm = Boolean(a.consensus?.rlmInfo?.isRlmDetected && a.consensus?.rlmInfo?.rlmType === 'FAVORABLE');
+    const bHasRlm = Boolean(b.consensus?.rlmInfo?.isRlmDetected && b.consensus?.rlmInfo?.rlmType === 'FAVORABLE');
+    if (aHasRlm !== bHasRlm) {
+      return bHasRlm ? 1 : -1;
+    }
+    const aIsProp = isPlayerIndividualProp(a);
+    const bIsProp = isPlayerIndividualProp(b);
+    if (aIsProp !== bIsProp) {
+      return aIsProp ? 1 : -1;
     }
     const probDiff = (parseFloat(b.prob) || 0) - (parseFloat(a.prob) || 0);
     if (Math.abs(probDiff) >= 0.8) {
@@ -1681,12 +1700,7 @@ export async function runDailyTelegramAudit(options = {}) {
   let ledgerModified = false;
 
   for (const entry of ledgerEntries) {
-    const isPickProp = (entry.type || '').toUpperCase().includes('PROP') || 
-                       (entry.type || '').toUpperCase().includes('JUGADOR') || 
-                       (entry.type || '').toUpperCase().includes('BASES TOTALES') || 
-                       (entry.type || '').toUpperCase().includes('PONCHES') || 
-                       (entry.type || '').toUpperCase().includes('TIROS A PUERTA') || 
-                       (entry.id && String(entry.id).startsWith('prop-'));
+    const isPickProp = isPlayerIndividualProp(entry);
 
     // Buscar si el partido ya finalizó oficialmente
     const matchedGame = allCompletedMatches.find(m => {
@@ -2033,7 +2047,7 @@ export async function runAlertEngine(options = {}) {
 
   const rangeArg = process.argv.find(a => a.startsWith('--range='));
   const defaultRange = isNightShift ? 'hoy_y_manana' : (isMorningShift ? 'hoy' : 'hoy_y_manana');
-  const defaultHorizon = isNightShift ? 14 : (isMorningShift ? 16 : 18);
+  const defaultHorizon = isNightShift ? 14 : (isMorningShift ? 16 : 28);
 
   const dateRange = options.dateRange || (rangeArg ? rangeArg.split('=')[1] : defaultRange);
   const maxHoursAhead = options.maxHoursAhead !== undefined ? options.maxHoursAhead : defaultHorizon;
@@ -2194,7 +2208,7 @@ export async function runAlertEngine(options = {}) {
       ? `🎲 *Estabilidad de Simulación:* \`${pick.mcStats.stability}% (Riesgo ${pick.mcStats.risk})\`` 
       : `🎲 *Estabilidad de Simulación:* \`Alta (Calibrada)\``;
 
-    const isPickProp = (pick.type || '').toUpperCase().includes('PROP') || (pick.id && String(pick.id).startsWith('prop-'));
+    const isPickProp = isPlayerIndividualProp(pick);
     const isPickElite = pick.isEliteProp || 
                         pick.consensus?.isEliteProp || 
                         (pick.type || '').toUpperCase().includes('PONCHES') || 
