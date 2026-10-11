@@ -2045,10 +2045,11 @@ export async function runAlertEngine(options = {}) {
   const sentCache = await loadCloudLedger();
   if (!sentCache._meta) sentCache._meta = {};
 
-  // Determinar si es turno matutino en CDMX (6:00 AM a 1:30 PM) para enviar el Corte de Caja una vez al día
-  const isMorningWindow = cdmxHour >= 6 && cdmxHour <= 13;
-  const shouldSendAuditReport = forceAudit || (isMorningWindow && sentCache._meta.lastAuditDate !== cdmxDateStr);
-  const isMondayMorning = isMorningWindow && cdmxDayOfWeek === 'Mon';
+  // Determinar si es ventana de auditoría/corte en CDMX (6:00 AM a 4:30 PM / 16h) para enviar el Corte de Caja una vez al día
+  // cubriendo la totalidad de las tandas previas (mañana y tarde)
+  const isAuditWindow = cdmxHour >= 6 && cdmxHour <= 16;
+  const shouldSendAuditReport = forceAudit || (isAuditWindow && sentCache._meta.lastAuditDate !== cdmxDateStr);
+  const isMondayMorning = isAuditWindow && cdmxDayOfWeek === 'Mon';
   const shouldSendWeeklyAudit = (options.weekly !== undefined ? options.weekly : (process.argv.includes('--weekly') || process.argv.includes('--semanal'))) || (isMondayMorning && sentCache._meta.lastWeeklyAuditDate !== cdmxDateStr);
 
   // Ejecutar siempre la auditoría para calificar alertas pendientes, actualizar Elo y obtener castigos
