@@ -1323,8 +1323,8 @@ export function buildOpportunitiesAndTopSlate({
     const probNum = parseFloat(opp.prob) || 0;
     const pickStr = (opp.pick || '').toLowerCase();
     const isSpreadOrTotal = pickStr.includes('cubre') || pickStr.includes('hándicap') || pickStr.includes('handicap') || pickStr.includes('over') || pickStr.includes('under') || /[+-]\d+/.test(pickStr);
-    if (isSpreadOrTotal && probNum < 55.5) return false;
-    if (!isSpreadOrTotal && probNum < 60.0) return false;
+    if (isSpreadOrTotal && probNum < 57.5) return false;
+    if (!isSpreadOrTotal && probNum < 60.5) return false;
     return true;
   });
 
@@ -2240,8 +2240,12 @@ export async function runAlertEngine(options = {}) {
     ].join('\n') : `_Gestión Kelly Sugerida: 1.0 a 1.5 Unidades_`;
 
     const isSharpRlm = Boolean(pick.consensus?.rlmInfo?.isRlmDetected && pick.consensus?.rlmInfo?.rlmType === 'FAVORABLE');
+    const isTopJoya = toSend.indexOf(pick) === 0 && (parseFloat(pick.prob) >= 60.5 || isPickElite);
+    
     let headerTitle;
-    if (isNightShift) {
+    if (isTopJoya) {
+      headerTitle = `💎 *LA JOYA DEL DÍA — MÁXIMA CERTEZA (PICK ESTELAR)* 💎\n🔬 *CALIBRACIÓN MONTE CARLO & CONSENSO 3v1*`;
+    } else if (isNightShift) {
       headerTitle = `🌙 *ALERTA NOCTURNA — JORNADA EUROPEA TEMPRANERA* 🌙\n🔬 *CALIBRACIÓN MONTE CARLO & CONSENSO 3v1*`;
     } else if (isSharpRlm) {
       headerTitle = `🚨 *SELECCIÓN SHARP VIP: DINERO PROFESIONAL (RLM)* 🚨\n💼 *RESPALDO INSTITUCIONAL & CONSENSO 3v1*`;
@@ -2257,9 +2261,21 @@ export async function runAlertEngine(options = {}) {
       ? [`🧩 *Sinergia Bivariada:* \`${pick.correlationNote}\``, ``]
       : [];
 
-    const isWhalePick = pick.consensus?.votesPassed === 3 && pick.edgeVal >= 6.0 && 
-      (pick.mcStats?.stability >= 78 || pick.mcStats?.bttsStability >= 78 || pick.mcStats?.f5Stability >= 78);
-    const selectionLabel = isWhalePick ? `📌 *SELECCIÓN CONFIRMADA:*` : `📌 *SELECCIÓN RECOMENDADA:*`;
+    // Clave oculta de certeza: Selecciones Confirmadas VIP (máximo 4 a 5 en el slate)
+    const isWhalePick = (pick.consensus?.votesPassed === 3) && (
+      isSharpRlm || 
+      (pick.mcStats?.stability >= 75) || 
+      (parseFloat(pick.prob) >= 62.0)
+    );
+    
+    let selectionLabel;
+    if (isTopJoya) {
+      selectionLabel = `💎 *SELECCIÓN ESTELAR CONFIRMADA (LA JOYA):*`;
+    } else if (isWhalePick) {
+      selectionLabel = `📌 *SELECCIÓN CONFIRMADA (MÁXIMA CERTEZA VIP):*`;
+    } else {
+      selectionLabel = `🔍 *SELECCIÓN RECOMENDADA (VALOR CON COBERTURA):*`;
+    }
 
     const message = [
       headerTitle,
