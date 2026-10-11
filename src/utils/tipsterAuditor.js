@@ -240,6 +240,49 @@ export function auditCandidateAsTipsterPro(candidate = {}) {
     };
   }
 
+  // d) CANDADO TIPSTER PRO PARA PLAYER PROPS:
+  const isProp = candidate.isProp || 
+                 (candidate.type || '').toUpperCase().includes('PROP') ||
+                 (candidate.type || '').toUpperCase().includes('TIROS A PUERTA') ||
+                 (candidate.type || '').toUpperCase().includes('BASES TOTALES') ||
+                 (candidate.type || '').toUpperCase().includes('PONCHES') ||
+                 (candidate.id && String(candidate.id).startsWith('prop-'));
+
+  if (isProp) {
+    // 1. Veto categórico si la cuota es menor a 1.65 (riesgo asimétrico / beneficio miserable)
+    if (odds < 1.65) {
+      return {
+        isApproved: false,
+        grade: 'VETO_CUALITATIVO',
+        badgeTitle: '⛔ VETO TIPSTER PRO (CUOTA INSUFICIENTE EN PROP)',
+        reason: `Cuota de ${odds} en Player Prop es matemáticamente destructiva. Exige cuota >= 1.65 para compensar la varianza de un atleta individual.`,
+        tipsterSeal: '❌ Rechazado por Cuota Baja en Prop'
+      };
+    }
+
+    // 2. Veto si hay riesgo de rotación por calendario comprimido
+    if (restEval.penaltyScore >= 4.0) {
+      return {
+        isApproved: false,
+        grade: 'VETO_CUALITATIVO',
+        badgeTitle: '⛔ VETO TIPSTER PRO (RIESGO SEVERO DE ROTACIÓN / DNP)',
+        reason: `Calendario comprimido del equipo (${restEval.trapWarning || 'fatiga'}). Alto riesgo de que el jugador descanse, no sea titular o sea sustituido temprano.`,
+        tipsterSeal: '❌ Rechazado por Riesgo de Rotación'
+      };
+    }
+
+    // 3. En Player Props, exigir Unanimidad (3/3) en el Tribunal
+    if (candidate.consensus && candidate.consensus.votesPassed < 3) {
+      return {
+        isApproved: false,
+        grade: 'VETO_CUALITATIVO',
+        badgeTitle: '⛔ VETO TIPSTER PRO (DISCREPANCIA EN PROP)',
+        reason: `Un Player Prop exige Unanimidad 3/3 para justificar el riesgo de un atleta individual. Voto discrepante en el Tribunal.`,
+        tipsterSeal: '❌ Rechazado por Falta de Unanimidad'
+      };
+    }
+  }
+
   // ================= CRITERIO DE GRADUACIÓN DE CONVICCIÓN =================
   let qualityPoints = 0;
   const reasons = [];

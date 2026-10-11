@@ -706,9 +706,10 @@ export function buildOpportunitiesAndTopSlate({
   });
 
   // ================= A.2 EVALUACIÓN DE PLAYER PROPS (FÚTBOL) =================
-  const soccerProps = generateDailySoccerProps(soccerMatches);
+  const soccerProps = generateDailySoccerProps(soccerMatches, { requireConfirmedLineup: true });
   soccerProps.forEach(prop => {
-    if (prop.isSharp) {
+    const propOdds = parseFloat(prop.marketOdds) || 0;
+    if (prop.isSharp && propOdds >= 1.65) {
       const parentMatch = soccerMatches.find(m => m.id === prop.matchId);
       const leagueName = prop.league || parentMatch?.league || 'Fútbol';
       rawOpportunities.push({
@@ -1263,6 +1264,14 @@ export function buildOpportunitiesAndTopSlate({
       return bHasRlm ? 1 : -1;
     }
 
+    // CANDADO DE PRIORIDAD INSTITUCIONAL: Mercados completos de equipo (Sides, Spreads, Totales)
+    // van primero para evitar que los Player Props individuales canibalicen el Top Slate de Telegram
+    const aIsProp = (a.type || '').toUpperCase().includes('PROP') || (a.id && String(a.id).startsWith('prop-'));
+    const bIsProp = (b.type || '').toUpperCase().includes('PROP') || (b.id && String(b.id).startsWith('prop-'));
+    if (aIsProp !== bIsProp) {
+      return aIsProp ? 1 : -1;
+    }
+
     // Desempate Tipster Pro por Grado Cualitativo (A+ > A > B+)
     const gradeWeight = { 'A+': 3, 'A': 2, 'B+': 1 };
     const aGrade = gradeWeight[a.tipsterAudit?.grade] || 1;
@@ -1321,6 +1330,31 @@ export function buildOpportunitiesAndTopSlate({
   for (const pick of eligibleForTop) {
     if (topSlate.length >= maxPicksToSend) break;
     if (topSlate.some(p => p.id === pick.id)) continue;
+
+    const isPickProp = (pick.type || '').toUpperCase().includes('PROP') || 
+                       (pick.type || '').toUpperCase().includes('BASES TOTALES') || 
+                       (pick.type || '').toUpperCase().includes('PONCHES') || 
+                       (pick.type || '').toUpperCase().includes('TIROS A PUERTA') ||
+                       (pick.id && String(pick.id).startsWith('prop-'));
+
+    // CANDADO 1: FILTRO DE CUOTA RENTABLE EN PROPS (>= 1.65)
+    // Cuotas bajas (como 1.30, 1.40, 1.50) quedan terminantemente prohibidas en Telegram
+    const pickOddsNum = parseFloat(pick.odds) || 1.90;
+    if (isPickProp && pickOddsNum < 1.65) {
+      continue;
+    }
+
+    // CANDADO 2: CUPO MÁXIMO ESTRICTO PARA PLAYER PROPS (OPCIÓN 2)
+    // Máximo 1 Player Prop (o 2 si la jornada ampliada es de 10) en todo el Top Slate de Telegram
+    const maxPropsAllowed = maxPicksToSend >= 10 ? 2 : 1;
+    const currentPropsInSlate = topSlate.filter(p => {
+      const t = (p.type || '').toUpperCase();
+      return t.includes('PROP') || t.includes('BASES TOTALES') || t.includes('PONCHES') || t.includes('TIROS A PUERTA') || (p.id && String(p.id).startsWith('prop-'));
+    }).length;
+
+    if (isPickProp && currentPropsInSlate >= maxPropsAllowed) {
+      continue;
+    }
 
     const currentPicks = gamePicksMap.get(pick.game) || [];
     if (currentPicks.length === 0) {

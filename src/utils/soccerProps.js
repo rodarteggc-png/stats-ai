@@ -47,9 +47,14 @@ export function calculateSoccerPlayerProps(player, teamXG, opponentDefXG, homeAd
   const overPct = Number((overProb * 100).toFixed(1));
   const underPct = Number((underProb * 100).toFixed(1));
   
-  const edge = Number((overPct - 52.4).toFixed(1));
+  // CANDADO DE CUOTA RENTABLE Y CALIBRACIÓN DE EDGE REAL:
+  // En casas de apuestas reales (Bet365/Caliente/Novibet), cuotas por debajo de 1.65 en Player Props son trampas de valor asimétrico.
+  // La probabilidad implícita DEBE medirse contra la cuota ofrecida real, no contra un flat 52.4%.
+  const rawMarketOdds = Number((2.20 - (projectedShotsOnTarget * 0.25)).toFixed(2));
+  const marketOdds = Math.max(1.65, rawMarketOdds).toFixed(2);
+  const impliedProb = (1 / parseFloat(marketOdds)) * 100;
+  const edge = Number((overPct - impliedProb).toFixed(1));
   const fairOdds = (100 / overPct).toFixed(2);
-  const marketOdds = (2.20 - (projectedShotsOnTarget * 0.4)).toFixed(2); // Simulated market odds
   
   return {
     playerName: player.name,
@@ -61,9 +66,9 @@ export function calculateSoccerPlayerProps(player, teamXG, opponentDefXG, homeAd
     prob: overPct,
     edge,
     fairOdds,
-    marketOdds: marketOdds > 1.10 ? marketOdds : '1.30',
-    isSharp: edge >= 3.5 && overPct >= 65,
-    reason: `El jugador monopoliza la ofensiva. El equipo proyecta ${teamProjectedXg.toFixed(2)} xG contra una defensa débil (${opponentDefXG.toFixed(2)} coef. def). Proyección matemática: ${projectedShotsOnTarget.toFixed(2)} Tiros a Puerta.`
+    marketOdds,
+    isSharp: edge >= 4.0 && overPct >= 62.0 && parseFloat(marketOdds) >= 1.65,
+    reason: `El jugador monopoliza la ofensiva (${projectedShotsOnTarget.toFixed(2)} remates proyectados vs defensa rival con ${opponentDefXG.toFixed(2)} coef. def). Edge real +${edge}% en cuota rentable ${marketOdds}.`
   };
 }
 
@@ -95,7 +100,22 @@ function isPlayerNameValid(name) {
   return !invalidPlaceholders.some(p => trimmed.toLowerCase().includes(p));
 }
 
-export function generateDailySoccerProps(games = []) {
+export function isPlayerInLineup(playerName, lineupArray = []) {
+  if (!playerName || !Array.isArray(lineupArray) || lineupArray.length === 0) return false;
+  const pLower = playerName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  const pParts = pLower.split(/\s+/);
+  const lastName = pParts[pParts.length - 1];
+
+  return lineupArray.some(item => {
+    const itemLower = (typeof item === 'string' ? item : (item.name || item.fullName || '')).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+    if (itemLower.includes(pLower) || pLower.includes(itemLower)) return true;
+    if (lastName.length >= 4 && itemLower.includes(lastName)) return true;
+    return false;
+  });
+}
+
+export function generateDailySoccerProps(games = [], options = {}) {
+  const requireLineup = options.requireConfirmedLineup !== false;
   const sotCandidates = [];
 
   games.forEach(game => {
@@ -109,20 +129,36 @@ export function generateDailySoccerProps(games = []) {
     ) && !isFemenil;
     if (!isCommercialPropLeague) return;
 
+    // CANDADO ANTI-DNP: Si el juego ya tiene alineaciones oficiales confirmadas, el jugador DEBE estar en el XI titular
+    const homeLineup = game.lineups?.home || [];
+    const awayLineup = game.lineups?.away || [];
+    const hasOfficialHomeLineup = game.lineups?.hasOfficialLineup || homeLineup.length >= 11;
+    const hasOfficialAwayLineup = game.lineups?.hasOfficialLineup || awayLineup.length >= 11;
+
+    const isHomePlayerInLineup = !hasOfficialHomeLineup || (game.home.keyPlayer && isPlayerInLineup(game.home.keyPlayer.name, homeLineup));
+    const isAwayPlayerInLineup = !hasOfficialAwayLineup || (game.away.keyPlayer && isPlayerInLineup(game.away.keyPlayer.name, awayLineup));
+
+    if (requireLineup && hasOfficialHomeLineup && !isHomePlayerInLineup) return;
+    if (requireLineup && hasOfficialAwayLineup && !isAwayPlayerInLineup) return;
+
     const hAttack = parseFloat(game.home.xG) || 1.35;
     const aDefense = parseFloat(game.away.defenseXG) || 1.10;
     
-    if (game.home.keyPlayer && isPlayerNameValid(game.home.keyPlayer.name)) {
+    if (game.home.keyPlayer && isPlayerNameValid(game.home.keyPlayer.name) && isHomePlayerInLineup) {
       const homeProp = calculateSoccerPlayerProps(game.home.keyPlayer, hAttack, aDefense, 1.15);
-      if (homeProp) sotCandidates.push({ ...homeProp, team: game.home.name, opponent: game.away.name, matchId: game.id, gameDate: game.gameDate, league: game.league });
+      if (homeProp && homeProp.isSharp) {
+        sotCandidates.push({ ...homeProp, team: game.home.name, opponent: game.away.name, matchId: game.id, gameDate: game.gameDate, league: game.league, isConfirmedLineup: hasOfficialHomeLineup });
+      }
     }
     
     const aAttack = parseFloat(game.away.xG) || 1.05;
     const hDefense = parseFloat(game.home.defenseXG) || 1.10;
     
-    if (game.away.keyPlayer && isPlayerNameValid(game.away.keyPlayer.name)) {
+    if (game.away.keyPlayer && isPlayerNameValid(game.away.keyPlayer.name) && isAwayPlayerInLineup) {
       const awayProp = calculateSoccerPlayerProps(game.away.keyPlayer, aAttack, hDefense, 0.90);
-      if (awayProp) sotCandidates.push({ ...awayProp, team: game.away.name, opponent: game.home.name, matchId: game.id, gameDate: game.gameDate, league: game.league });
+      if (awayProp && awayProp.isSharp) {
+        sotCandidates.push({ ...awayProp, team: game.away.name, opponent: game.home.name, matchId: game.id, gameDate: game.gameDate, league: game.league, isConfirmedLineup: hasOfficialAwayLineup });
+      }
     }
   });
 
