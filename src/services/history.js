@@ -568,8 +568,9 @@ export function updatePredictionStatus(id, status, details = '', closingOddsVal 
     history[index].status = status;
     if (details) history[index].resultDetails = details;
 
-    // Calcular Closing Line Value (CLV)
-    const placed = parseFloat(history[index].placedOdds || 1.90);
+    // FASE 10 & 11: Medición obligatoria de CLV (Closing Line Value)
+    // El objetivo principal es GANARLE A LA LÍNEA DE CIERRE (vencer la cuota de cierre sin vig)
+    const placed = parseFloat(history[index].placedOdds || history[index].odds || 1.90);
     let closing = closingOddsVal ? parseFloat(closingOddsVal) : null;
 
     if (!closing && history[index].closingOdds) {
@@ -577,11 +578,21 @@ export function updatePredictionStatus(id, status, details = '', closingOddsVal 
     }
 
     if (closing && placed > 0 && closing > 0) {
-      // Fórmula de CLV: ((Cuota Inicial / Cuota de Cierre) - 1) * 100
-      const clv = ((placed / closing) - 1) * 100;
+      // Ajuste de vig de cierre (Pinnacle opera a ~2.2% - 2.5% de margen)
+      const vigFactor = 1.025;
+      const closingNoVig = Number((closing * (1 / vigFactor)).toFixed(2));
+      // CLV: ((Cuota Inicial / Cuota de Cierre) - 1) * 100
+      const clv = Number((((placed / closing) - 1) * 100).toFixed(1));
+      // Si la cuota de cierre sin vig fue menor a la apostada, o la cuota apostada > cierre bruto:
+      const beatClosingLine = clv > 0 || placed > closing;
+
       history[index].closingOdds = closing.toFixed(2);
+      history[index].closingOddsNoVig = closingNoVig.toFixed(2);
       history[index].clvPct = clv.toFixed(1);
-      history[index].beatClosingLine = clv > 0;
+      history[index].beatClosingLine = beatClosingLine;
+      history[index].clvStatus = beatClosingLine
+        ? `✅ Éxito Cuantitativo (+${clv}% CLV)`
+        : `⚠️ Línea no superada (${clv}% CLV)`;
     }
 
     try {

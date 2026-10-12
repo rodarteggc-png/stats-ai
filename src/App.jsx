@@ -301,13 +301,18 @@ export default function App() {
   }
 
   async function handleMarkStatus(id, status) {
+    const item = (history || []).find(h => h.id === id);
+    const existingClosing = item?.closingOdds || '';
+    const closingInput = prompt(`Paso 11 Post-Partido: Ingresa la Cuota de Cierre (Closing Line / Pinnacle):`, existingClosing);
+    const closingOdds = closingInput ? parseFloat(closingInput) : (existingClosing ? parseFloat(existingClosing) : null);
+
     if (status === 'lost') {
       const details = failureInputs[id] || prompt("¿Qué ocurrió en el partido? (Ej. Perdió 0-1, Expulsión min 25, Colapso de relevistas):") || "Derrota o fallo de línea";
-      updatePredictionStatus(id, 'lost', details);
+      updatePredictionStatus(id, 'lost', details, closingOdds);
       loadHistoryAndLessons();
       handleDiagnose(id, details);
     } else {
-      updatePredictionStatus(id, status);
+      updatePredictionStatus(id, status, '', closingOdds);
       loadHistoryAndLessons();
     }
   }
