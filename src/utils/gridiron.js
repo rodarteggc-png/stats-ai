@@ -174,13 +174,42 @@ export function calculateNflProbabilities(
   homeEpa = null, awayEpa = null,
   vegasTotal = null,
   windSpeedMph = 0,
-  isCollege = false
+  isCollege = false,
+  homeDaysRest = 7,
+  awayDaysRest = 7
 ) {
   const maxYpp = isCollege ? 7.4 : 6.6;
   const minYpp = isCollege ? 3.8 : 4.2;
   const defaultYpp = isCollege ? 5.6 : 5.3;
   const adjHomeYPP = Math.min(maxYpp, Math.max(minYpp, parseFloat(homeYPP) || defaultYpp));
   const adjAwayYPP = Math.min(maxYpp, Math.max(minYpp, parseFloat(awayYPP) || defaultYpp));
+
+  // =========================================================================
+  // AJUSTE GRIDIRON: REST DAYS & BYE WEEK BOOST
+  // =========================================================================
+  // Lógica Cuantitativa:
+  // - Si daysRest del equipo >= 10 y oponente <= 7: inyecta +0.15 al EPA Ofensivo
+  //   proyectado y un boost multiplicador/aditivo de +3.2% a la probabilidad final de cubrir el Spread.
+  // - Si ambos equipos tienen >= 10 días de descanso, el modificador se anula (0).
+  const hRest = parseInt(homeDaysRest !== undefined ? homeDaysRest : 7, 10);
+  const aRest = parseInt(awayDaysRest !== undefined ? awayDaysRest : 7, 10);
+
+  let homeByeBoost = false;
+  let awayByeBoost = false;
+  let homeEpaBoost = 0;
+  let awayEpaBoost = 0;
+  let homeSpreadCoverBoost = 0;
+  let awaySpreadCoverBoost = 0;
+
+  if (hRest >= 10 && aRest <= 7) {
+    homeByeBoost = true;
+    homeEpaBoost = 0.15;
+    homeSpreadCoverBoost = 3.2;
+  } else if (aRest >= 10 && hRest <= 7) {
+    awayByeBoost = true;
+    awayEpaBoost = 0.15;
+    awaySpreadCoverBoost = 3.2;
+  }
 
   // En fútbol americano colegial la ventaja de localía (HFA) es más pronunciada (~3.2 pts) vs NFL (~2.2 pts)
   const homeFieldAdvantage = isCollege ? 3.2 : 2.2;
@@ -189,13 +218,17 @@ export function calculateNflProbabilities(
 
   let rawModelSpread;
   if (homeEpa !== null && awayEpa !== null && !isNaN(parseFloat(homeEpa)) && !isNaN(parseFloat(awayEpa))) {
-    const epaDiff = parseFloat(homeEpa) - parseFloat(awayEpa);
+    const adjHomeEpa = parseFloat(homeEpa) + homeEpaBoost;
+    const adjAwayEpa = parseFloat(awayEpa) + awayEpaBoost;
+    const epaDiff = adjHomeEpa - adjAwayEpa;
     const epaPts = epaDiff * (isCollege ? 50 : 55);
     const yppPts = yppDiff * (isCollege ? 4.8 : 4.2);
     const toPts = toDiff * (isCollege ? 3.0 : 2.5);
     rawModelSpread = epaPts + yppPts + toPts + homeFieldAdvantage;
   } else {
-    rawModelSpread = (yppDiff * (isCollege ? 7.2 : 6.5)) + (toDiff * (isCollege ? 3.5 : 3.0)) + homeFieldAdvantage;
+    // Si no vino EPA granular, inyectar el equivalente en puntos del Bye Week (+1.8 pts netos)
+    const restPtsDiff = (homeByeBoost ? 1.8 : 0) - (awayByeBoost ? 1.8 : 0);
+    rawModelSpread = (yppDiff * (isCollege ? 7.2 : 6.5)) + (toDiff * (isCollege ? 3.5 : 3.0)) + homeFieldAdvantage + restPtsDiff;
   }
 
   // Anclaje Bayesiano con el Spread de Las Vegas
@@ -219,9 +252,21 @@ export function calculateNflProbabilities(
   const homeWinProb = normalCdf(predictedPointSpread, 0, sigma) * 100;
   const awayWinProb = 100 - homeWinProb;
 
-  // Probabilidad de Cobertura de Spread (True Normal CDF)
-  const homeCoverProb = calculateSpreadCoverProbability(predictedPointSpread, spreadNum, true, isCollege);
-  const awayCoverProb = calculateSpreadCoverProbability(predictedPointSpread, spreadNum, false, isCollege);
+  // Probabilidad de Cobertura de Spread (True Normal CDF) con inyección de byeWeekBoost
+  let rawHomeCover = calculateSpreadCoverProbability(predictedPointSpread, spreadNum, true, isCollege);
+  let rawAwayCover = calculateSpreadCoverProbability(predictedPointSpread, spreadNum, false, isCollege);
+
+  // Inyección del modificador de +3.2% a la probabilidad de cubrir el Spread
+  if (homeByeBoost) {
+    rawHomeCover = Math.min(92.0, Number((rawHomeCover + homeSpreadCoverBoost).toFixed(1)));
+    rawAwayCover = Math.max(8.0, Number((100 - rawHomeCover).toFixed(1)));
+  } else if (awayByeBoost) {
+    rawAwayCover = Math.min(92.0, Number((rawAwayCover + awaySpreadCoverBoost).toFixed(1)));
+    rawHomeCover = Math.max(8.0, Number((100 - rawAwayCover).toFixed(1)));
+  }
+
+  const homeCoverProb = rawHomeCover;
+  const awayCoverProb = rawAwayCover;
 
   // Total de Puntos Estimado Calibrado:
   const baseAvgTotal = isCollege ? 52.8 : 43.8;
@@ -250,6 +295,12 @@ export function calculateNflProbabilities(
     predictedTotal: predictedTotalPoints.toFixed(1),
     expectedHomeLead: predictedPointSpread.toFixed(1),
     keyEvaluation,
-    totalsEvaluation
+    totalsEvaluation,
+    byeWeekBoost: {
+      applied: homeByeBoost || awayByeBoost,
+      benefitedSide: homeByeBoost ? 'home' : (awayByeBoost ? 'away' : 'none'),
+      epaBoost: homeByeBoost ? homeEpaBoost : (awayByeBoost ? awayEpaBoost : 0),
+      spreadCoverBoostPct: homeByeBoost ? homeSpreadCoverBoost : (awayByeBoost ? awaySpreadCoverBoost : 0)
+    }
   };
 }
