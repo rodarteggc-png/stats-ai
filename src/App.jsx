@@ -1819,11 +1819,11 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen p-6 font-sans" style={{ background: "#070D1E", color: "#F8FAFC", minHeight: "100vh" }}>
+    <div className="min-h-screen p-3 sm:p-6 font-sans app-main-wrapper" style={{ background: "#070D1E", color: "#F8FAFC", minHeight: "100vh" }}>
       <div className="max-w-4xl mx-auto" style={{ maxWidth: 960, margin: "0 auto" }}>
         
         {/* Top Header Card */}
-        <header className="terminal-header-card" style={{ background: "#0B132B", border: "1px solid #1E293B", borderRadius: 16, padding: "20px 24px", marginBottom: 28, boxShadow: "0 4px 25px rgba(0,0,0,0.4)" }}>
+        <header className="terminal-header-card" style={{ background: "#0B132B", border: "1px solid #1E293B", borderRadius: 16, boxShadow: "0 4px 25px rgba(0,0,0,0.4)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 8 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
               <div style={{ fontSize: 20, fontWeight: 900, color: "#FFFFFF", letterSpacing: -0.3 }}>
@@ -1837,10 +1837,10 @@ export default function App() {
               </span>
             </div>
           </div>
-          <div className="font-mono" style={{ fontSize: 10, color: "#64748B", letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 16 }}>
+          <div className="font-mono" style={{ fontSize: 10, color: "#64748B", letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 14 }}>
             OFFICIAL MLB STATS API &bull; ESPN SCOREBOARDS &bull; DIXON-COLES ENGINE &bull; AUTO-VERIFIER
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 24, flexWrap: "wrap", paddingTop: 14, borderTop: "1px solid #1E293B" }}>
+          <div className="terminal-mini-metrics">
             <button 
               onClick={() => setShowSettings(true)}
               style={{ background: "#0F172A", border: "1px solid #334155", borderRadius: 8, padding: "6px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 8, transition: "background 0.2s" }}
@@ -1875,31 +1875,31 @@ export default function App() {
 
         {/* SECCIÓN 1: REESTRUCTURACIÓN DE KPIS */}
         <div style={{ marginBottom: 28 }}>
-          <h3 className="section-title" style={{ fontSize: 13, fontWeight: 800, letterSpacing: 0.6, textTransform: "uppercase", color: "#E2E8F0", marginBottom: 12 }}>
+          <h3 className="section-title">
             REESTRUCTURACIÓN DE KPIS (MÉTRICAS FINANCIERAS)
           </h3>
-          <div className="kpi-grid-container grid grid-cols-1 md:grid-cols-3 gap-4" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
+          <div className="kpi-grid-container grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
             {/* Card 1: ACCURACY */}
-            <div className="kpi-metric-card bg-slate-800 border border-slate-700 rounded-2xl p-5" style={{ background: "#0B132B", border: "1px solid #1E293B", borderRadius: 16, padding: "20px 22px", display: "flex", flexDirection: "column", justifyContent: "space-between", minHeight: 110 }}>
-              <div className="kpi-metric-title text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2" style={{ fontSize: 12, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 8 }}>
+            <div className="kpi-metric-card bg-slate-800 border border-slate-700 rounded-2xl p-4 sm:p-5" style={{ background: "#0B132B", border: "1px solid #1E293B", borderRadius: 16 }}>
+              <div className="kpi-metric-title text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
                 ACCURACY
               </div>
-              <div className="kpi-metric-value font-mono text-3xl md:text-4xl font-extrabold text-white" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 34, fontWeight: 800, color: "#FFFFFF" }}>
+              <div className="kpi-metric-value font-mono font-extrabold text-white" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#FFFFFF" }}>
                 {globalStats.accuracy}%
               </div>
             </div>
 
             {/* Card 2: ROI (FLAT 1U) */}
-            <div className="kpi-metric-card bg-slate-800 border border-slate-700 rounded-2xl p-5" style={{ background: "#0B132B", border: "1px solid #1E293B", borderRadius: 16, padding: "20px 22px", display: "flex", flexDirection: "column", justifyContent: "space-between", minHeight: 110 }}>
-              <div className="kpi-metric-title text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2" style={{ fontSize: 12, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 8 }}>
+            <div className="kpi-metric-card bg-slate-800 border border-slate-700 rounded-2xl p-4 sm:p-5" style={{ background: "#0B132B", border: "1px solid #1E293B", borderRadius: 16 }}>
+              <div className="kpi-metric-title text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
                 ROI (FLAT 1U)
               </div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div className={`kpi-metric-value font-mono text-3xl md:text-4xl font-extrabold ${parseFloat(globalStats.roi || 0) >= 0 ? 'text-emerald-400' : 'text-rose-500'}`} style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 34, fontWeight: 800, color: parseFloat(globalStats.roi || 0) >= 0 ? "#10B981" : "#EF4444" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <div className={`kpi-metric-value font-mono font-extrabold ${parseFloat(globalStats.roi || 0) >= 0 ? 'text-emerald-400' : 'text-rose-500'}`} style={{ fontFamily: "'JetBrains Mono', monospace", color: parseFloat(globalStats.roi || 0) >= 0 ? "#10B981" : "#EF4444" }}>
                   {parseFloat(globalStats.roi || 0) >= 0 ? `+${globalStats.roi}%` : `${globalStats.roi}%`}
                 </div>
                 {/* Sparkline chart */}
-                <svg width="72" height="34" viewBox="0 0 72 34" fill="none">
+                <svg className="flex-shrink-0" width="72" height="34" viewBox="0 0 72 34" fill="none">
                   {parseFloat(globalStats.roi || 0) >= 0 ? (
                     <>
                       <path d="M4 28 L18 20 L28 24 L44 10 L54 14 L66 4" stroke="#10B981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
@@ -1916,15 +1916,15 @@ export default function App() {
             </div>
 
             {/* Card 3: ROI (KELLY) */}
-            <div className="kpi-metric-card bg-slate-800 border border-slate-700 rounded-2xl p-5" style={{ background: "#0B132B", border: "1px solid #1E293B", borderRadius: 16, padding: "20px 22px", display: "flex", flexDirection: "column", justifyContent: "space-between", minHeight: 110 }}>
-              <div className="kpi-metric-title text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2" style={{ fontSize: 12, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 8 }}>
+            <div className="kpi-metric-card bg-slate-800 border border-slate-700 rounded-2xl p-4 sm:p-5" style={{ background: "#0B132B", border: "1px solid #1E293B", borderRadius: 16 }}>
+              <div className="kpi-metric-title text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
                 ROI (KELLY)
               </div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div className={`kpi-metric-value font-mono text-3xl md:text-4xl font-extrabold ${parseFloat(globalStats.kellyRoi || 0) >= 0 ? 'text-emerald-400' : 'text-rose-500'}`} style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 34, fontWeight: 800, color: parseFloat(globalStats.kellyRoi || 0) >= 0 ? "#10B981" : "#EF4444" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <div className={`kpi-metric-value font-mono font-extrabold ${parseFloat(globalStats.kellyRoi || 0) >= 0 ? 'text-emerald-400' : 'text-rose-500'}`} style={{ fontFamily: "'JetBrains Mono', monospace", color: parseFloat(globalStats.kellyRoi || 0) >= 0 ? "#10B981" : "#EF4444" }}>
                   {parseFloat(globalStats.kellyRoi || 0) >= 0 ? `+${globalStats.kellyRoi}%` : `${globalStats.kellyRoi}%`}
                 </div>
-                <svg width="72" height="34" viewBox="0 0 72 34" fill="none">
+                <svg className="flex-shrink-0" width="72" height="34" viewBox="0 0 72 34" fill="none">
                   {parseFloat(globalStats.kellyRoi || 0) >= 0 ? (
                     <>
                       <path d="M4 28 L18 20 L28 24 L44 10 L54 14 L66 4" stroke="#10B981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
@@ -2007,75 +2007,24 @@ export default function App() {
           <h3 className="section-title" style={{ fontSize: 13, fontWeight: 800, letterSpacing: 0.6, textTransform: "uppercase", color: "#E2E8F0", marginBottom: 12 }}>
             NAVEGACIÓN Y FILTROS DE DEPORTES
           </h3>
-          <div className="sport-segmented-bar flex bg-slate-800/50 p-1 rounded-xl w-full" style={{ display: "flex", background: "#0B132B", border: "1px solid #1E293B", borderRadius: 12, padding: 4, width: "100%", gap: 6 }}>
+          <div className="sport-segmented-bar flex bg-slate-800/50 p-1 rounded-xl w-full">
             <button
               onClick={() => setActiveSport("futbol")}
               className={`sport-segment-btn flex-1 ${activeSport === "futbol" ? "active" : ""}`}
-              style={{
-                flex: 1,
-                padding: "11px 16px",
-                borderRadius: 8,
-                border: activeSport === "futbol" ? "1px solid #3B82F6" : "1px solid transparent",
-                background: activeSport === "futbol" ? "#12244B" : "transparent",
-                color: activeSport === "futbol" ? "#FFFFFF" : "#94A3B8",
-                fontSize: 14,
-                fontWeight: activeSport === "futbol" ? 700 : 600,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 8,
-                boxShadow: activeSport === "futbol" ? "0 0 16px rgba(59, 130, 246, 0.35)" : "none",
-                cursor: "pointer",
-                transition: "all 0.2s"
-              }}
             >
               <span>⚽</span> Fútbol
             </button>
             <button
               onClick={() => setActiveSport("mlb")}
               className={`sport-segment-btn flex-1 ${activeSport === "mlb" ? "active" : ""}`}
-              style={{
-                flex: 1,
-                padding: "11px 16px",
-                borderRadius: 8,
-                border: activeSport === "mlb" ? "1px solid #3B82F6" : "1px solid transparent",
-                background: activeSport === "mlb" ? "#12244B" : "transparent",
-                color: activeSport === "mlb" ? "#FFFFFF" : "#94A3B8",
-                fontSize: 14,
-                fontWeight: activeSport === "mlb" ? 700 : 600,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 8,
-                boxShadow: activeSport === "mlb" ? "0 0 16px rgba(59, 130, 246, 0.35)" : "none",
-                cursor: "pointer",
-                transition: "all 0.2s"
-              }}
             >
-              <span>⚾</span> MLB (Grandes Ligas)
+              <span>⚾</span> MLB <span className="hidden sm:inline">(Grandes Ligas)</span>
             </button>
             <button
               onClick={() => setActiveSport("nfl")}
               className={`sport-segment-btn flex-1 ${activeSport === "nfl" ? "active" : ""}`}
-              style={{
-                flex: 1,
-                padding: "11px 16px",
-                borderRadius: 8,
-                border: activeSport === "nfl" ? "1px solid #3B82F6" : "1px solid transparent",
-                background: activeSport === "nfl" ? "#12244B" : "transparent",
-                color: activeSport === "nfl" ? "#FFFFFF" : "#94A3B8",
-                fontSize: 14,
-                fontWeight: activeSport === "nfl" ? 700 : 600,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 8,
-                boxShadow: activeSport === "nfl" ? "0 0 16px rgba(59, 130, 246, 0.35)" : "none",
-                cursor: "pointer",
-                transition: "all 0.2s"
-              }}
             >
-              <span>🏈</span> Fútbol Americano (NFL/ NCAAF)
+              <span>🏈</span> <span className="hidden sm:inline">Fútbol Americano </span>(NFL / NCAAF)
             </button>
           </div>
         </div>
@@ -2164,55 +2113,22 @@ export default function App() {
           <h3 className="section-title" style={{ fontSize: 13, fontWeight: 800, letterSpacing: 0.6, textTransform: "uppercase", color: "#E2E8F0", marginBottom: 12 }}>
             PESTAÑAS DE ACCIÓN DISCRETAS
           </h3>
-          <div className="action-tabs-bar flex border-b border-slate-800" style={{ display: "flex", gap: 32, borderBottom: "1px solid #1E293B", overflowX: "auto" }}>
+          <div className="action-tabs-bar flex border-b border-slate-800">
             <button 
               onClick={() => setActiveTab("simulador")} 
               className={`action-tab-btn ${activeTab === "simulador" ? "active" : ""}`}
-              style={{
-                background: "transparent",
-                border: "none",
-                borderBottom: activeTab === "simulador" ? "2px solid #3B82F6" : "2px solid transparent",
-                padding: "0 4px 14px 4px",
-                color: activeTab === "simulador" ? "#60A5FA" : "#94A3B8",
-                fontSize: 14,
-                fontWeight: activeTab === "simulador" ? 700 : 500,
-                cursor: "pointer",
-                whiteSpace: "nowrap"
-              }}
             >
               Simulador Manual
             </button>
             <button 
               onClick={() => setActiveTab("radar")} 
               className={`action-tab-btn ${activeTab === "radar" ? "active" : ""}`}
-              style={{
-                background: "transparent",
-                border: "none",
-                borderBottom: activeTab === "radar" ? "2px solid #3B82F6" : "2px solid transparent",
-                padding: "0 4px 14px 4px",
-                color: activeTab === "radar" ? "#60A5FA" : "#94A3B8",
-                fontSize: 14,
-                fontWeight: activeTab === "radar" ? 700 : 500,
-                cursor: "pointer",
-                whiteSpace: "nowrap"
-              }}
             >
-              <span>📡</span> Radar en Vivo {rawScheduleCount > 0 && <span className="font-mono" style={{ fontSize: 12, opacity: 0.85 }}>({rawScheduleCount})</span>}
+              <span>📡</span> Radar en Vivo {rawScheduleCount > 0 && <span className="font-mono text-xs opacity-80">({rawScheduleCount})</span>}
             </button>
             <button 
               onClick={() => setActiveTab("historial")} 
               className={`action-tab-btn ${activeTab === "historial" ? "active" : ""}`}
-              style={{
-                background: "transparent",
-                border: "none",
-                borderBottom: activeTab === "historial" ? "2px solid #3B82F6" : "2px solid transparent",
-                padding: "0 4px 14px 4px",
-                color: activeTab === "historial" ? "#60A5FA" : "#94A3B8",
-                fontSize: 14,
-                fontWeight: activeTab === "historial" ? 700 : 500,
-                cursor: "pointer",
-                whiteSpace: "nowrap"
-              }}
             >
               Historial y Rendimiento ({history.length || 1})
             </button>
@@ -2220,17 +2136,6 @@ export default function App() {
               <button 
                 onClick={() => { setActiveTab("nflweeks"); if (!nflWeekData) loadNflWeek(); }} 
                 className={`action-tab-btn ${activeTab === "nflweeks" ? "active" : ""}`}
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  borderBottom: activeTab === "nflweeks" ? "2px solid #3B82F6" : "2px solid transparent",
-                  padding: "0 4px 14px 4px",
-                  color: activeTab === "nflweeks" ? "#60A5FA" : "#94A3B8",
-                  fontSize: 14,
-                  fontWeight: activeTab === "nflweeks" ? 700 : 500,
-                  cursor: "pointer",
-                  whiteSpace: "nowrap"
-                }}
               >
                 🏈 NFL Semanas {nflWeekData ? `(Week ${nflWeekData.weekNumber})` : ""}
               </button>
@@ -3471,7 +3376,7 @@ export default function App() {
               <h3 className="section-title" style={{ fontSize: 13, fontWeight: 800, letterSpacing: 0.6, textTransform: "uppercase", color: "#E2E8F0", marginBottom: 12 }}>
                 BÚSQUEDA Y EJECUCIÓN (EL MOTOR)
               </h3>
-              <div className="engine-flex-container flex gap-3 items-center w-full" style={{ display: "flex", gap: 12, alignItems: "center", width: "100%" }}>
+              <div className="engine-flex-container w-full">
                 <input 
                   value={query} 
                   onChange={e => setQuery(e.target.value)} 
@@ -3479,35 +3384,13 @@ export default function App() {
                   placeholder={`Buscar partido real, ej: ${activeSport === 'futbol' ? 'América vs Cruz Azul...' : activeSport === 'mlb' ? 'Yankees vs Dodgers...' : 'Chiefs vs Ravens...'}`} 
                   disabled={loading}
                   className="engine-input-box bg-slate-800 border border-slate-700"
-                  style={{
-                    flex: 1,
-                    background: "#0B132B",
-                    border: "1px solid #1E293B",
-                    borderRadius: 12,
-                    padding: "14px 20px",
-                    color: "#FFFFFF",
-                    fontSize: 14,
-                    outline: "none"
-                  }}
                 />
                 <button 
                   onClick={() => analyze()} 
                   disabled={loading || !query.trim()}
                   className="engine-exec-btn bg-slate-700 font-mono text-white"
                   style={{
-                    background: "linear-gradient(180deg, #162C5B 0%, #0F1E3D 100%)",
-                    border: "1px solid #3B82F6",
-                    borderRadius: 12,
-                    padding: "13px 24px",
-                    color: "#FFFFFF",
-                    fontSize: 14,
-                    fontWeight: 800,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    boxShadow: "0 0 18px rgba(59, 130, 246, 0.35)",
                     cursor: (loading || !query.trim()) ? "not-allowed" : "pointer",
-                    whiteSpace: "nowrap",
                     opacity: (loading || !query.trim()) ? 0.6 : 1
                   }}
                 >
@@ -3521,7 +3404,7 @@ export default function App() {
                     </>
                   ) : (
                     <>
-                      <span className="engine-badge-tag" style={{ background: "rgba(59, 130, 246, 0.25)", border: "1px solid rgba(59, 130, 246, 0.5)", borderRadius: 6, padding: "2px 7px", fontSize: 12, fontFamily: "'JetBrains Mono', monospace", color: "#60A5FA", fontWeight: 800 }}>&gt;_</span>
+                      <span className="engine-badge-tag">&gt;_</span>
                       <span>EJECUTAR SIMULACIÓN</span>
                     </>
                   )}

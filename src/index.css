@@ -19,6 +19,15 @@
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
 }
 
+.terminal-mini-metrics {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding-top: 14px;
+  border-top: 1px solid #1E293B;
+}
+
 .section-title {
   font-size: 13px;
   font-weight: 800;
@@ -33,11 +42,6 @@
   grid-template-columns: repeat(3, 1fr);
   gap: 16px;
   margin-bottom: 28px;
-}
-@media (max-width: 768px) {
-  .kpi-grid-container {
-    grid-template-columns: 1fr;
-  }
 }
 
 .kpi-metric-card {
@@ -113,6 +117,7 @@
   border-bottom: 1px solid #1E293B;
   margin-bottom: 28px;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .action-tab-btn {
@@ -126,6 +131,7 @@
   cursor: pointer;
   white-space: nowrap;
   transition: all 0.2s ease;
+  flex-shrink: 0;
 }
 .action-tab-btn:hover {
   color: #F1F5F9;
@@ -196,6 +202,90 @@
   font-family: var(--mono);
   color: #60A5FA;
   font-weight: 800;
+}
+
+/* RESPONSIVE OVERRIDES FOR MOBILE (SCREEN <= 768px) */
+@media (max-width: 768px) {
+  .terminal-header-card {
+    padding: 14px 14px !important;
+    margin-bottom: 18px !important;
+    border-radius: 12px !important;
+  }
+
+  .terminal-mini-metrics {
+    gap: 12px !important;
+    padding-top: 10px !important;
+    justify-content: space-between;
+  }
+
+  .terminal-mini-metrics button {
+    width: 100%;
+    margin-bottom: 4px;
+  }
+
+  .kpi-grid-container {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+    margin-bottom: 20px !important;
+  }
+
+  .kpi-metric-card {
+    padding: 14px 16px !important;
+    border-radius: 12px !important;
+    min-height: auto !important;
+  }
+
+  .kpi-metric-value {
+    font-size: 28px !important;
+  }
+
+  .sport-segmented-bar {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap !important;
+    padding: 3px !important;
+    gap: 4px !important;
+    margin-bottom: 18px !important;
+  }
+
+  .sport-segment-btn {
+    flex: 1 0 auto !important;
+    padding: 8px 12px !important;
+    font-size: 12px !important;
+    white-space: nowrap !important;
+  }
+
+  .action-tabs-bar {
+    gap: 16px !important;
+    margin-bottom: 20px !important;
+    padding-bottom: 0px !important;
+    flex-wrap: nowrap !important;
+  }
+
+  .action-tab-btn {
+    padding: 0 2px 10px 2px !important;
+    font-size: 13px !important;
+  }
+
+  .engine-flex-container {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
+    margin-bottom: 20px !important;
+  }
+
+  .engine-input-box {
+    width: 100% !important;
+    padding: 12px 16px !important;
+    font-size: 13px !important;
+  }
+
+  .engine-exec-btn {
+    width: 100% !important;
+    justify-content: center !important;
+    padding: 12px 18px !important;
+    font-size: 13px !important;
+  }
 }
 
 body {
