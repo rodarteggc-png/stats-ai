@@ -1749,15 +1749,19 @@ export async function runDailyTelegramAudit(options = {}) {
   const forceResend = options.forceAudit || process.argv.includes('--audit');
   const providedCache = options.ledger || await loadCloudLedger();
 
-  // Descargar marcadores oficiales de ayer y hoy para cruzar contra las alertas enviadas
-  const [soccerYest, soccerToday, mlbYest, mlbToday, nflWeek, ncaafWeek] = await Promise.all([
-    fetchDailySchedule('futbol', 'ayer').catch(() => []),
-    fetchDailySchedule('futbol', 'hoy').catch(() => []),
-    fetchDailySchedule('mlb', 'ayer').catch(() => []),
-    fetchDailySchedule('mlb', 'hoy').catch(() => []),
-    fetchDailySchedule('nfl', 'ayer').catch(() => []),
-    fetchDailySchedule('ncaaf', 'ayer').catch(() => [])
+  // Descargar marcadores oficiales de ayer y hoy de forma desacoplada con Promise.allSettled
+  const scheduleResults = await Promise.allSettled([
+    fetchDailySchedule('futbol', 'ayer'),
+    fetchDailySchedule('futbol', 'hoy'),
+    fetchDailySchedule('mlb', 'ayer'),
+    fetchDailySchedule('mlb', 'hoy'),
+    fetchDailySchedule('nfl', 'ayer'),
+    fetchDailySchedule('ncaaf', 'ayer')
   ]);
+
+  const [soccerYest, soccerToday, mlbYest, mlbToday, nflWeek, ncaafWeek] = scheduleResults.map(r =>
+    r.status === 'fulfilled' && Array.isArray(r.value) ? r.value : []
+  );
 
   const allCompletedMatches = [
     ...soccerYest,
@@ -2194,13 +2198,18 @@ export async function runAlertEngine(options = {}) {
     console.error('Aviso en auditoría previa:', err.message);
   }
 
-  // Descargar programación completa (Fútbol, MLB, NFL y NCAAF Colegial FBS)
-  const [soccerRaw, mlbRaw, nflRaw, ncaafRaw] = await Promise.all([
-    fetchDailySchedule('futbol', dateRange).catch(() => []),
-    fetchDailySchedule('mlb', dateRange).catch(() => []),
-    fetchDailySchedule('nfl', dateRange).catch(() => []),
-    fetchDailySchedule('ncaaf', dateRange).catch(() => [])
+  // Descargar programación completa desacoplada (Fútbol, MLB, NFL y NCAAF Colegial FBS)
+  // Utiliza Promise.allSettled para procesar de inmediato los deportes que sí respondieron rápido
+  const scheduleBatches = await Promise.allSettled([
+    fetchDailySchedule('futbol', dateRange),
+    fetchDailySchedule('mlb', dateRange),
+    fetchDailySchedule('nfl', dateRange),
+    fetchDailySchedule('ncaaf', dateRange)
   ]);
+
+  const [soccerRaw, mlbRaw, nflRaw, ncaafRaw] = scheduleBatches.map(r =>
+    r.status === 'fulfilled' && Array.isArray(r.value) ? r.value : []
+  );
 
   const filterUpcoming = (m) => {
     if (!m || m.isCompleted) return false;

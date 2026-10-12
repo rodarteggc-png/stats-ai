@@ -535,45 +535,58 @@ async function fetchTheOdds(sportKey) {
   const keys = getOddsApiKeys();
   if (keys.length === 0) return null;
 
-  // 2. PROBAR CADA LLAVE DEL POOL SECUENCIALMENTE (ROTACIÓN / FALLBACK)
+  // 2. PROBAR CADA LLAVE DEL POOL CON FAST RETRY (Intento 1: 1.5s -> Intento 2: 2.0s)
   for (let i = 0; i < keys.length; i++) {
     const apiKey = keys[i];
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2500);
-      const res = await fetch(`https://api.the-odds-api.com/v4/sports/${sportKey}/odds/?apiKey=${apiKey}&regions=eu,us&markets=h2h,spreads,totals&bookmakers=pinnacle,bet365`, {
-        signal: controller.signal
-      }).finally(() => clearTimeout(timeoutId));
-      
-      // Si la llave está agotada (429) o rechazada (401), saltar a la siguiente del pool
-      if (res.status === 429 || res.status === 401) {
-        console.warn(`Llave ${i + 1} agotada o inválida (${res.status}). Probando siguiente llave del pool...`);
-        continue;
+    const timeouts = [1500, 2000]; // Fast Retry: 1.5s primer intento, 2.0s segundo intento
+    let data = null;
+
+    for (let attempt = 0; attempt < timeouts.length; attempt++) {
+      const timeoutMs = timeouts[attempt];
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        const res = await fetch(`https://api.the-odds-api.com/v4/sports/${sportKey}/odds/?apiKey=${apiKey}&regions=eu,us&markets=h2h,spreads,totals&bookmakers=pinnacle,bet365`, {
+          signal: controller.signal
+        }).finally(() => clearTimeout(timeoutId));
+        
+        // Si la llave está agotada (429) o inválida (401), saltar de inmediato a la siguiente llave
+        if (res.status === 429 || res.status === 401) {
+          console.warn(`Llave ${i + 1} agotada o inválida (${res.status}). Probando siguiente llave del pool...`);
+          break; // Salir de reintentos y pasar a la siguiente llave
+        }
+
+        if (!res.ok) continue;
+
+        const remaining = res.headers.get('x-requests-remaining');
+        const used = res.headers.get('x-requests-used');
+        if (remaining !== null && typeof window !== 'undefined' && window.localStorage) {
+          try {
+            localStorage.setItem('fstats_odds_remaining', remaining);
+            if (used !== null) localStorage.setItem('fstats_odds_used', used);
+            localStorage.setItem('fstats_odds_last_updated', new Date().toISOString());
+          } catch (e) {}
+
+          window.dispatchEvent(new CustomEvent('fstats_odds_usage_updated', {
+            detail: { remaining: parseInt(remaining, 10), used: parseInt(used || 0, 10) }
+          }));
+        }
+
+        data = await res.json();
+        if (data && Array.isArray(data)) {
+          // Guardar en caché persistente con TTL de 3 horas
+          setCachedOdds(sportKey, data);
+          return data;
+        }
+      } catch (err) {
+        if (attempt === 0) {
+          // Micro-reintento inmediato con 2.0s
+          continue;
+        }
+        console.warn(`Aviso de latencia en fetchTheOdds con Llave ${i + 1} para ${sportKey} (Intento ${attempt + 1}): ${err.message}`);
       }
-
-      if (!res.ok) continue;
-
-      const remaining = res.headers.get('x-requests-remaining');
-      const used = res.headers.get('x-requests-used');
-      if (remaining !== null && typeof window !== 'undefined' && window.localStorage) {
-        try {
-          localStorage.setItem('fstats_odds_remaining', remaining);
-          if (used !== null) localStorage.setItem('fstats_odds_used', used);
-          localStorage.setItem('fstats_odds_last_updated', new Date().toISOString());
-        } catch (e) {}
-
-        window.dispatchEvent(new CustomEvent('fstats_odds_usage_updated', {
-          detail: { remaining: parseInt(remaining, 10), used: parseInt(used || 0, 10) }
-        }));
-      }
-
-      const data = await res.json();
-      // Guardar en caché persistente con TTL de 3 horas
-      setCachedOdds(sportKey, data);
-      return data;
-    } catch (err) {
-      console.error(`Error en fetchTheOdds con Llave ${i + 1} para ${sportKey}:`, err);
     }
+    if (data) return data;
   }
 
   return null;
