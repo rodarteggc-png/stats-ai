@@ -225,3 +225,59 @@ export function calculatePropProbabilities(homeAvg, awayAvg, line) {
   const overProb = 1 - underProb;
   return { over: (overProb * 100).toFixed(1), under: (underProb * 100).toFixed(1), line };
 }
+
+/**
+ * FASE 4.2 - FALLBACK MERCADO ASIÁTICO VIG-FREE (HANDICAP ASIÁTICO 0 / DRAW NO BET)
+ * 
+ * Si no hay modelo Poisson/xG disponible, deriva la probabilidad real removiendo
+ * el margen de la casa de apuestas (overround/vig) del mercado Draw No Bet / Asian Handicap 0.
+ * Reconstruye el mercado 1X2 contemplando la masa de probabilidad de Empate (típicamente 26%).
+ * 
+ * @param {number|string} homeOddsDnb - Cuota decimal de Home DNB (AH 0)
+ * @param {number|string} awayOddsDnb - Cuota decimal de Away DNB (AH 0)
+ * @param {number} estimatedDrawPct - Porcentaje estimado de empate de la liga (default: 26.0%)
+ */
+export function deriveAsianHandicapVigFreeProbabilities(homeOddsDnb, awayOddsDnb, estimatedDrawPct = 26.0) {
+  const hOdds = parseFloat(homeOddsDnb) || 1.90;
+  const aOdds = parseFloat(awayOddsDnb) || 1.90;
+
+  // 1. Probabilidades implícitas brutas con margen
+  const rawH = 1 / hOdds;
+  const rawA = 1 / aOdds;
+  const vig = rawH + rawA; // ej. 1.05 (5% de margen)
+
+  // 2. Probabilidades justas normalizadas (Vig-Free en DNB)
+  const fairHomeDnb = vig > 0 ? rawH / vig : 0.50;
+  const fairAwayDnb = vig > 0 ? rawA / vig : 0.50;
+
+  // 3. Reintegración obligatoria del EMPATE (Mercado 3 vías 1X2)
+  const drawProb = Math.min(35.0, Math.max(18.0, parseFloat(estimatedDrawPct) || 26.0)) / 100;
+  const decisiveMass = 1 - drawProb;
+
+  const homeWinProb = fairHomeDnb * decisiveMass;
+  const awayWinProb = fairAwayDnb * decisiveMass;
+
+  const hWinPct = Number((homeWinProb * 100).toFixed(1));
+  const drawPct = Number((drawProb * 100).toFixed(1));
+  const aWinPct = Number((awayWinProb * 100).toFixed(1));
+
+  const doubleChance = calculateDoubleChanceProbabilities(hWinPct, drawPct, aWinPct);
+  const dnb = {
+    homeDnb: (fairHomeDnb * 100).toFixed(1),
+    awayDnb: (fairAwayDnb * 100).toFixed(1),
+    homeOdds: getFairOddsDecimal((fairHomeDnb * 100).toFixed(1)),
+    awayOdds: getFairOddsDecimal((fairAwayDnb * 100).toFixed(1))
+  };
+
+  return {
+    source: 'asian_handicap_vig_free',
+    vigPercent: Number(((vig - 1) * 100).toFixed(2)),
+    homeWin: hWinPct.toFixed(1),
+    draw: drawPct.toFixed(1),
+    awayWin: aWinPct.toFixed(1),
+    dnb,
+    doubleChance,
+    fairHomeDnb: Number((fairHomeDnb * 100).toFixed(1)),
+    fairAwayDnb: Number((fairAwayDnb * 100).toFixed(1))
+  };
+}

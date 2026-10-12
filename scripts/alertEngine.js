@@ -812,13 +812,21 @@ export function buildOpportunitiesAndTopSlate({
     const hPen = getPenalty(m.home.name, learned.homePenalty);
     const aPen = getPenalty(m.away.name, learned.awayPenalty);
 
+    const [hWins, hLosses] = (m.home.record || '0-0').split('-').map(Number);
+    const [aWins, aLosses] = (m.away.record || '0-0').split('-').map(Number);
+    const homeGamesCount = (hWins || 0) + (hLosses || 0);
+    const awayGamesCount = (aWins || 0) + (aLosses || 0);
+
     const sabers = calculateMlbProbabilities(
       m.home.ops || '0.730', awayPitcherWhip,
       m.away.ops || '0.710', homePitcherWhip,
       m.home.elo || 1500, m.away.elo || 1500,
       m.home.daysRest || 1, m.away.daysRest || 1,
       hPen, aPen,
-      m.home.name
+      m.home.name,
+      1.28, 1.28,
+      hWins, homeGamesCount,
+      aWins, awayGamesCount
     );
 
     const mcMlb = simulateMlbMatch(

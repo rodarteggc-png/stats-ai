@@ -7,6 +7,48 @@ export function getFairOddsDecimal(probability) {
 }
 
 /**
+ * FASE 4.2 - REGRESIÓN BAYESIANA (+25/+50) Y LOG5 (BILL JAMES)
+ * Para Béisbol y Mercados Binarios de 2 Vías.
+ * 
+ * Regresión hacia la media con Prior Bayesiano:
+ * p_A_reg = (wins_A + 25) / (games_A + 50)
+ * p_B_reg = (wins_B + 25) / (games_B + 50)
+ * p_neutral = (p_A - p_A * p_B) / (p_A + p_B - 2 * p_A * p_B)
+ * p_local = p_neutral + HFA_dinamico (+0.02 a +0.04)
+ */
+export function calculateLog5WinProbability(homeWins, homeGames, awayWins, awayGames, parkFactor = 1.0) {
+  const hW = parseFloat(homeWins) || 0;
+  const hG = Math.max(hW, parseFloat(homeGames) || 0);
+  const aW = parseFloat(awayWins) || 0;
+  const aG = Math.max(aW, parseFloat(awayGames) || 0);
+
+  // 1. Regresión Bayesiana con Prior N=50, W=25
+  const pA = (hW + 25) / (hG + 50);
+  const pB = (aW + 25) / (aG + 50);
+
+  // 2. Fórmula Log5 de Bill James en Campo Neutral
+  const denom = (pA + pB) - (2 * pA * pB);
+  let pNeutral = denom > 0 ? (pA - (pA * pB)) / denom : 0.50;
+
+  // 3. Ventaja de Localía Dinámica (HFA: +0.02 a +0.04 según Park Factor)
+  // Parques favorables al bateador/con viento tienen HFA más variable (+0.035), parques neutrales +0.028
+  const baseHfa = 0.028;
+  const dynamicHfa = Math.min(0.04, Math.max(0.02, baseHfa * (parseFloat(parkFactor) || 1.0)));
+
+  const pHome = Math.min(0.85, Math.max(0.15, pNeutral + dynamicHfa));
+  const pAway = 1 - pHome;
+
+  return {
+    pHomeReg: Number((pA * 100).toFixed(1)),
+    pAwayReg: Number((pB * 100).toFixed(1)),
+    pNeutral: Number((pNeutral * 100).toFixed(1)),
+    dynamicHfa: Number((dynamicHfa * 100).toFixed(2)),
+    homeWinLog5: Number((pHome * 100).toFixed(1)),
+    awayWinLog5: Number((pAway * 100).toFixed(1))
+  };
+}
+
+/**
  * Función auxiliar de distribución Poisson discreta: (λ^k * e^-λ) / k!
  */
 function poissonProbability(lambda, k) {
@@ -87,7 +129,11 @@ export function calculateMlbProbabilities(
   homePenalty = 0, awayPenalty = 0,
   homeTeamName = "",
   awayBullpenWhip = 1.28,
-  homeBullpenWhip = 1.28
+  homeBullpenWhip = 1.28,
+  homeWins = undefined,
+  homeGames = undefined,
+  awayWins = undefined,
+  awayGames = undefined
 ) {
   const parkFactors = {
     'Colorado': 1.28, 'Cincinnati': 1.15, 'Boston': 1.12, 
@@ -137,6 +183,18 @@ export function calculateMlbProbabilities(
 
   // 1. CÁLCULO DE JUEGO COMPLETO (9 INNINGS + EXTRA INNINGS)
   const fullGameMatrix = calculateBaseballMatrix(homeExpectedRuns, awayExpectedRuns, 14);
+
+  // FASE 4.2: Regresión Bayesiana y Log5 (Bill James) para Mercados Binarios de 2 Vías
+  let log5Data = null;
+  let homeFinalProb = fullGameMatrix.homeWinFinal;
+  let awayFinalProb = fullGameMatrix.awayWinFinal;
+
+  if (homeWins !== undefined && homeGames !== undefined && awayWins !== undefined && awayGames !== undefined) {
+    log5Data = calculateLog5WinProbability(homeWins, homeGames, awayWins, awayGames, pf);
+    // Ponderación de Ensamble: 55% Matriz Sabermétrica (Pitcheo abridor/OPS actual) + 45% Log5 Bayesiano
+    homeFinalProb = (fullGameMatrix.homeWinFinal * 0.55) + ((log5Data.homeWinLog5 / 100) * 0.45);
+    awayFinalProb = 1 - homeFinalProb;
+  }
 
   const totalExpectedRuns = homeExpectedRuns + awayExpectedRuns;
   
@@ -204,8 +262,9 @@ export function calculateMlbProbabilities(
   const homePlus15Pct = (fullGameMatrix.homePlus15 * 100).toFixed(1);
 
   return {
-    homeWin: (fullGameMatrix.homeWinFinal * 100).toFixed(1),
-    awayWin: (fullGameMatrix.awayWinFinal * 100).toFixed(1),
+    homeWin: (homeFinalProb * 100).toFixed(1),
+    awayWin: (awayFinalProb * 100).toFixed(1),
+    log5: log5Data,
     expectedTotal: totalExpectedRuns.toFixed(1),
     over85: ((1 - under85Prob) * 100).toFixed(1),
     under85: (under85Prob * 100).toFixed(1),

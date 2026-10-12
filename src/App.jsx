@@ -833,15 +833,21 @@ export default function App() {
               meta: `Córners Est: ${propProbs.corners.expectedTotal}`
             });
           }
-
         } else if (activeSport === 'mlb') {
+          const [hWins, hLosses] = (matchData.home?.record || '0-0').split('-').map(Number);
+          const [aWins, aLosses] = (matchData.away?.record || '0-0').split('-').map(Number);
+          const hGames = (hWins || 0) + (hLosses || 0);
+          const aGames = (aWins || 0) + (aLosses || 0);
+
           const probs = calculateMlbProbabilities(
             matchData.home.ops, matchData.away.pitcher.whip, 
             matchData.away.ops, matchData.home.pitcher.whip,
             matchData.home.elo, matchData.away.elo,
             matchData.home.daysRest, matchData.away.daysRest,
             learned.homePenalty, learned.awayPenalty,
-            matchData.home.name
+            matchData.home.name,
+            1.28, 1.28,
+            hWins, hGames, aWins, aGames
           );
           const mcMlb = mcResultsMap[mKey] || simulateMlbMatch(
             matchData.home.pitcher?.whip, matchData.away.pitcher?.whip,
@@ -1474,12 +1480,19 @@ export default function App() {
       } else if (activeSport === 'mlb') {
         backgroundColor = "#171717";
         accentColor = "#ef4444";
+        const [hWins, hLosses] = (matchData.home?.record || '0-0').split('-').map(Number);
+        const [aWins, aLosses] = (matchData.away?.record || '0-0').split('-').map(Number);
+        const hGames = (hWins || 0) + (hLosses || 0);
+        const aGames = (aWins || 0) + (aLosses || 0);
+
         const probs = calculateMlbProbabilities(
           matchData.home.ops, matchData.away.pitcher.whip, 
           matchData.away.ops, matchData.home.pitcher.whip,
           matchData.home.elo, matchData.away.elo,
           matchData.home.daysRest, matchData.away.daysRest,
-          learned.homePenalty, learned.awayPenalty, matchData.home.name
+          learned.homePenalty, learned.awayPenalty, matchData.home.name,
+          1.28, 1.28,
+          hWins, hGames, aWins, aGames
         );
         mathProbs = { type: 'mlb', probs };
 
