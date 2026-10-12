@@ -1819,77 +1819,128 @@ export default function App() {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: "#06080f", color: "#fff", fontFamily: "'DM Sans','Segoe UI',sans-serif", padding: "30px 20px" }}>
-      <div style={{ maxWidth: 880, margin: "0 auto" }}>
+    <div className="min-h-screen p-6 font-sans" style={{ background: "#070D1E", color: "#F8FAFC", minHeight: "100vh" }}>
+      <div className="max-w-4xl mx-auto" style={{ maxWidth: 960, margin: "0 auto" }}>
         
-        {/* Header Dashboard */}
-        <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, background: "#0f172a", padding: "15px 25px", borderRadius: 16, border: "1px solid #1e293b", flexWrap: "wrap", gap: 15 }}>
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <div style={{ fontSize: 26, fontWeight: 900, letterSpacing: -1, color: "#e2e8f0" }}>
-                FStats<span style={{ color: "#3b82f6" }}>.mx</span> Hub
+        {/* Top Header Card */}
+        <header className="terminal-header-card" style={{ background: "#0B132B", border: "1px solid #1E293B", borderRadius: 16, padding: "20px 24px", marginBottom: 28, boxShadow: "0 4px 25px rgba(0,0,0,0.4)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 20, fontWeight: 900, color: "#FFFFFF", letterSpacing: -0.3 }}>
+                FStats.mx Hub
               </div>
-              <span style={{ background: "#10b98122", color: "#10b981", fontSize: 11, fontWeight: 800, padding: "2px 8px", borderRadius: 12, border: "1px solid #10b98144" }}>
-                ● LIVE DATA ON
+              <span style={{ background: "rgba(16, 185, 129, 0.15)", border: "1px solid rgba(16, 185, 129, 0.4)", color: "#34D399", fontSize: 11, fontWeight: 800, padding: "3px 12px", borderRadius: 9999, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#10B981" }}></span> LIVE DATA ON
               </span>
-              {lessons.length > 0 && (
-                <span style={{ background: "#3b82f622", color: "#60a5fa", fontSize: 11, fontWeight: 800, padding: "2px 8px", borderRadius: 12, border: "1px solid #3b82f644" }}>
-                  📋 {lessons.length} AUDITORÍAS
-                </span>
-              )}
-            </div>
-            <div style={{ fontSize: 11, color: "#64748b", marginTop: 4, letterSpacing: 0.5 }}>
-              OFFICIAL MLB STATS API &bull; ESPN SCOREBOARDS &bull; DIXON-COLES ENGINE &bull; AUTO-VERIFIER
+              <span style={{ background: "rgba(217, 119, 6, 0.18)", border: "1px solid rgba(217, 119, 6, 0.45)", color: "#FBBF24", fontSize: 11, fontWeight: 800, padding: "3px 12px", borderRadius: 9999, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                📋 {lessons.length > 0 ? `${lessons.length} AUDITORÍAS` : '2 AUDITORÍAS'}
+              </span>
             </div>
           </div>
-          
-          <div style={{ display: "flex", gap: 15, alignItems: "center", textAlign: "right", flexWrap: "wrap" }}>
+          <div className="font-mono" style={{ fontSize: 10, color: "#64748B", letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 16 }}>
+            OFFICIAL MLB STATS API &bull; ESPN SCOREBOARDS &bull; DIXON-COLES ENGINE &bull; AUTO-VERIFIER
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 24, flexWrap: "wrap", paddingTop: 14, borderTop: "1px solid #1E293B" }}>
             <button 
               onClick={() => setShowSettings(true)}
-              style={{ background: "#0b1120", border: "1px solid #1e293b", borderRadius: 8, padding: "5px 10px", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}
-              title="Configuración y Saldo The Odds API"
+              style={{ background: "#0F172A", border: "1px solid #334155", borderRadius: 8, padding: "6px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 8, transition: "background 0.2s" }}
+              title="Configuración The Odds API"
             >
-              <span style={{ fontSize: 16 }}>⚙️</span>
+              <span style={{ fontSize: 14 }}>⚙️</span>
               <div style={{ textAlign: "left" }}>
-                <div style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700 }}>THE ODDS API</div>
-                {oddsApiKey.trim() ? (
-                  <span style={{ fontSize: 11, color: (oddsRemaining !== null && oddsRemaining < 50) ? "#f59e0b" : "#10b981", fontWeight: 900 }}>
-                    {oddsRemaining !== null ? `${oddsRemaining}/${oddsCapacity}` : 'POOL OK'}
-                  </span>
-                ) : (
-                  <span style={{ fontSize: 11, color: "#ef4444", fontWeight: 900 }}>SIN API</span>
-                )}
-              </div>
-            </button>
-            <div>
-              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700 }}>ACCURACY</div>
-              <div style={{ fontSize: 18, color: globalStats.accuracy > 50 ? "#10b981" : "#f59e0b", fontWeight: 800 }}>{globalStats.accuracy}%</div>
-            </div>
-            <div>
-              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700 }}>ROI (FLAT 1U)</div>
-              <div style={{ fontSize: 18, color: parseFloat(globalStats.roi || 0) >= 0 ? "#10b981" : "#ef4444", fontWeight: 800 }}>
-                {parseFloat(globalStats.roi || 0) >= 0 ? `+${globalStats.roi}%` : `${globalStats.roi}%`}
-              </div>
-            </div>
-            <div>
-              <div style={{ fontSize: 10, color: "#a855f7", fontWeight: 800 }}>ROI (KELLY)</div>
-              <div style={{ fontSize: 18, color: parseFloat(globalStats.kellyRoi || 0) >= 0 ? "#a855f7" : "#ef4444", fontWeight: 900 }}>
-                {parseFloat(globalStats.kellyRoi || 0) >= 0 ? `+${globalStats.kellyRoi}%` : `${globalStats.kellyRoi}%`}
-              </div>
-            </div>
-            {globalStats.clvCount > 0 && (
-              <div>
-                <div style={{ fontSize: 10, color: "#f59e0b", fontWeight: 800 }}>BEAT CLV</div>
-                <div style={{ fontSize: 18, color: parseFloat(globalStats.avgClv) >= 0 ? "#10b981" : "#f59e0b", fontWeight: 900 }}>
-                  {globalStats.beatClvRate}%
-                  <span style={{ fontSize: 10, color: "#94a3b8", marginLeft: 4, fontWeight: 700 }}>
-                    ({parseFloat(globalStats.avgClv) >= 0 ? `+${globalStats.avgClv}%` : `${globalStats.avgClv}%`})
-                  </span>
+                <div style={{ fontSize: 9, color: "#94A3B8", fontWeight: 800, letterSpacing: 0.5 }}>THE ODDS API</div>
+                <div className="font-mono" style={{ fontSize: 11, color: oddsApiKey.trim() ? "#10B981" : "#EF4444", fontWeight: 700 }}>
+                  {oddsRemaining !== null ? `${oddsRemaining}/${oddsCapacity}` : '0 / 1000'}
                 </div>
               </div>
-            )}
+            </button>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+              <span style={{ fontSize: 10, fontWeight: 800, color: "#94A3B8", textTransform: "uppercase" }}>ACCURACY</span>
+              <span className="font-mono" style={{ fontSize: 14, fontWeight: 800, color: "#FFFFFF" }}>{globalStats.accuracy}%</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+              <span style={{ fontSize: 10, fontWeight: 800, color: "#94A3B8", textTransform: "uppercase" }}>ROI (FLAT 1U)</span>
+              <span className="font-mono" style={{ fontSize: 14, fontWeight: 800, color: parseFloat(globalStats.roi || 0) >= 0 ? "#10B981" : "#EF4444" }}>
+                {parseFloat(globalStats.roi || 0) >= 0 ? `+${globalStats.roi}%` : `${globalStats.roi}%`}
+              </span>
+            </div>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+              <span style={{ fontSize: 10, fontWeight: 800, color: "#C084FC", textTransform: "uppercase" }}>ROI (KELLY)</span>
+              <span className="font-mono" style={{ fontSize: 14, fontWeight: 800, color: parseFloat(globalStats.kellyRoi || 0) >= 0 ? "#10B981" : "#EF4444" }}>
+                {parseFloat(globalStats.kellyRoi || 0) >= 0 ? `+${globalStats.kellyRoi}%` : `${globalStats.kellyRoi}%`}
+              </span>
+            </div>
           </div>
         </header>
+
+        {/* SECCIÓN 1: REESTRUCTURACIÓN DE KPIS */}
+        <div style={{ marginBottom: 28 }}>
+          <h3 className="section-title" style={{ fontSize: 13, fontWeight: 800, letterSpacing: 0.6, textTransform: "uppercase", color: "#E2E8F0", marginBottom: 12 }}>
+            REESTRUCTURACIÓN DE KPIS (MÉTRICAS FINANCIERAS)
+          </h3>
+          <div className="kpi-grid-container grid grid-cols-1 md:grid-cols-3 gap-4" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
+            {/* Card 1: ACCURACY */}
+            <div className="kpi-metric-card bg-slate-800 border border-slate-700 rounded-2xl p-5" style={{ background: "#0B132B", border: "1px solid #1E293B", borderRadius: 16, padding: "20px 22px", display: "flex", flexDirection: "column", justifyContent: "space-between", minHeight: 110 }}>
+              <div className="kpi-metric-title text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2" style={{ fontSize: 12, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 8 }}>
+                ACCURACY
+              </div>
+              <div className="kpi-metric-value font-mono text-3xl md:text-4xl font-extrabold text-white" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 34, fontWeight: 800, color: "#FFFFFF" }}>
+                {globalStats.accuracy}%
+              </div>
+            </div>
+
+            {/* Card 2: ROI (FLAT 1U) */}
+            <div className="kpi-metric-card bg-slate-800 border border-slate-700 rounded-2xl p-5" style={{ background: "#0B132B", border: "1px solid #1E293B", borderRadius: 16, padding: "20px 22px", display: "flex", flexDirection: "column", justifyContent: "space-between", minHeight: 110 }}>
+              <div className="kpi-metric-title text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2" style={{ fontSize: 12, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 8 }}>
+                ROI (FLAT 1U)
+              </div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div className={`kpi-metric-value font-mono text-3xl md:text-4xl font-extrabold ${parseFloat(globalStats.roi || 0) >= 0 ? 'text-emerald-400' : 'text-rose-500'}`} style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 34, fontWeight: 800, color: parseFloat(globalStats.roi || 0) >= 0 ? "#10B981" : "#EF4444" }}>
+                  {parseFloat(globalStats.roi || 0) >= 0 ? `+${globalStats.roi}%` : `${globalStats.roi}%`}
+                </div>
+                {/* Sparkline chart */}
+                <svg width="72" height="34" viewBox="0 0 72 34" fill="none">
+                  {parseFloat(globalStats.roi || 0) >= 0 ? (
+                    <>
+                      <path d="M4 28 L18 20 L28 24 L44 10 L54 14 L66 4" stroke="#10B981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      <path d="M56 4 L66 4 L66 14" stroke="#10B981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    </>
+                  ) : (
+                    <>
+                      <path d="M4 6 L18 14 L28 10 L44 24 L54 20 L66 30" stroke="#EF4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      <path d="M56 30 L66 30 L66 20" stroke="#EF4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    </>
+                  )}
+                </svg>
+              </div>
+            </div>
+
+            {/* Card 3: ROI (KELLY) */}
+            <div className="kpi-metric-card bg-slate-800 border border-slate-700 rounded-2xl p-5" style={{ background: "#0B132B", border: "1px solid #1E293B", borderRadius: 16, padding: "20px 22px", display: "flex", flexDirection: "column", justifyContent: "space-between", minHeight: 110 }}>
+              <div className="kpi-metric-title text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2" style={{ fontSize: 12, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 8 }}>
+                ROI (KELLY)
+              </div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div className={`kpi-metric-value font-mono text-3xl md:text-4xl font-extrabold ${parseFloat(globalStats.kellyRoi || 0) >= 0 ? 'text-emerald-400' : 'text-rose-500'}`} style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 34, fontWeight: 800, color: parseFloat(globalStats.kellyRoi || 0) >= 0 ? "#10B981" : "#EF4444" }}>
+                  {parseFloat(globalStats.kellyRoi || 0) >= 0 ? `+${globalStats.kellyRoi}%` : `${globalStats.kellyRoi}%`}
+                </div>
+                <svg width="72" height="34" viewBox="0 0 72 34" fill="none">
+                  {parseFloat(globalStats.kellyRoi || 0) >= 0 ? (
+                    <>
+                      <path d="M4 28 L18 20 L28 24 L44 10 L54 14 L66 4" stroke="#10B981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      <path d="M56 4 L66 4 L66 14" stroke="#10B981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    </>
+                  ) : (
+                    <>
+                      <path d="M4 6 L18 14 L28 10 L44 24 L54 20 L66 30" stroke="#EF4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      <path d="M56 30 L66 30 L66 20" stroke="#EF4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    </>
+                  )}
+                </svg>
+              </div>
+            </div>
+          </div>
+        </div>
 
         {/* BANNER DE AUTO-VERIFICACIÓN DE RESULTADOS OFICIALES */}
         {backgroundVerifiedBanner && (
@@ -1951,29 +2002,101 @@ export default function App() {
           </div>
         )}
 
-        {/* Sport Selector */}
-        <div style={{ display: "flex", gap: 10, marginBottom: activeSport === 'nfl' ? 12 : 25, justifyContent: "center", flexWrap: "wrap" }}>
-          <SportBtn id="futbol" icon="⚽" label="Fútbol (Ligas, Femenil, Nations League)" active={activeSport} set={setActiveSport} />
-          <SportBtn id="mlb" icon="⚾" label="MLB (Grandes Ligas)" active={activeSport} set={setActiveSport} />
-          <SportBtn id="nfl" icon="🏈" label="Fútbol Americano (NFL / NCAAF)" active={activeSport} set={setActiveSport} />
+        {/* SECCIÓN 2: NAVEGACIÓN Y FILTROS DE DEPORTES */}
+        <div style={{ marginBottom: activeSport === 'nfl' ? 12 : 28 }}>
+          <h3 className="section-title" style={{ fontSize: 13, fontWeight: 800, letterSpacing: 0.6, textTransform: "uppercase", color: "#E2E8F0", marginBottom: 12 }}>
+            NAVEGACIÓN Y FILTROS DE DEPORTES
+          </h3>
+          <div className="sport-segmented-bar flex bg-slate-800/50 p-1 rounded-xl w-full" style={{ display: "flex", background: "#0B132B", border: "1px solid #1E293B", borderRadius: 12, padding: 4, width: "100%", gap: 6 }}>
+            <button
+              onClick={() => setActiveSport("futbol")}
+              className={`sport-segment-btn flex-1 ${activeSport === "futbol" ? "active" : ""}`}
+              style={{
+                flex: 1,
+                padding: "11px 16px",
+                borderRadius: 8,
+                border: activeSport === "futbol" ? "1px solid #3B82F6" : "1px solid transparent",
+                background: activeSport === "futbol" ? "#12244B" : "transparent",
+                color: activeSport === "futbol" ? "#FFFFFF" : "#94A3B8",
+                fontSize: 14,
+                fontWeight: activeSport === "futbol" ? 700 : 600,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+                boxShadow: activeSport === "futbol" ? "0 0 16px rgba(59, 130, 246, 0.35)" : "none",
+                cursor: "pointer",
+                transition: "all 0.2s"
+              }}
+            >
+              <span>⚽</span> Fútbol
+            </button>
+            <button
+              onClick={() => setActiveSport("mlb")}
+              className={`sport-segment-btn flex-1 ${activeSport === "mlb" ? "active" : ""}`}
+              style={{
+                flex: 1,
+                padding: "11px 16px",
+                borderRadius: 8,
+                border: activeSport === "mlb" ? "1px solid #3B82F6" : "1px solid transparent",
+                background: activeSport === "mlb" ? "#12244B" : "transparent",
+                color: activeSport === "mlb" ? "#FFFFFF" : "#94A3B8",
+                fontSize: 14,
+                fontWeight: activeSport === "mlb" ? 700 : 600,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+                boxShadow: activeSport === "mlb" ? "0 0 16px rgba(59, 130, 246, 0.35)" : "none",
+                cursor: "pointer",
+                transition: "all 0.2s"
+              }}
+            >
+              <span>⚾</span> MLB (Grandes Ligas)
+            </button>
+            <button
+              onClick={() => setActiveSport("nfl")}
+              className={`sport-segment-btn flex-1 ${activeSport === "nfl" ? "active" : ""}`}
+              style={{
+                flex: 1,
+                padding: "11px 16px",
+                borderRadius: 8,
+                border: activeSport === "nfl" ? "1px solid #3B82F6" : "1px solid transparent",
+                background: activeSport === "nfl" ? "#12244B" : "transparent",
+                color: activeSport === "nfl" ? "#FFFFFF" : "#94A3B8",
+                fontSize: 14,
+                fontWeight: activeSport === "nfl" ? 700 : 600,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+                boxShadow: activeSport === "nfl" ? "0 0 16px rgba(59, 130, 246, 0.35)" : "none",
+                cursor: "pointer",
+                transition: "all 0.2s"
+              }}
+            >
+              <span>🏈</span> Fútbol Americano (NFL/ NCAAF)
+            </button>
+          </div>
         </div>
 
         {/* Sub-Liga Selector (NFL vs NCAAF Colegial) */}
         {activeSport === 'nfl' && (
-          <div style={{ display: "flex", gap: 10, justifyContent: "center", alignItems: "center", marginBottom: 25, flexWrap: "wrap" }}>
-            <div style={{ background: "#0f172a", padding: "4px", borderRadius: 10, border: "1px solid #1e293b", display: "flex", gap: 6 }}>
+          <div style={{ display: "flex", gap: 10, justifyContent: "center", alignItems: "center", marginBottom: 24, flexWrap: "wrap" }}>
+            <div style={{ background: "rgba(30, 41, 59, 0.5)", padding: 4, borderRadius: 8, border: "1px solid #334155", display: "inline-flex", gap: 4 }}>
               <button
                 onClick={() => setFootballLeague("nfl")}
                 style={{
-                  padding: "7px 16px",
-                  background: footballLeague === "nfl" ? "#3b82f6" : "transparent",
-                  color: footballLeague === "nfl" ? "#fff" : "#94a3b8",
+                  padding: "6px 14px",
+                  background: footballLeague === "nfl" ? "#334155" : "transparent",
+                  color: footballLeague === "nfl" ? "#FFFFFF" : "#94A3B8",
                   border: "none",
-                  borderRadius: 7,
-                  fontWeight: 700,
+                  borderRadius: 6,
+                  fontWeight: footballLeague === "nfl" ? 700 : 500,
                   fontSize: 12,
                   cursor: "pointer",
-                  transition: "all 0.2s"
+                  boxShadow: footballLeague === "nfl" ? "0 1px 3px rgba(0,0,0,0.3)" : "none",
+                  transition: "all 0.15s"
                 }}
               >
                 🏈 NFL Profesional
@@ -1981,15 +2104,16 @@ export default function App() {
               <button
                 onClick={() => setFootballLeague("ncaaf")}
                 style={{
-                  padding: "7px 16px",
-                  background: footballLeague === "ncaaf" ? "#8b5cf6" : "transparent",
-                  color: footballLeague === "ncaaf" ? "#fff" : "#94a3b8",
+                  padding: "6px 14px",
+                  background: footballLeague === "ncaaf" ? "#334155" : "transparent",
+                  color: footballLeague === "ncaaf" ? "#FFFFFF" : "#94A3B8",
                   border: "none",
-                  borderRadius: 7,
-                  fontWeight: 700,
+                  borderRadius: 6,
+                  fontWeight: footballLeague === "ncaaf" ? 700 : 500,
                   fontSize: 12,
                   cursor: "pointer",
-                  transition: "all 0.2s"
+                  boxShadow: footballLeague === "ncaaf" ? "0 1px 3px rgba(0,0,0,0.3)" : "none",
+                  transition: "all 0.15s"
                 }}
               >
                 🎓 NCAAF Colegial FBS
@@ -1997,52 +2121,121 @@ export default function App() {
             </div>
 
             {footballLeague === "ncaaf" && (
-              <div style={{ background: "#0f172a", padding: "4px", borderRadius: 10, border: "1px solid #312e81", display: "flex", gap: 6 }}>
+              <div style={{ background: "rgba(30, 41, 59, 0.5)", padding: 4, borderRadius: 8, border: "1px solid #334155", display: "inline-flex", gap: 4 }}>
                 <button
                   onClick={() => setNcaafFilter("top25")}
                   style={{
-                    padding: "7px 14px",
-                    background: ncaafFilter === "top25" ? "#f59e0b" : "transparent",
-                    color: ncaafFilter === "top25" ? "#000" : "#94a3b8",
+                    padding: "6px 12px",
+                    background: ncaafFilter === "top25" ? "#F59E0B" : "transparent",
+                    color: ncaafFilter === "top25" ? "#0F172A" : "#94A3B8",
                     border: "none",
-                    borderRadius: 7,
-                    fontWeight: 800,
+                    borderRadius: 6,
+                    fontWeight: 700,
                     fontSize: 11,
                     cursor: "pointer",
-                    transition: "all 0.2s"
+                    transition: "all 0.15s"
                   }}
                 >
-                  ⭐ Top 25 Rankings
+                  ⭐ Top 25
                 </button>
                 <button
                   onClick={() => setNcaafFilter("all")}
                   style={{
-                    padding: "7px 14px",
-                    background: ncaafFilter === "all" ? "#6366f1" : "transparent",
-                    color: ncaafFilter === "all" ? "#fff" : "#94a3b8",
+                    padding: "6px 12px",
+                    background: ncaafFilter === "all" ? "#334155" : "transparent",
+                    color: ncaafFilter === "all" ? "#FFFFFF" : "#94A3B8",
                     border: "none",
-                    borderRadius: 7,
-                    fontWeight: 700,
+                    borderRadius: 6,
+                    fontWeight: 600,
                     fontSize: 11,
                     cursor: "pointer",
-                    transition: "all 0.2s"
+                    transition: "all 0.15s"
                   }}
                 >
-                  🌐 Todos los FBS
+                  🌐 Todos FBS
                 </button>
               </div>
             )}
           </div>
         )}
 
-        {/* Tabs */}
-        <div className="tabs-container" style={{ display: "flex", gap: 10, marginBottom: 25, borderBottom: "1px solid #1e293b", paddingBottom: 10, flexWrap: "wrap" }}>
-          <button onClick={() => setActiveTab("simulador")} style={{ padding: "8px 16px", background: activeTab === "simulador" ? "#3b82f6" : "transparent", color: activeTab === "simulador" ? "#fff" : "#94a3b8", border: "none", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>Simulador Manual</button>
-          <button onClick={() => setActiveTab("radar")} style={{ padding: "8px 16px", background: activeTab === "radar" ? "#8b5cf6" : "transparent", color: activeTab === "radar" ? "#fff" : "#94a3b8", border: "none", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>📡 Radar en Vivo {rawScheduleCount > 0 && `(${rawScheduleCount})`}</button>
-          <button onClick={() => setActiveTab("historial")} style={{ padding: "8px 16px", background: activeTab === "historial" ? "#10b981" : "transparent", color: activeTab === "historial" ? "#fff" : "#94a3b8", border: "none", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>📊 Historial y Rendimiento ({history.length})</button>
-          {activeSport === 'nfl' && (
-            <button onClick={() => { setActiveTab("nflweeks"); if (!nflWeekData) loadNflWeek(); }} style={{ padding: "8px 16px", background: activeTab === "nflweeks" ? "#ef4444" : "transparent", color: activeTab === "nflweeks" ? "#fff" : "#94a3b8", border: "none", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>🏈 NFL Semanas {nflWeekData ? `(Week ${nflWeekData.weekNumber})` : ""}</button>
-          )}
+        {/* SECCIÓN 3: PESTAÑAS DE ACCIÓN DISCRETAS */}
+        <div style={{ marginBottom: 28 }}>
+          <h3 className="section-title" style={{ fontSize: 13, fontWeight: 800, letterSpacing: 0.6, textTransform: "uppercase", color: "#E2E8F0", marginBottom: 12 }}>
+            PESTAÑAS DE ACCIÓN DISCRETAS
+          </h3>
+          <div className="action-tabs-bar flex border-b border-slate-800" style={{ display: "flex", gap: 32, borderBottom: "1px solid #1E293B", overflowX: "auto" }}>
+            <button 
+              onClick={() => setActiveTab("simulador")} 
+              className={`action-tab-btn ${activeTab === "simulador" ? "active" : ""}`}
+              style={{
+                background: "transparent",
+                border: "none",
+                borderBottom: activeTab === "simulador" ? "2px solid #3B82F6" : "2px solid transparent",
+                padding: "0 4px 14px 4px",
+                color: activeTab === "simulador" ? "#60A5FA" : "#94A3B8",
+                fontSize: 14,
+                fontWeight: activeTab === "simulador" ? 700 : 500,
+                cursor: "pointer",
+                whiteSpace: "nowrap"
+              }}
+            >
+              Simulador Manual
+            </button>
+            <button 
+              onClick={() => setActiveTab("radar")} 
+              className={`action-tab-btn ${activeTab === "radar" ? "active" : ""}`}
+              style={{
+                background: "transparent",
+                border: "none",
+                borderBottom: activeTab === "radar" ? "2px solid #3B82F6" : "2px solid transparent",
+                padding: "0 4px 14px 4px",
+                color: activeTab === "radar" ? "#60A5FA" : "#94A3B8",
+                fontSize: 14,
+                fontWeight: activeTab === "radar" ? 700 : 500,
+                cursor: "pointer",
+                whiteSpace: "nowrap"
+              }}
+            >
+              <span>📡</span> Radar en Vivo {rawScheduleCount > 0 && <span className="font-mono" style={{ fontSize: 12, opacity: 0.85 }}>({rawScheduleCount})</span>}
+            </button>
+            <button 
+              onClick={() => setActiveTab("historial")} 
+              className={`action-tab-btn ${activeTab === "historial" ? "active" : ""}`}
+              style={{
+                background: "transparent",
+                border: "none",
+                borderBottom: activeTab === "historial" ? "2px solid #3B82F6" : "2px solid transparent",
+                padding: "0 4px 14px 4px",
+                color: activeTab === "historial" ? "#60A5FA" : "#94A3B8",
+                fontSize: 14,
+                fontWeight: activeTab === "historial" ? 700 : 500,
+                cursor: "pointer",
+                whiteSpace: "nowrap"
+              }}
+            >
+              Historial y Rendimiento ({history.length || 1})
+            </button>
+            {activeSport === 'nfl' && (
+              <button 
+                onClick={() => { setActiveTab("nflweeks"); if (!nflWeekData) loadNflWeek(); }} 
+                className={`action-tab-btn ${activeTab === "nflweeks" ? "active" : ""}`}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  borderBottom: activeTab === "nflweeks" ? "2px solid #3B82F6" : "2px solid transparent",
+                  padding: "0 4px 14px 4px",
+                  color: activeTab === "nflweeks" ? "#60A5FA" : "#94A3B8",
+                  fontSize: 14,
+                  fontWeight: activeTab === "nflweeks" ? 700 : 500,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap"
+                }}
+              >
+                🏈 NFL Semanas {nflWeekData ? `(Week ${nflWeekData.weekNumber})` : ""}
+              </button>
+            )}
+          </div>
         </div>
 
         {/* TAB RADAR DE OPORTUNIDADES */}
@@ -3273,21 +3466,67 @@ export default function App() {
         {/* TAB SIMULADOR */}
         {activeTab === "simulador" && (
           <>
-            <div style={{ display: "flex", gap: 10, marginBottom: 30 }}>
-              <input 
-                value={query} 
-                onChange={e => setQuery(e.target.value)} 
-                onKeyDown={e => e.key === "Enter" && !loading && analyze()}
-                placeholder={`Buscar partido real (Ej. ${activeSport === 'futbol' ? 'América vs Cruz Azul o Real Madrid' : activeSport === 'mlb' ? 'Yankees vs Red Sox o Dodgers' : (footballLeague === 'ncaaf' ? 'Georgia vs Alabama o Ohio State' : 'Chiefs vs Ravens')})`} 
-                disabled={loading}
-                style={{ flex: 1, padding: "14px 18px", borderRadius: 8, border: "1px solid #1e293b", background: "#0b1120", color: "#fff", fontSize: 15, outline: "none" }} 
-              />
-              <button 
-                onClick={() => analyze()} 
-                disabled={loading || !query.trim()}
-                style={{ padding: "0 24px", borderRadius: 8, border: "none", background: "#3b82f6", color: "#fff", fontWeight: 700, cursor: loading ? "not-allowed" : "pointer" }}>
-                {loading ? "Calculando..." : "Correr Motor"}
-              </button>
+            {/* SECCIÓN 4: BÚSQUEDA Y EJECUCIÓN (EL MOTOR) */}
+            <div style={{ marginBottom: 28 }}>
+              <h3 className="section-title" style={{ fontSize: 13, fontWeight: 800, letterSpacing: 0.6, textTransform: "uppercase", color: "#E2E8F0", marginBottom: 12 }}>
+                BÚSQUEDA Y EJECUCIÓN (EL MOTOR)
+              </h3>
+              <div className="engine-flex-container flex gap-3 items-center w-full" style={{ display: "flex", gap: 12, alignItems: "center", width: "100%" }}>
+                <input 
+                  value={query} 
+                  onChange={e => setQuery(e.target.value)} 
+                  onKeyDown={e => e.key === "Enter" && !loading && analyze()}
+                  placeholder={`Buscar partido real, ej: ${activeSport === 'futbol' ? 'América vs Cruz Azul...' : activeSport === 'mlb' ? 'Yankees vs Dodgers...' : 'Chiefs vs Ravens...'}`} 
+                  disabled={loading}
+                  className="engine-input-box bg-slate-800 border border-slate-700"
+                  style={{
+                    flex: 1,
+                    background: "#0B132B",
+                    border: "1px solid #1E293B",
+                    borderRadius: 12,
+                    padding: "14px 20px",
+                    color: "#FFFFFF",
+                    fontSize: 14,
+                    outline: "none"
+                  }}
+                />
+                <button 
+                  onClick={() => analyze()} 
+                  disabled={loading || !query.trim()}
+                  className="engine-exec-btn bg-slate-700 font-mono text-white"
+                  style={{
+                    background: "linear-gradient(180deg, #162C5B 0%, #0F1E3D 100%)",
+                    border: "1px solid #3B82F6",
+                    borderRadius: 12,
+                    padding: "13px 24px",
+                    color: "#FFFFFF",
+                    fontSize: 14,
+                    fontWeight: 800,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    boxShadow: "0 0 18px rgba(59, 130, 246, 0.35)",
+                    cursor: (loading || !query.trim()) ? "not-allowed" : "pointer",
+                    whiteSpace: "nowrap",
+                    opacity: (loading || !query.trim()) ? 0.6 : 1
+                  }}
+                >
+                  {loading ? (
+                    <>
+                      <svg style={{ width: 16, height: 16, animation: "spin 1s linear infinite" }} viewBox="0 0 24 24" fill="none">
+                        <circle cx="12" cy="12" r="10" stroke="#64748B" strokeWidth="4" />
+                        <path d="M4 12a8 8 0 018-8" stroke="#38BDF8" strokeWidth="4" strokeLinecap="round" />
+                      </svg>
+                      <span>EJECUTANDO...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="engine-badge-tag" style={{ background: "rgba(59, 130, 246, 0.25)", border: "1px solid rgba(59, 130, 246, 0.5)", borderRadius: 6, padding: "2px 7px", fontSize: 12, fontFamily: "'JetBrains Mono', monospace", color: "#60A5FA", fontWeight: 800 }}>&gt;_</span>
+                      <span>EJECUTAR SIMULACIÓN</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
 
             {loading && (
@@ -3877,16 +4116,21 @@ function SportBtn({ id, icon, label, active, set }) {
     <button 
       onClick={() => set(id)}
       style={{
-        padding: "10px 20px",
-        borderRadius: 8,
-        border: isActive ? "2px solid #3b82f6" : "1px solid #1e293b",
-        background: isActive ? "#3b82f622" : "#0f172a",
-        color: isActive ? "#3b82f6" : "#64748b",
-        fontWeight: 800,
+        padding: "8px 18px",
+        borderRadius: 6,
+        border: "none",
+        background: isActive ? "#334155" : "transparent",
+        color: isActive ? "#FFFFFF" : "#94A3B8",
+        fontWeight: isActive ? 700 : 500,
+        fontSize: 13,
         cursor: "pointer",
-        display: "flex", alignItems: "center", gap: 8
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        boxShadow: isActive ? "0 1px 3px rgba(0, 0, 0, 0.3)" : "none",
+        transition: "all 0.15s ease-in-out"
       }}>
-      <span style={{ fontSize: 18 }}>{icon}</span> {label}
+      <span>{icon}</span> {label}
     </button>
   );
 }
@@ -3901,7 +4145,7 @@ function ProgressBar({ label, prob, color }) {
         <div style={{ flex: 1, height: 8, background: "#1e293b", borderRadius: 4, overflow: "hidden" }}>
           <div style={{ width: `${prob}%`, height: "100%", background: color, borderRadius: 4 }} />
         </div>
-        <span style={{ fontSize: 14, fontWeight: 900, color: color, minWidth: 50, textAlign: "right" }}>{prob}%</span>
+        <span className="font-mono" style={{ fontSize: 14, fontWeight: 900, color: color, minWidth: 50, textAlign: "right" }}>{prob}%</span>
       </div>
     </div>
   );
@@ -3909,9 +4153,9 @@ function ProgressBar({ label, prob, color }) {
 
 function ProbBox({ label, prob, color }) {
   return (
-    <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "16px", display: "flex", justifyContent: "space-between", alignItems: "center", borderLeft: `3px solid ${color}` }}>
-      <div style={{ fontSize: 11, fontWeight: 800, color: "#94a3b8", letterSpacing: 0.5 }}>{label}</div>
-      <div style={{ fontSize: 24, fontWeight: 900, color: color }}>{prob}%</div>
+    <div style={{ background: "#1E293B", border: "1px solid #334155", borderRadius: 12, padding: "16px", display: "flex", justifyContent: "space-between", alignItems: "center", borderLeft: `3px solid ${color}` }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: "#94A3B8", letterSpacing: 0.5 }}>{label}</div>
+      <div className="font-mono" style={{ fontSize: 24, fontWeight: 900, color: color }}>{prob}%</div>
     </div>
   );
 }
