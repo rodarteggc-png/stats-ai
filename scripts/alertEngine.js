@@ -6,7 +6,7 @@ import zlib from 'zlib';
 import { fileURLToPath } from 'url';
 import { fetchDailySchedule } from '../src/services/sportsApi.js';
 import { calculateMatchProbabilities } from '../src/utils/poisson.js';
-import { calculateMlbProbabilities } from '../src/utils/sabermetrics.js';
+import { calculateMlbProbabilities, isExtremeAltitudePark, calculateMlbTotalProbabilities } from '../src/utils/sabermetrics.js';
 import { generateDailyMlbProps } from '../src/utils/mlbProps.js';
 import { generateDailySoccerProps } from '../src/utils/soccerProps.js';
 import { calculateNflProbabilities } from '../src/utils/gridiron.js';
@@ -908,6 +908,73 @@ export function buildOpportunitiesAndTopSlate({
           edgeStr: `Cobertura +1.5: ${rlProb.toFixed(0)}% | Edge +${rlEdge.toFixed(1)}%`,
           argument: `Candado Anti-Underdog: ${dogTeam} cuenta con abridor sólido (WHIP ${dogWhip.toFixed(2)}) y proyección cerrada (dif. ${expRunDiff.toFixed(1)} carreras). Se blinda con +1.5 Carreras para cobrar incluso perdiendo por 1.`,
           mcStats: { stability: Math.max(68, Math.round(rlProb)), risk: 'Bajo', iterations: 10000 },
+          match: m,
+          probs: sabers
+        });
+      }
+    }
+
+    // 3. REGLA 9.3: TRAMPAS DE ESTADIOS EXTREMOS (Coors Field, Estadio Alfredo Harp Helú)
+    // NO hay "Overs automáticos". El mercado ya ajustó la línea a la altitud.
+    // Buscar el valor contrario (Unders) cuando la línea se infla irracionalmente por dinero público (ej. líneas de 12.5+ con viento soplando hacia adentro).
+    // Apostar la cuota, no el estadio.
+    const isExtremeAlt = isExtremeAltitudePark(m.home.name);
+    const vegasTotalLine = parseFloat(m.market?.vegasOverUnder || m.vegas?.overUnder || (isExtremeAlt ? 11.5 : 8.5));
+    const totalsAnalysis = calculateMlbTotalProbabilities(sabers.expectedTotal, vegasTotalLine);
+
+    const windMph = parseFloat(m.weather?.windMph || m.weather?.windSpeed || 0);
+    const windDir = (m.weather?.windDirection || '').toLowerCase();
+    const isBlowingIn = windDir.includes('in') || windDir.includes('adentro');
+
+    if (isExtremeAlt) {
+      const isInflatedLine = vegasTotalLine >= 11.5;
+      const hasWindSupport = windMph >= 7 && isBlowingIn;
+      const underProb = totalsAnalysis.underProb;
+
+      // Detección de Under Contrario de Alto Valor
+      if ((isInflatedLine && (hasWindSupport || vegasTotalLine >= 12.5)) || underProb >= 55.0) {
+        const underOdds = m.market?.underOdds || totalsAnalysis.fairUnderOdds || '1.91';
+        const impliedUnder = (1 / parseFloat(underOdds)) * 100;
+        const underEdge = Math.max(3.8, Number((underProb - impliedUnder).toFixed(1)));
+
+        rawOpportunities.push({
+          id: `mlb-tot-alt-${m.id}`,
+          sport: 'MLB',
+          league: 'Major League Baseball',
+          game: `${m.home.name} vs ${m.away.name}`,
+          gameDate: m.gameDate,
+          type: '🛡️ VALOR CONTRARIO (UNDER EN ALTITUD EXTREMA)',
+          pick: `Menos de ${vegasTotalLine} Carreras (Under Inflado)`,
+          prob: `${underProb}%`,
+          odds: underOdds,
+          edgeVal: underEdge,
+          edgeStr: `+${underEdge}% EV vs Línea Inflada ${vegasTotalLine}`,
+          argument: `Trampa de altitud extrema en ${m.home.name}: el público infló la línea a ${vegasTotalLine} carreras. ${hasWindSupport ? `Viento de ${windMph} mph hacia adentro frena extrabases.` : 'La proyección sabermétrica no convalida el sobreprecio público.'} Gran valor en cuota Under.`,
+          mcStats: { stability: mcMlb.f5Stability, risk: 'Bajo', iterations: 10000 },
+          match: m,
+          probs: sabers
+        });
+      }
+    } else {
+      // Estadios regulares: Under con edge claro
+      if (totalsAnalysis.underProb >= 59.0) {
+        const underOdds = m.market?.underOdds || totalsAnalysis.fairUnderOdds || '1.91';
+        const impliedUnder = (1 / parseFloat(underOdds)) * 100;
+        const underEdge = Math.max(3.5, Number((totalsAnalysis.underProb - impliedUnder).toFixed(1)));
+        rawOpportunities.push({
+          id: `mlb-tot-u-${m.id}`,
+          sport: 'MLB',
+          league: 'Major League Baseball',
+          game: `${m.home.name} vs ${m.away.name}`,
+          gameDate: m.gameDate,
+          type: '💨 TOTALES MLB (VALOR UNDER)',
+          pick: `Menos de ${vegasTotalLine} Carreras (Under MLB)`,
+          prob: `${totalsAnalysis.underProb}%`,
+          odds: underOdds,
+          edgeVal: underEdge,
+          edgeStr: `+${underEdge}% EV vs Línea ${vegasTotalLine}`,
+          argument: `Duelo monticular favorable (${m.home.pitcher?.name || 'Abridor'} vs ${m.away.pitcher?.name || 'Abridor'}). Proyección de ${sabers.expectedTotal} carreras combinadas vs línea ${vegasTotalLine}.`,
+          mcStats: { stability: mcMlb.f5Stability, risk: 'Bajo', iterations: 10000 },
           match: m,
           probs: sabers
         });

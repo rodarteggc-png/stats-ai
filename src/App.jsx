@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { toPng } from "html-to-image";
 import { calculateMatchProbabilities, getFairOddsDecimal, calculatePropProbabilities } from "./utils/poisson";
-import { calculateMlbProbabilities } from "./utils/sabermetrics";
+import { calculateMlbProbabilities, isExtremeAltitudePark, calculateMlbTotalProbabilities } from "./utils/sabermetrics";
 import { calculateNflProbabilities, calculateSpreadCoverProbability } from "./utils/gridiron";
 import { simulateSoccerMatch, simulateMlbMatch, simulateNflMatch } from "./utils/monteCarlo";
 import { evaluateEnsembleConsensus } from "./utils/ensemble";
@@ -1052,38 +1052,97 @@ export default function App() {
           }
 
           // Evaluación de Mercados Alternos en MLB (Tier 2: Totales Over/Under y Runline +1.5)
-          if (parseFloat(probs.under85) >= 58) {
-            const u85 = parseFloat(probs.under85);
-            opportunities.push({
-              match: matchData,
-              probs,
-              mcStats: { stability: mcMlb.f5Stability, risk: mcMlb.bullpenRisk },
-              tier: 2,
-              type: '⚾ MERCADO ALTERNO: TOTALES UNDER',
-              pick: 'Menos de 8.5 Carreras (Under MLB)',
-              reason: `Duelo monticular favorable (${matchData.home.pitcher?.name} vs ${matchData.away.pitcher?.name}). Proyección de carreras combinadas: ${probs.expectedTotal}.`,
-              prob: `${probs.under85}%`,
-              odds: getFairOddsDecimal(probs.under85),
-              edgeVal: Math.max(3.5, u85 - 54),
-              color: "#38bdf8",
-              meta: `Carreras Est: ${probs.expectedTotal} | Under 8.5: ${probs.under85}%`
-            });
-          } else if ((100 - parseFloat(probs.under85)) >= 58 || parseFloat(probs.expectedTotal) >= 9.2) {
-            const o85 = 100 - parseFloat(probs.under85);
-            opportunities.push({
-              match: matchData,
-              probs,
-              mcStats: { stability: mcMlb.f5Stability, risk: mcMlb.bullpenRisk },
-              tier: 2,
-              type: '⚾ MERCADO ALTERNO: TOTALES OVER',
-              pick: 'Más de 8.5 Carreras (Over MLB)',
-              reason: `Parque de bateo y abridores vulnerables. Proyección de alta producción con ${probs.expectedTotal} carreras combinadas.`,
-              prob: `${o85.toFixed(0)}%`,
-              odds: getFairOddsDecimal(o85),
-              edgeVal: Math.max(3.5, o85 - 54),
-              color: "#f59e0b",
-              meta: `Carreras Est: ${probs.expectedTotal} | Over 8.5: ${o85.toFixed(0)}%`
-            });
+          const isExtremeAlt = isExtremeAltitudePark(matchData.home?.name);
+          const vegasTotalLine = parseFloat(matchData.market?.vegasOverUnder || matchData.vegas?.overUnder || (isExtremeAlt ? 11.5 : 8.5));
+          const totalsAnalysis = calculateMlbTotalProbabilities(probs.expectedTotal, vegasTotalLine);
+
+          const windMph = parseFloat(matchData.weather?.windMph || matchData.weather?.windSpeed || 0);
+          const windDir = (matchData.weather?.windDirection || '').toLowerCase();
+          const isBlowingIn = windDir.includes('in') || windDir.includes('adentro');
+
+          // REGLA 9.3: TRAMPAS DE ESTADIOS EXTREMOS (Coors Field, Estadio Alfredo Harp Helú)
+          // NO hay "Overs automáticos". El mercado ya ajustó la línea a la altitud.
+          // Buscar el valor contrario (Unders) cuando la línea se infla irracionalmente por dinero público (ej. líneas de 12.5+ con viento soplando hacia adentro).
+          // Apostar la cuota, no el estadio.
+          if (isExtremeAlt) {
+            const isInflatedLine = vegasTotalLine >= 11.5;
+            const hasWindSupport = windMph >= 7 && isBlowingIn;
+            const underProb = totalsAnalysis.underProb;
+
+            // Detección de Under Contrario de Alto Valor
+            if ((isInflatedLine && (hasWindSupport || vegasTotalLine >= 12.5)) || underProb >= 55.0) {
+              const underOdds = matchData.market?.underOdds || totalsAnalysis.fairUnderOdds;
+              const impliedUnder = (1 / parseFloat(underOdds)) * 100;
+              const underEdge = Math.max(3.8, underProb - impliedUnder);
+
+              opportunities.push({
+                match: matchData,
+                probs,
+                mcStats: { stability: mcMlb.f5Stability, risk: mcMlb.bullpenRisk },
+                tier: 1,
+                type: '🛡️ VALOR CONTRARIO (UNDER EN ALTITUD EXTREMA)',
+                pick: `Menos de ${vegasTotalLine} Carreras (Under Inflado)`,
+                reason: `Trampa de altitud extrema en ${matchData.home.name}: el mercado infló la línea a ${vegasTotalLine} carreras por sesgo público. ${hasWindSupport ? `Viento de ${windMph} mph hacia adentro frena extrabases.` : 'La proyección sabermétrica no convalida el sobreprecio público.'} Valor matemático real en cuota Under (+${underEdge.toFixed(1)}% EV).`,
+                prob: `${underProb}%`,
+                odds: underOdds,
+                edgeVal: underEdge,
+                color: "#06b6d4",
+                meta: `Línea Inflada: ${vegasTotalLine} | Under Est: ${underProb}% | EV: +${underEdge.toFixed(1)}%`
+              });
+            }
+            // VETO CATEGÓRICO: En estadios extremos NO hay "Overs automáticos". Solo califica si la línea es < 9.5 con edge real (anomalía de mercado)
+            else if (vegasTotalLine < 9.5 && totalsAnalysis.overProb >= 60.0) {
+              const overProb = totalsAnalysis.overProb;
+              opportunities.push({
+                match: matchData,
+                probs,
+                mcStats: { stability: mcMlb.f5Stability, risk: mcMlb.bullpenRisk },
+                tier: 2,
+                type: '⚾ MERCADO ALTERNO: TOTALES OVER (LÍNEA DESAJUSTADA)',
+                pick: `Más de ${vegasTotalLine} Carreras (Over MLB)`,
+                reason: `Anomalía de mercado: línea de ${vegasTotalLine} anormalmente baja para ${matchData.home.name} con proyección de ${probs.expectedTotal} carreras combinadas.`,
+                prob: `${overProb}%`,
+                odds: matchData.market?.overOdds || totalsAnalysis.fairOverOdds,
+                edgeVal: Math.max(3.5, overProb - 53),
+                color: "#f59e0b",
+                meta: `Carreras Est: ${probs.expectedTotal} | Over ${vegasTotalLine}: ${overProb}%`
+              });
+            }
+          } else {
+            // Estadios estándar: Evaluar contra la línea real del partido (no una fija 8.5)
+            if (totalsAnalysis.underProb >= 58.0) {
+              const uProb = totalsAnalysis.underProb;
+              opportunities.push({
+                match: matchData,
+                probs,
+                mcStats: { stability: mcMlb.f5Stability, risk: mcMlb.bullpenRisk },
+                tier: 2,
+                type: '⚾ MERCADO ALTERNO: TOTALES UNDER',
+                pick: `Menos de ${vegasTotalLine} Carreras (Under MLB)`,
+                reason: `Duelo monticular favorable (${matchData.home.pitcher?.name} vs ${matchData.away.pitcher?.name}). Proyección de carreras combinadas: ${probs.expectedTotal} vs línea ${vegasTotalLine}.`,
+                prob: `${uProb}%`,
+                odds: matchData.market?.underOdds || totalsAnalysis.fairUnderOdds,
+                edgeVal: Math.max(3.5, uProb - 54),
+                color: "#38bdf8",
+                meta: `Carreras Est: ${probs.expectedTotal} | Under ${vegasTotalLine}: ${uProb}%`
+              });
+            } else if (totalsAnalysis.overProb >= 58.0) {
+              const oProb = totalsAnalysis.overProb;
+              opportunities.push({
+                match: matchData,
+                probs,
+                mcStats: { stability: mcMlb.f5Stability, risk: mcMlb.bullpenRisk },
+                tier: 2,
+                type: '⚾ MERCADO ALTERNO: TOTALES OVER',
+                pick: `Más de ${vegasTotalLine} Carreras (Over MLB)`,
+                reason: `Parque favorable y abridores vulnerables. Proyección de alta producción con ${probs.expectedTotal} carreras combinadas vs línea ${vegasTotalLine}.`,
+                prob: `${oProb}%`,
+                odds: matchData.market?.overOdds || totalsAnalysis.fairOverOdds,
+                edgeVal: Math.max(3.5, oProb - 54),
+                color: "#f59e0b",
+                meta: `Carreras Est: ${probs.expectedTotal} | Over ${vegasTotalLine}: ${oProb}%`
+              });
+            }
           }
 
           if (Math.abs(hWin - aWin) <= 7) {

@@ -49,6 +49,39 @@ export function calculateLog5WinProbability(homeWins, homeGames, awayWins, awayG
 }
 
 /**
+ * REGLA 9.3: Identifica si un estadio es de altitud extrema (Coors Field, Estadio Alfredo Harp Helú, etc.)
+ */
+export function isExtremeAltitudePark(teamNameOrPark = '') {
+  const str = String(teamNameOrPark || '').toLowerCase();
+  return str.includes('colorado') || str.includes('rockies') || str.includes('coors') ||
+         str.includes('mexico') || str.includes('harp helú') || str.includes('harp helu') || 
+         str.includes('diablos') || str.includes('alfredo harp');
+}
+
+/**
+ * REGLA 9.3: Calcula las probabilidades de Over/Under para CUALQUIER línea de totales MLB
+ * permitiendo evaluar líneas infladas por dinero público (ej. 11.5, 12.0, 12.5+)
+ */
+export function calculateMlbTotalProbabilities(expectedTotal, line = 8.5) {
+  const targetLine = parseFloat(line) || 8.5;
+  const maxUnderInt = Math.floor(targetLine);
+  let underProb = 0;
+  for (let k = 0; k <= maxUnderInt; k++) {
+    underProb += poissonProbability(parseFloat(expectedTotal) || 8.5, k);
+  }
+  const overProb = 1 - underProb;
+  const underPct = Number((underProb * 100).toFixed(1));
+  const overPct = Number((overProb * 100).toFixed(1));
+  return {
+    line: targetLine,
+    underProb: underPct,
+    overProb: overPct,
+    fairUnderOdds: getFairOddsDecimal(underPct),
+    fairOverOdds: getFairOddsDecimal(overPct)
+  };
+}
+
+/**
  * Función auxiliar de distribución Poisson discreta: (λ^k * e^-λ) / k!
  */
 function poissonProbability(lambda, k) {
@@ -136,7 +169,9 @@ export function calculateMlbProbabilities(
   awayGames = undefined
 ) {
   const parkFactors = {
-    'Colorado': 1.28, 'Cincinnati': 1.15, 'Boston': 1.12, 
+    'Colorado': 1.28, 'Rockies': 1.28, 'Coors': 1.28,
+    'Mexico': 1.45, 'Harp Helú': 1.45, 'Harp Helu': 1.45, 'Diablos': 1.45,
+    'Cincinnati': 1.15, 'Boston': 1.12, 
     'Texas': 1.08, 'White Sox': 1.05, 'Kansas City': 1.05,
     'Atlanta': 1.04, 'Philadelphia': 1.03, 'Angels': 1.02,
     'Baltimore': 1.01, 'Toronto': 1.00, 'Houston': 1.00,
@@ -265,6 +300,8 @@ export function calculateMlbProbabilities(
     homeWin: (homeFinalProb * 100).toFixed(1),
     awayWin: (awayFinalProb * 100).toFixed(1),
     log5: log5Data,
+    parkFactor: pf,
+    isExtremePark: isExtremeAltitudePark(homeTeamName),
     expectedTotal: totalExpectedRuns.toFixed(1),
     over85: ((1 - under85Prob) * 100).toFixed(1),
     under85: (under85Prob * 100).toFixed(1),
