@@ -12,20 +12,41 @@ function factorial(n) {
 
 // Poisson Probability formula: (lambda^k * e^-lambda) / k!
 function poissonProbability(lambda, k) {
+  if (lambda <= 0) return k === 0 ? 1 : 0;
   return (Math.pow(lambda, k) * Math.exp(-lambda)) / factorial(k);
 }
 
-// Factor de ajuste Dixon-Coles para Poisson Bivariado (Corrige la dependencia en empates bajos)
-function dixonColesAdjustment(lambda1, lambda2, x, y, rho = -0.15) {
-  if (x === 0 && y === 0) return Math.max(0, 1 - lambda1 * lambda2 * rho);
-  if (x === 0 && y === 1) return Math.max(0, 1 + lambda1 * rho);
-  if (x === 1 && y === 0) return Math.max(0, 1 + lambda2 * rho);
-  if (x === 1 && y === 1) return Math.max(0, 1 - rho);
+/**
+ * TAREA 1: Factor de ajuste Dixon-Coles para Poisson Bivariado
+ * Corrige la subestimación de empates de baja anotación (0-0, 1-1).
+ * Parámetro rho por defecto: rho = -0.13
+ * 
+ * Fórmulas:
+ * - x=0, y=0: multiplicar por (1 - lambda * mu * rho)
+ * - x=1, y=0: multiplicar por (1 + lambda * rho)
+ * - x=0, y=1: multiplicar por (1 + mu * rho)
+ * - x=1, y=1: multiplicar por (1 - rho)
+ * - otros casos: multiplicar por 1.0
+ */
+export function dixonColesAdjustment(lambda1, lambda2, x, y, rho = -0.13) {
+  if (x === 0 && y === 0) {
+    return Math.max(0, 1 - (lambda1 * lambda2 * rho));
+  }
+  if (x === 1 && y === 0) {
+    return Math.max(0, 1 + (lambda1 * rho));
+  }
+  if (x === 0 && y === 1) {
+    return Math.max(0, 1 + (lambda2 * rho));
+  }
+  if (x === 1 && y === 1) {
+    return Math.max(0, 1 - rho);
+  }
   return 1.0;
 }
 
 /**
- * Calcula la matriz de probabilidades de un partido usando Poisson Bivariado, Elo, Fatiga, Localía y Memoria IA
+ * Calcula la matriz de probabilidades de un partido usando Poisson Bivariado (Dixon-Coles),
+ * Elo, Fatiga, Localía y Memoria IA.
  */
 export function calculateMatchProbabilities(
   homeXG, awayXG, 
@@ -33,10 +54,11 @@ export function calculateMatchProbabilities(
   homeRest = 7, awayRest = 7, 
   homePenalty = 0, awayPenalty = 0,
   maxGoals = 6,
-  applyHomeAdvantage = false
+  applyHomeAdvantage = false,
+  rho = -0.13
 ) {
-  let hXG = parseFloat(homeXG);
-  let aXG = parseFloat(awayXG);
+  let hXG = parseFloat(homeXG) || 1.25;
+  let aXG = parseFloat(awayXG) || 1.10;
 
   // 1. Modificador ELO (Fuerza de Calendario calibrada: 100 pts Elo = 0.05 xG)
   const eloDiff = homeElo - awayElo;
@@ -80,10 +102,10 @@ export function calculateMatchProbabilities(
 
   for (let i = 0; i <= maxGoals; i++) {
     for (let j = 0; j <= maxGoals; j++) {
-      let baseProb = poissonProbability(hXG, i) * poissonProbability(aXG, j);
+      const baseProb = poissonProbability(hXG, i) * poissonProbability(aXG, j);
       
-      // Aplicar Poisson Bivariado (Dixon-Coles)
-      const adjustment = dixonColesAdjustment(hXG, aXG, i, j);
+      // Aplicar Poisson Bivariado con Dixon-Coles exacto (rho = -0.13)
+      const adjustment = dixonColesAdjustment(hXG, aXG, i, j, rho);
       const prob = baseProb * adjustment;
       
       exactScores[`${i}-${j}`] = prob;
@@ -106,7 +128,7 @@ export function calculateMatchProbabilities(
     }
   }
 
-  // Normalizar para asegurar que sumen 1 (por los ajustes de rho)
+  // Normalizar para asegurar que sumen exactamente 1 (debido a los ajustes de rho)
   const totalRaw = homeWin + draw + awayWin;
   homeWin /= totalRaw; draw /= totalRaw; awayWin /= totalRaw;
   
@@ -154,13 +176,12 @@ export function calculateMatchProbabilities(
 }
 
 /**
- * Convierte una probabilidad porcentual en una cuota americana/decimal justa
+ * Convierte una probabilidad porcentual en una cuota decimal justa
  * @param {number|string} probability - Probabilidad entre 0 y 100
  */
 export function getFairOddsDecimal(probability) {
   const p = parseFloat(probability);
   if (isNaN(p) || p <= 0) return "1.90";
-  // Cuota justa real del modelo (100 / prob), sin suposiciones de mercado
   return (100 / Math.min(p, 99.5)).toFixed(2);
 }
 
@@ -216,14 +237,76 @@ export function calculateDoubleChanceProbabilities(homeWinPct, drawPct, awayWinP
   };
 }
 
-export function calculatePropProbabilities(homeAvg, awayAvg, line) {
-  const combinedLambda = parseFloat(homeAvg) + parseFloat(awayAvg);
-  let underProb = 0;
-  for (let k = 0; k <= Math.floor(line); k++) {
-    underProb += poissonProbability(combinedLambda, k);
+/**
+ * TAREA 2: Proyección de Córners con GameStateModifier
+ * 
+ * Calcula la proyección de córners inyectando la dinámica táctica del Game State:
+ * Si el Favorito Local tiene >55% de ganar en el mercado 1X2, pero el marcador base proyecta
+ * un empate o derrota temporal (asimetría táctica / asedio obligado), aplica un multiplicador
+ * de x1.35 a los córners esperados del local.
+ * 
+ * Soporta firma unificada y retrocompatible:
+ * - calculatePropProbabilities(homeAvg, awayAvg, line, probs1X2)
+ * - calculatePropProbabilities(homeCorners, awayCorners, cardsHome, cardsAway, keyPlayer, probs1X2)
+ */
+export function calculatePropProbabilities(homeAvg, awayAvg, lineOrCardsHome = 9.5, cardsAwayOrProbs = 4.5, keyPlayer = null, maybeProbs = null) {
+  // Manejo de firma extendida si se pasan cards y keyPlayer:
+  let line = 9.5;
+  let matchProbs1X2 = null;
+
+  if (typeof lineOrCardsHome === 'number') {
+    line = lineOrCardsHome;
+    matchProbs1X2 = typeof cardsAwayOrProbs === 'object' && cardsAwayOrProbs !== null ? cardsAwayOrProbs : null;
+  } else {
+    // Si se invocó con firma de objeto de App.jsx: (homeCorners, awayCorners, cardsHome, cardsAway, player, probs)
+    matchProbs1X2 = typeof maybeProbs === 'object' && maybeProbs !== null ? maybeProbs : (typeof cardsAwayOrProbs === 'object' ? cardsAwayOrProbs : null);
   }
-  const overProb = 1 - underProb;
-  return { over: (overProb * 100).toFixed(1), under: (underProb * 100).toFixed(1), line };
+
+  let hCorners = parseFloat(homeAvg || 5.0);
+  let aCorners = parseFloat(awayAvg || 4.2);
+
+  // Inyección de GameStateModifier
+  let gameStateMultiplier = 1.0;
+  let isGameStateAsymmetry = false;
+
+  if (matchProbs1X2) {
+    const homeWinProb = parseFloat(matchProbs1X2.homeWin || 0);
+    const drawProb = parseFloat(matchProbs1X2.draw || 0);
+    const awayWinProb = parseFloat(matchProbs1X2.awayWin || 0);
+
+    // Condición: Favorito Local > 55% pero probabilidad de no ganar (empate + derrota) >= 40%
+    // o marcador proyecta resistencia defensiva del rival
+    if (homeWinProb > 55.0 && (drawProb + awayWinProb) >= 38.0) {
+      isGameStateAsymmetry = true;
+      gameStateMultiplier = 1.35;
+      hCorners *= gameStateMultiplier; // Multiplicador x1.35 por asedio táctico
+    }
+  }
+
+  const combinedCorners = hCorners + aCorners;
+  let underCornersProb = 0;
+  for (let k = 0; k <= Math.floor(line); k++) {
+    underCornersProb += poissonProbability(combinedCorners, k);
+  }
+  const overCornersProb = 1 - underCornersProb;
+
+  const cornersResult = {
+    expectedTotal: combinedCorners.toFixed(1),
+    homeExpectedCorners: hCorners.toFixed(1),
+    awayExpectedCorners: aCorners.toFixed(1),
+    over: Number((overCornersProb * 100).toFixed(1)),
+    under: Number((underCornersProb * 100).toFixed(1)),
+    line,
+    gameStateModifier: gameStateMultiplier,
+    isGameStateAsymmetry
+  };
+
+  // Si se llamó con firma simple de 3 parámetros, retornar formato estándar
+  // pero enriquecido con expectedTotal
+  return {
+    ...cornersResult,
+    corners: cornersResult
+  };
 }
 
 /**

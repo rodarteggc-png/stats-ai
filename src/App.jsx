@@ -751,11 +751,12 @@ export default function App() {
             });
           }
 
-          // 7. TIER 2: MERCADOS ALTERNOS (Over/Under 1.5, 2.5, 3.5 y Córners)
+          // 7. TIER 2: MERCADOS ALTERNOS (Over/Under 1.5, 2.5, 3.5 y Córners con GameStateModifier)
           const propProbs = calculatePropProbabilities(
             matchData.home.cornersAvg, matchData.away.cornersAvg,
             matchData.home.cardsAvg, matchData.away.cardsAvg,
-            matchData.home.keyPlayer?.shotsOnTargetAvg
+            matchData.home.keyPlayer?.shotsOnTargetAvg,
+            probs
           );
 
           if (o35 >= 38 && parseFloat(totalXG) >= 3.15) {
@@ -1489,7 +1490,7 @@ export default function App() {
           matchData.home.daysRest, matchData.away.daysRest,
           learned.homePenalty, learned.awayPenalty
         );
-        const corners = calculatePropProbabilities(matchData.home.cornersAvg, matchData.away.cornersAvg, 9.5);
+        const corners = calculatePropProbabilities(matchData.home.cornersAvg, matchData.away.cornersAvg, 9.5, probs);
         const cards = calculatePropProbabilities(matchData.home.cardsAvg, matchData.away.cardsAvg, 4.5);
         mathProbs = { type: 'futbol', probs, props: { corners, cards } };
         
