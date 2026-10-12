@@ -63,6 +63,7 @@ export function detectReverseLineMovement({
     rlmType: null, // 'FAVORABLE', 'TRAMPA_ADVERSA', 'NEUTRAL'
     confidenceBonus: 0, // Puntos porcentuales para reforzar el edge
     isTrapForPick: false, // true si el dinero profesional está en contra de nuestro pick
+    isVetoedByMarket: false, // REGLA 4.7: true si se debe cancelar automáticamente el pick
     badgeText: null,
     reason: null
   };
@@ -164,23 +165,59 @@ export function detectReverseLineMovement({
   const homeDropPct = parseFloat(mkt.homeDropPct) || 0;
   const awayDropPct = parseFloat(mkt.awayDropPct) || 0;
 
-  // Detección de caída severa en el rival (trampa institucional)
-  if (isHomeSide && awayDropPct >= 7.0) {
-    result.isRlmDetected = true;
-    result.rlmType = 'TRAMPA_ADVERSA';
-    result.isTrapForPick = true;
-    result.confidenceBonus = -4.0;
-    result.badgeText = '⚠️ TRAMPA DE MERCADO (STEAM EN VISITA)';
-    result.reason = `Fuerte entrada de capital profesional en el rival ${match.away?.name} (cuota cayó -${awayDropPct.toFixed(1)}% desde apertura).`;
-    return result;
-  } else if (isAwaySide && homeDropPct >= 7.0) {
-    result.isRlmDetected = true;
-    result.rlmType = 'TRAMPA_ADVERSA';
-    result.isTrapForPick = true;
-    result.confidenceBonus = -4.0;
-    result.badgeText = '⚠️ TRAMPA DE MERCADO (STEAM EN LOCAL)';
-    result.reason = `Fuerte entrada de capital profesional en el local ${match.home?.name} (cuota cayó -${homeDropPct.toFixed(1)}% desde apertura).`;
-    return result;
+  const hOpen = parseFloat(mkt.openHome || match.home?.openOdds || 0);
+  const hClose = parseFloat(mkt.homeOdds || match.home?.odds || 0);
+  const aOpen = parseFloat(mkt.openAway || match.away?.openOdds || 0);
+  const aClose = parseFloat(mkt.awayOdds || match.away?.odds || 0);
+
+  const homeRisePct = parseFloat(mkt.homeRisePct) || (hOpen > 0 && hClose > hOpen ? Number((((hClose / hOpen) - 1) * 100).toFixed(1)) : 0);
+  const awayRisePct = parseFloat(mkt.awayRisePct) || (aOpen > 0 && aClose > aOpen ? Number((((aClose / aOpen) - 1) * 100).toFixed(1)) : 0);
+
+  // REGLA 4.7: FILTRO DE VETO (MICROESTRUCTURA DE MERCADO)
+  // Si el modelo dice "Apostar Local", pero la cuota del Local ha SUBIDO desde la apertura (>= 3.5%)
+  // o el mercado institucional está comprando al Visitante (awayDropPct >= 5.0%), EL PICK SE CANCELA AUTOMÁTICAMENTE.
+  if (isHomeSide) {
+    if (homeRisePct >= 3.5) {
+      result.isRlmDetected = true;
+      result.rlmType = 'TRAMPA_ADVERSA';
+      result.isTrapForPick = true;
+      result.isVetoedByMarket = true;
+      result.confidenceBonus = -10.0;
+      result.badgeText = '⛔ VETO MICROESTRUCTURA (CUOTA LOCAL SUBIÓ)';
+      result.reason = `Veto Regla 4.7: La cuota de ${match.home?.name || 'Local'} subió de ${hOpen ? hOpen.toFixed(2) : 'apertura'} a ${hClose.toFixed(2)} (+${homeRisePct.toFixed(1)}%). El mercado institucional apuesta en contra del Local; pick cancelado.`;
+      return result;
+    }
+    if (awayDropPct >= 5.0) {
+      result.isRlmDetected = true;
+      result.rlmType = 'TRAMPA_ADVERSA';
+      result.isTrapForPick = true;
+      result.isVetoedByMarket = true;
+      result.confidenceBonus = -10.0;
+      result.badgeText = '⛔ VETO MICROESTRUCTURA (STEAM EN RIVAL)';
+      result.reason = `Veto Regla 4.7: Fuerte entrada de capital profesional en el rival ${match.away?.name || 'Visitante'} (cuota cayó -${awayDropPct.toFixed(1)}% desde apertura). Pick cancelado.`;
+      return result;
+    }
+  } else if (isAwaySide) {
+    if (awayRisePct >= 3.5) {
+      result.isRlmDetected = true;
+      result.rlmType = 'TRAMPA_ADVERSA';
+      result.isTrapForPick = true;
+      result.isVetoedByMarket = true;
+      result.confidenceBonus = -10.0;
+      result.badgeText = '⛔ VETO MICROESTRUCTURA (CUOTA VISITA SUBIÓ)';
+      result.reason = `Veto Regla 4.7: La cuota de ${match.away?.name || 'Visitante'} subió de ${aOpen ? aOpen.toFixed(2) : 'apertura'} a ${aClose.toFixed(2)} (+${awayRisePct.toFixed(1)}%). El mercado institucional apuesta en contra del Visitante; pick cancelado.`;
+      return result;
+    }
+    if (homeDropPct >= 5.0) {
+      result.isRlmDetected = true;
+      result.rlmType = 'TRAMPA_ADVERSA';
+      result.isTrapForPick = true;
+      result.isVetoedByMarket = true;
+      result.confidenceBonus = -10.0;
+      result.badgeText = '⛔ VETO MICROESTRUCTURA (STEAM EN LOCAL)';
+      result.reason = `Veto Regla 4.7: Fuerte entrada de capital profesional en el rival local ${match.home?.name || 'Local'} (cuota cayó -${homeDropPct.toFixed(1)}% desde apertura). Pick cancelado.`;
+      return result;
+    }
   }
 
   // Detección de caída favorable a nuestro lado (confirmación institucional)
@@ -229,4 +266,21 @@ export function detectReverseLineMovement({
   }
 
   return result;
+}
+
+/**
+ * REGLA 4.7: Evalúa si un pick debe ser vetado automáticamente por microestructura de mercado
+ * @param {Object} params - { match, sport, pick, pickType }
+ * @returns {{ isVetoed: boolean, reason: string|null, badgeText: string|null }}
+ */
+export function evaluateMarketMicrostructureVeto({ match = {}, sport = 'futbol', pick = '', pickType = '' }) {
+  const rlm = detectReverseLineMovement({ sport, match, pick, pickType });
+  if (rlm.isVetoedByMarket || (rlm.isTrapForPick && rlm.rlmType === 'TRAMPA_ADVERSA')) {
+    return {
+      isVetoed: true,
+      reason: rlm.reason,
+      badgeText: rlm.badgeText || '⛔ VETO MICROESTRUCTURA DE MERCADO'
+    };
+  }
+  return { isVetoed: false, reason: null, badgeText: null };
 }

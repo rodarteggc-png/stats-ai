@@ -12,6 +12,8 @@
  * 4. Concentración de Riesgo y Trampas de Vestidor
  */
 
+import { evaluateMarketMicrostructureVeto } from './rlmDetector.js';
+
 /**
  * Evalúa la ventaja o desventaja de descanso entre dos contendientes.
  * @param {Object} match - Objeto con datos de local y visitante
@@ -240,7 +242,25 @@ export function auditCandidateAsTipsterPro(candidate = {}) {
     };
   }
 
-  // d) CANDADO TIPSTER PRO PARA PLAYER PROPS:
+  // d) REGLA 4.7: VETO DE MICROESTRUCTURA DE MERCADO (Cuota en subida / Flujo institucional adverso)
+  const marketVeto = evaluateMarketMicrostructureVeto({
+    match,
+    sport,
+    pick,
+    pickType: candidate.type || ''
+  });
+
+  if (marketVeto.isVetoed) {
+    return {
+      isApproved: false,
+      grade: 'VETO_MICROESTRUCTURA',
+      badgeTitle: marketVeto.badgeText || '⛔ VETO MICROESTRUCTURA DE MERCADO',
+      reason: marketVeto.reason,
+      tipsterSeal: '❌ Rechazado por Dinero Inteligente en Contra (Regla 4.7)'
+    };
+  }
+
+  // e) CANDADO TIPSTER PRO PARA PLAYER PROPS:
   const isProp = candidate.isProp || 
                  (candidate.type || '').toUpperCase().includes('PROP') ||
                  (candidate.type || '').toUpperCase().includes('TIROS A PUERTA') ||

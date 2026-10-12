@@ -285,6 +285,14 @@ export function extractEspnSharpMarket(oddsObj, homeName = "Local", awayName = "
     ? Number((((aOpenNum / aCloseNum) - 1) * 100).toFixed(1))
     : 0;
 
+  // Subida porcentual en cuota decimal desde Apertura (Regla 4.7: Drift Adverso / Dinero Institucional en contra)
+  const homeRisePct = (hOpenNum > 0 && hCloseNum > 0 && hCloseNum > hOpenNum)
+    ? Number((((hCloseNum / hOpenNum) - 1) * 100).toFixed(1))
+    : 0;
+  const awayRisePct = (aOpenNum > 0 && aCloseNum > 0 && aCloseNum > aOpenNum)
+    ? Number((((aCloseNum / aOpenNum) - 1) * 100).toFixed(1))
+    : 0;
+
   // 2. Point Spread / Runline (Open vs Close/Current)
   const rawSpreadOpen = oddsObj.pointSpread?.home?.open?.line;
   const rawSpreadClose = oddsObj.pointSpread?.home?.current?.line || oddsObj.pointSpread?.home?.close?.line;
@@ -360,6 +368,8 @@ export function extractEspnSharpMarket(oddsObj, homeName = "Local", awayName = "
     drawOdds: drawCloseDec,
     homeDropPct,
     awayDropPct,
+    homeRisePct,
+    awayRisePct,
     spreadHomeOpen: spreadHomeOpen !== null && !isNaN(spreadHomeOpen) ? spreadHomeOpen : null,
     spreadHomeClose: spreadHomeClose !== null && !isNaN(spreadHomeClose) ? spreadHomeClose : null,
     spreadAwayClose: spreadAwayClose !== null && !isNaN(spreadAwayClose) ? spreadAwayClose : null,

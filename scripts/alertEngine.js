@@ -1363,7 +1363,7 @@ export function buildOpportunitiesAndTopSlate({
   // Para Spreads/Totales se exige prob >= 55.5% y para 1X2/ML/BTTS prob >= 60.0%
   const approvedOpps = rawOpportunities.filter(opp => {
     if (!opp.consensus || opp.consensus.votesPassed < 2) return false;
-    if (opp.consensus.rlmInfo?.isTrapForPick) return false;
+    if (opp.consensus.rlmInfo?.isTrapForPick || opp.consensus.rlmInfo?.isVetoedByMarket) return false;
 
     // ACCIÓN 1: WHITELIST ESTRICTA DE LIGAS TIER 1 (Cero ligas exóticas en Telegram)
     if (!isTier1League(opp.league, opp.sport)) {
