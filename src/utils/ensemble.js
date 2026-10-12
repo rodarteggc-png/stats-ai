@@ -267,16 +267,56 @@ export function evaluateEnsembleConsensus({
 
   // 2. Detector Avanzado de Reverse Line Movement (RLM) y Flujo Institucional
   const rlm = detectReverseLineMovement({ sport, match, pick, pickType });
+  let isAggressiveSharpRlmTrap = false;
+  
   if (rlm.isTrapForPick) {
     vote3Passed = false;
     vote3Reason = `${rlm.badgeText}: ${rlm.reason}`;
+    // RLM Agresivo en Pinnacle (> 4.0% en contra del pick o veto oficial de microestructura)
+    const isPinnacleOrSharp = (match.market?.bookmaker || '').toLowerCase().includes('pinnacle') ||
+                              (match.bookmaker || '').toLowerCase().includes('pinnacle');
+    const adverseMovementPct = Math.abs(parseFloat(match.market?.homeRisePct || match.market?.awayRisePct || match.market?.homeDropPct || match.market?.awayDropPct || 0));
+    if (rlm.isVetoedByMarket || adverseMovementPct >= 4.0 || isPinnacleOrSharp) {
+      isAggressiveSharpRlmTrap = true;
+    }
   } else if (rlm.isRlmDetected && rlm.rlmType === 'FAVORABLE') {
     vote3Reason = `${rlm.badgeText}: ${rlm.reason}`;
-    // Toda la lógica de movimientos de línea y RLM avanzado ahora está delegada
-    // de forma exclusiva al módulo `rlmDetector.js` para evitar solapamientos.
   }
 
-  // 3. Consulta de Memoria de Lecciones Aprendidas (history.js + Auditoría Telegram)
+  // 3. Interceptor de Lesiones Críticas (KeyPlayerOut en NBA y NFL)
+  let keyPlayerOutVeto = false;
+  let keyPlayerOutReason = '';
+  const isNflOrNba = sLower.includes('nfl') || sLower.includes('nba') || sLower.includes('baloncesto') || sLower.includes('basquetbol');
+  
+  if (isNflOrNba) {
+    const rawInjuries = match.injuries || match.payload?.injuries || [];
+    const isHomeKeyOut = Boolean(
+      match.keyPlayerOut?.home ||
+      match.home?.keyPlayerOut ||
+      (Array.isArray(rawInjuries) && rawInjuries.some(inj => (inj.isKeyPlayer || inj.impact === 'HIGH' || inj.status === 'OUT') && isTeamMatch(inj.team, match.home?.name)))
+    );
+    const isAwayKeyOut = Boolean(
+      match.keyPlayerOut?.away ||
+      match.away?.keyPlayerOut ||
+      (Array.isArray(rawInjuries) && rawInjuries.some(inj => (inj.isKeyPlayer || inj.impact === 'HIGH' || inj.status === 'OUT') && isTeamMatch(inj.team, match.away?.name)))
+    );
+
+    // Si apostamos al lado del equipo con su jugador estrella descartado (no contemplado en rating inicial)
+    if (isHomeSidePick && isHomeKeyOut) {
+      keyPlayerOutVeto = true;
+      keyPlayerOutReason = `⛔ VETO DE LESIÓN CRÍTICA (KeyPlayerOut): Jugador estelar descartado en ${match.home?.name || 'Local'} no contemplado en rating original.`;
+    } else if (isAwaySidePick && isAwayKeyOut) {
+      keyPlayerOutVeto = true;
+      keyPlayerOutReason = `⛔ VETO DE LESIÓN CRÍTICA (KeyPlayerOut): Jugador estelar descartado en ${match.away?.name || 'Visitante'} no contemplado en rating original.`;
+    }
+
+    if (keyPlayerOutVeto) {
+      vote3Passed = false;
+      vote3Reason = keyPlayerOutReason;
+    }
+  }
+
+  // 4. Consulta de Memoria de Lecciones Aprendidas (history.js + Auditoría Telegram)
   try {
     const lessons = getAllLessons();
     const hName = (match.home?.name || '').toLowerCase();
@@ -340,14 +380,14 @@ export function evaluateEnsembleConsensus({
   }
 
   breakdown.push({
-    name: 'Mercado & Memoria Histórica',
+    name: 'Mercado & Microestructura',
     passed: vote3Passed,
     icon: vote3Passed ? '✅' : '❌',
     reason: vote3Reason
   });
 
   // =========================================================================
-  // CÓMPUTO FINAL DEL VEREDICTO DE CONSENSO
+  // CÓMPUTO FINAL DEL VEREDICTO DE CONSENSO (CON CANDADO DE VETO FULMINANTE)
   // =========================================================================
   const votesActive = breakdown.filter(b => b.passed !== null);
   const votesPassed = votesActive.filter(b => b.passed === true).length;
@@ -356,7 +396,17 @@ export function evaluateEnsembleConsensus({
   let badgeText = `${votesPassed}/${totalVotes} Votos (Veto por Discrepancia)`;
   let badgeColor = '#ef4444';
 
-  if (votesPassed === totalVotes && totalVotes >= 2) {
+  // REGLA CRÍTICA DE VETO FULMINANTE:
+  // Si Voto 1 y Voto 2 pasan, pero Voto 3 detecta RLM adverso en Pinnacle (> 4.0%) o KeyPlayerOut:
+  // El Voto 3 aplica VETO FULMINANTE automático y tumba por completo la alerta,
+  // impidiendo que califique por mayoría (2/3) engañosa.
+  const hasFulminantVeto = !vote3Passed && (isAggressiveSharpRlmTrap || keyPlayerOutVeto);
+
+  if (hasFulminantVeto) {
+    verdict = 'VETADO';
+    badgeText = `⛔ VETO FULMINANTE VOTO 3 (${keyPlayerOutVeto ? 'Lesión Crítica' : 'RLM Adverso Sharp'})`;
+    badgeColor = '#b91c1c';
+  } else if (votesPassed === totalVotes && totalVotes >= 2) {
     verdict = 'UNANIMIDAD_ELITE';
     badgeText = `${votesPassed}/${totalVotes} Votos (Unanimidad Élite)`;
     badgeColor = '#10b981';

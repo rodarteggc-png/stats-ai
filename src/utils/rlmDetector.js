@@ -173,18 +173,27 @@ export function detectReverseLineMovement({
   const homeRisePct = parseFloat(mkt.homeRisePct) || (hOpen > 0 && hClose > hOpen ? Number((((hClose / hOpen) - 1) * 100).toFixed(1)) : 0);
   const awayRisePct = parseFloat(mkt.awayRisePct) || (aOpen > 0 && aClose > aOpen ? Number((((aClose / aOpen) - 1) * 100).toFixed(1)) : 0);
 
-  // REGLA 4.7: FILTRO DE VETO (MICROESTRUCTURA DE MERCADO)
-  // Si el modelo dice "Apostar Local", pero la cuota del Local ha SUBIDO desde la apertura (>= 3.5%)
+  // FILTRO SHARP BOOKMAKER: El Drift (subida de cuota) SÓLO se penaliza si proviene de
+  // casas de apuestas institucionales ('pinnacle', 'circa', 'betcris').
+  // Se ignora el movimiento puramente recreacional o margen inflado de casas de retail.
+  const bookmakerStr = (mkt.bookmaker || mkt.bookie || mkt.provider || match.bookmaker || 'Pinnacle').toLowerCase();
+  const isSharpBookie = bookmakerStr.includes('pinnacle') || 
+                        bookmakerStr.includes('circa') || 
+                        bookmakerStr.includes('betcris') || 
+                        mkt.isSharpBookmaker === true;
+
+  // REGLA 4.7: FILTRO DE VETO (MICROESTRUCTURA DE MERCADO SHARP)
+  // Si el modelo dice "Apostar Local", pero la cuota en un Sharp Bookie subió (>= 3.5%)
   // o el mercado institucional está comprando al Visitante (awayDropPct >= 5.0%), EL PICK SE CANCELA AUTOMÁTICAMENTE.
   if (isHomeSide) {
-    if (homeRisePct >= 3.5) {
+    if (homeRisePct >= 3.5 && isSharpBookie) {
       result.isRlmDetected = true;
       result.rlmType = 'TRAMPA_ADVERSA';
       result.isTrapForPick = true;
       result.isVetoedByMarket = true;
       result.confidenceBonus = -10.0;
-      result.badgeText = '⛔ VETO MICROESTRUCTURA (CUOTA LOCAL SUBIÓ)';
-      result.reason = `Veto Regla 4.7: La cuota de ${match.home?.name || 'Local'} subió de ${hOpen ? hOpen.toFixed(2) : 'apertura'} a ${hClose.toFixed(2)} (+${homeRisePct.toFixed(1)}%). El mercado institucional apuesta en contra del Local; pick cancelado.`;
+      result.badgeText = `⛔ VETO SHARP DRIFT (${bookmakerStr.toUpperCase()})`;
+      result.reason = `Veto Regla 4.7: La cuota en ${bookmakerStr.toUpperCase()} subió de ${hOpen ? hOpen.toFixed(2) : 'apertura'} a ${hClose.toFixed(2)} (+${homeRisePct.toFixed(1)}%). El dinero profesional apuesta en contra del Local; pick cancelado.`;
       return result;
     }
     if (awayDropPct >= 5.0) {
@@ -198,14 +207,14 @@ export function detectReverseLineMovement({
       return result;
     }
   } else if (isAwaySide) {
-    if (awayRisePct >= 3.5) {
+    if (awayRisePct >= 3.5 && isSharpBookie) {
       result.isRlmDetected = true;
       result.rlmType = 'TRAMPA_ADVERSA';
       result.isTrapForPick = true;
       result.isVetoedByMarket = true;
       result.confidenceBonus = -10.0;
-      result.badgeText = '⛔ VETO MICROESTRUCTURA (CUOTA VISITA SUBIÓ)';
-      result.reason = `Veto Regla 4.7: La cuota de ${match.away?.name || 'Visitante'} subió de ${aOpen ? aOpen.toFixed(2) : 'apertura'} a ${aClose.toFixed(2)} (+${awayRisePct.toFixed(1)}%). El mercado institucional apuesta en contra del Visitante; pick cancelado.`;
+      result.badgeText = `⛔ VETO SHARP DRIFT (${bookmakerStr.toUpperCase()})`;
+      result.reason = `Veto Regla 4.7: La cuota en ${bookmakerStr.toUpperCase()} subió de ${aOpen ? aOpen.toFixed(2) : 'apertura'} a ${aClose.toFixed(2)} (+${awayRisePct.toFixed(1)}%). El dinero profesional apuesta en contra del Visitante; pick cancelado.`;
       return result;
     }
     if (homeDropPct >= 5.0) {
