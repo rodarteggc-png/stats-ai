@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import zlib from 'zlib';
 import { fileURLToPath } from 'url';
-import { fetchDailySchedule } from '../src/services/sportsApi.js';
+import { fetchDailySchedule, fetchClosingOddsForPick } from '../src/services/sportsApi.js';
 import { calculateMatchProbabilities } from '../src/utils/poisson.js';
 import { calculateMlbProbabilities, isExtremeAltitudePark, calculateMlbTotalProbabilities } from '../src/utils/sabermetrics.js';
 import { generateDailyMlbProps } from '../src/utils/mlbProps.js';
@@ -12,7 +12,7 @@ import { generateDailySoccerProps } from '../src/utils/soccerProps.js';
 import { calculateNflProbabilities } from '../src/utils/gridiron.js';
 import { simulateSoccerMatch, simulateMlbMatch, simulateNflMatch } from '../src/utils/monteCarlo.js';
 import { evaluateEnsembleConsensus } from '../src/utils/ensemble.js';
-import { applyPlattCalibration, recalibrateFromAudit } from '../src/utils/calibration.js';
+import { applyPlattCalibration, recalibrateFromAudit, hydratePlattCoefficients } from '../src/utils/calibration.js';
 import { getPairCorrelation } from '../src/utils/correlationMatrix.js';
 import { detectReverseLineMovement } from '../src/utils/rlmDetector.js';
 import { auditCandidateAsTipsterPro } from '../src/utils/tipsterAuditor.js';
@@ -170,10 +170,12 @@ export async function loadCloudLedger() {
         merged._meta = {
           ...(local._meta || {}),
           ...(cloudData._meta || {}),
-          dynamicElo: { ...(local._meta?.dynamicElo || {}), ...(cloudData._meta?.dynamicElo || {}) }
+          dynamicElo: { ...(local._meta?.dynamicElo || {}), ...(cloudData._meta?.dynamicElo || {}) },
+          plattCoefficients: { ...(local._meta?.plattCoefficients || {}), ...(cloudData._meta?.plattCoefficients || {}) }
         };
         const clean = pruneCache(merged);
         if (clean._meta?.dynamicElo) hydrateDynamicEloFromCloud(clean._meta.dynamicElo);
+        if (clean._meta?.plattCoefficients) hydratePlattCoefficients(clean._meta.plattCoefficients);
         saveLocalCache(clean);
         return clean;
       }
@@ -184,6 +186,7 @@ export async function loadCloudLedger() {
 
   const cleanFallback = pruneCache(local);
   if (cleanFallback._meta?.dynamicElo) hydrateDynamicEloFromCloud(cleanFallback._meta.dynamicElo);
+  if (cleanFallback._meta?.plattCoefficients) hydratePlattCoefficients(cleanFallback._meta.plattCoefficients);
   return cleanFallback;
 }
 
@@ -215,7 +218,8 @@ export async function saveCloudLedger(cache) {
           finalCache._meta = {
             ...(cloudData._meta || {}),
             ...(cache._meta || {}),
-            dynamicElo: { ...(cloudData._meta?.dynamicElo || {}), ...(cache._meta?.dynamicElo || {}) }
+            dynamicElo: { ...(cloudData._meta?.dynamicElo || {}), ...(cache._meta?.dynamicElo || {}) },
+            plattCoefficients: { ...(cloudData._meta?.plattCoefficients || {}), ...(cache._meta?.plattCoefficients || {}) }
           };
         }
       }
@@ -1795,12 +1799,43 @@ export async function runDailyTelegramAudit(options = {}) {
       }
       if (graded) {
         const wasAlreadyReported = Boolean(entry.reportedInTelegram);
+        
+        // Auto-CLV Institucional (The Odds API - Pinnacle Closing Line Vig-Free)
+        let clvData = null;
+        if (!entry.closingOdds || entry.clvPct === undefined || entry.clvPct === null) {
+          try {
+            clvData = await fetchClosingOddsForPick(entry);
+          } catch (e) {
+            console.warn(`Aviso extrayendo Auto-CLV para ${entry.pick}:`, e.message);
+          }
+        }
+
+        const placedOddsVal = parseFloat(entry.odds || entry.placedOdds || 1.90);
+        let finalClosing = clvData?.closingOdds || (entry.closingOdds ? parseFloat(entry.closingOdds) : null);
+        let finalClosingNoVig = clvData?.closingOddsNoVig || (entry.closingOddsNoVig ? parseFloat(entry.closingOddsNoVig) : null);
+        let finalClvPct = clvData?.clvPct !== undefined ? clvData.clvPct : (entry.clvPct !== undefined ? entry.clvPct : null);
+        let finalBeatClosing = clvData?.beatClosingLine !== undefined ? clvData.beatClosingLine : (entry.beatClosingLine !== undefined ? entry.beatClosingLine : null);
+
+        if (finalClosing && (!finalClvPct || finalBeatClosing === null)) {
+          const vigFactor = 1.025;
+          finalClosingNoVig = Number((finalClosing / vigFactor).toFixed(2));
+          finalClvPct = Number((((placedOddsVal / finalClosing) - 1) * 100).toFixed(1));
+          finalBeatClosing = finalClvPct > 0 || placedOddsVal > finalClosingNoVig;
+        }
+
         const updatedEntry = {
           ...entry,
           ...graded,
           audited: true,
           reportedInTelegram: wasAlreadyReported,
-          auditedAt: entry.auditedAt || Date.now()
+          auditedAt: entry.auditedAt || Date.now(),
+          closingOdds: finalClosing ? finalClosing.toFixed(2) : null,
+          closingOddsNoVig: finalClosingNoVig ? finalClosingNoVig.toFixed(2) : null,
+          clvPct: finalClvPct !== null ? finalClvPct.toString() : null,
+          beatClosingLine: finalBeatClosing,
+          clvStatus: finalBeatClosing !== null 
+            ? (finalBeatClosing ? `✅ Éxito Cuantitativo (+${finalClvPct}% CLV)` : `⚠️ Línea no superada (${finalClvPct}% CLV)`)
+            : null
         };
         providedCache[entry.id] = updatedEntry;
         ledgerModified = true;
@@ -1931,7 +1966,8 @@ export async function runDailyTelegramAudit(options = {}) {
     const lines = picksToReport.slice(0, 25).map(p => {
       const icon = p.status === 'won' ? '✅' : (p.status === 'void' ? '➖' : '❌');
       const unitStr = p.status === 'void' ? '`0.00u (Push)`' : `\`${p.netUnits >= 0 ? '+' : ''}${Number(p.netUnits).toFixed(2)}u\``;
-      return `${icon} *${p.sport}:* ${p.game}\n   👉 _${p.pick}_ | \`${p.scoreDisplay}\` | ${unitStr}`;
+      const clvLine = p.closingOdds ? ` | 🏁 Cierre: \`${p.closingOdds}\`${p.clvPct ? ` (${p.beatClosingLine ? '+' : ''}${p.clvPct}% CLV)` : ''}` : '';
+      return `${icon} *${p.sport}:* ${p.game}\n   👉 _${p.pick}_ | \`${p.scoreDisplay}\` | ${unitStr}${clvLine}`;
     });
     if (picksToReport.length > 25) {
       lines.push(`_...y ${picksToReport.length - 25} pronóstico(s) adicional(es) de la jornada de ayer._`);

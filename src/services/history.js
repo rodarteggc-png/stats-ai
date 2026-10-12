@@ -2,6 +2,7 @@
 // SISTEMA DE MEMORIA ACTIVA, AUDITORÍA FORENSE, ELO DINÁMICO, APRENDIZAJE CONTINUO Y AUTO-VERIFICACIÓN CON APIS EN VIVO
 import defaultLessons from '../data/lessons.json' with { type: 'json' };
 import defaultEloData from '../data/dynamicElo.json' with { type: 'json' };
+import { hydratePlattCoefficients, recalibrateFromAudit } from '../utils/calibration.js';
 
 const STORAGE_KEY = 'fstats_memory';
 const LESSONS_KEY = 'fstats_team_lessons';
@@ -866,9 +867,7 @@ export async function syncTelegramLedgerToHistory() {
     }
     
     if (data.plattCoefficients) {
-      try {
-        localStorage.setItem('fstats_platt_coefs', JSON.stringify(data.plattCoefficients));
-      } catch (e) {}
+      hydratePlattCoefficients(data.plattCoefficients);
     }
 
     const allTelegramPicks = [
@@ -1379,6 +1378,23 @@ export async function autoVerifyResultsWithAPIs(sportFilter = null) {
         lostCount++;
       }
     }
+  }
+
+  // RECALIBRACIÓN DINÁMICA DE PLATT: Si la muestra acumulada por deporte es >= 30 selecciones auditadas
+  if (verifiedCount > 0) {
+    const allHistory = getHistory();
+    ['futbol', 'mlb', 'nfl', 'ncaaf'].forEach(s => {
+      const sportResolved = allHistory.filter(i => {
+        const itemSport = (i.sport || 'futbol').toLowerCase();
+        if (s === 'ncaaf') return itemSport.includes('ncaaf') || itemSport.includes('colegial');
+        if (s === 'nfl') return itemSport.includes('nfl');
+        if (s === 'mlb') return itemSport.includes('mlb') || itemSport.includes('beisbol');
+        return itemSport.includes('futbol') || itemSport.includes('fútbol');
+      });
+      if (sportResolved.length >= 30) {
+        recalibrateFromAudit(sportResolved, s);
+      }
+    });
   }
 
   return {

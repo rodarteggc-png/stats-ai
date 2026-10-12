@@ -26,6 +26,23 @@ if (typeof window !== 'undefined' && window.localStorage) {
   } catch (e) {}
 }
 
+export function getPlattCoefficients() {
+  return { ...PLATT_COEFFICIENTS };
+}
+
+export function hydratePlattCoefficients(newCoefs = {}) {
+  if (!newCoefs || typeof newCoefs !== 'object') return;
+  PLATT_COEFFICIENTS = {
+    ...PLATT_COEFFICIENTS,
+    ...newCoefs
+  };
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      localStorage.setItem('fstats_platt_coefs', JSON.stringify(PLATT_COEFFICIENTS));
+    } catch (e) {}
+  }
+}
+
 export function recalibrateFromAudit(auditedPicks, sport) {
   const sLower = (sport || 'futbol').toLowerCase();
   let key = 'futbol';
@@ -33,28 +50,66 @@ export function recalibrateFromAudit(auditedPicks, sport) {
   else if (sLower.includes('nfl')) key = 'nfl';
   else if (sLower.includes('mlb') || sLower.includes('beisbol')) key = 'mlb';
 
-  const valid = auditedPicks.filter(p => p && (p.status === 'won' || p.status === 'lost'));
-  if (valid.length < 30) return PLATT_COEFFICIENTS[key]; // Mín. 30 datos
-  
-  // Gradient Descent sobre la log-loss para encontrar A,B óptimos
-  let A = 1.0, B = 0.0, lr = 0.01;
-  for (let epoch = 0; epoch < 500; epoch++) {
-    let dA = 0, dB = 0;
-    valid.forEach(p => {
-      const rawP = Math.max(0.01, Math.min(0.99, parseFloat(p.prob) / 100));
-      const logit = Math.log(rawP / (1 - rawP));
-      const calP = 1 / (1 + Math.exp(-(A * logit + B)));
-      const y = p.status === 'won' ? 1 : 0;
-      const err = calP - y;
-      dA += err * logit;
-      dB += err;
-    });
-    A -= lr * (dA / valid.length);
-    B -= lr * (dB / valid.length);
+  // Filtrar exclusivamente selecciones completadas del deporte en cuestión
+  const valid = auditedPicks.filter(p => {
+    if (!p || (p.status !== 'won' && p.status !== 'lost')) return false;
+    const pSport = (p.sport || '').toLowerCase();
+    if (key === 'ncaaf') return pSport.includes('ncaaf') || pSport.includes('colegial');
+    if (key === 'nfl') return pSport.includes('nfl');
+    if (key === 'mlb') return pSport.includes('mlb') || pSport.includes('beisbol');
+    return pSport.includes('futbol') || pSport.includes('fútbol') || (!pSport && key === 'futbol');
+  });
+
+  // UMBRAL MATEMÁTICO: Mínimo 30 observaciones auditadas reales
+  if (valid.length < 30) {
+    return PLATT_COEFFICIENTS[key];
   }
   
-  const newCoefs = { A: +A.toFixed(4), B: +B.toFixed(4) };
+  // Descenso de Gradiente (Gradient Descent) optimizando la Log-Loss binaria exacta:
+  // L = - (1/N) * sum [ y * ln(p_cal) + (1 - y) * ln(1 - p_cal) ]
+  // p_cal = 1 / (1 + exp(-(A * logit + B)))
+  let A = PLATT_COEFFICIENTS[key]?.A || 1.0;
+  let B = PLATT_COEFFICIENTS[key]?.B || 0.0;
+  const lr = 0.015;
+  const epochs = 600;
+
+  for (let epoch = 0; epoch < epochs; epoch++) {
+    let gradA = 0;
+    let gradB = 0;
+
+    for (let i = 0; i < valid.length; i++) {
+      const p = valid[i];
+      const rawProbVal = parseFloat(p.prob) || (p.probs?.homeWin ? parseFloat(p.probs.homeWin) : 60);
+      const rawP = Math.max(0.01, Math.min(0.99, rawProbVal / 100));
+      const logit = Math.log(rawP / (1 - rawP));
+
+      // Sigmoide escalada: p_cal = 1 / (1 + exp(-(A * logit + B)))
+      const z = A * logit + B;
+      const calP = 1 / (1 + Math.exp(-Math.max(-15, Math.min(15, z))));
+      const y = p.status === 'won' ? 1.0 : 0.0;
+      const error = calP - y; // Derivada de la Log-Loss respecto a z
+
+      gradA += error * logit;
+      gradB += error;
+    }
+
+    A -= lr * (gradA / valid.length);
+    B -= lr * (gradB / valid.length);
+
+    // Candado numérico para evitar coeficientes degenerados en muestras sesgadas
+    A = Math.max(0.40, Math.min(1.80, A));
+    B = Math.max(-0.60, Math.min(0.60, B));
+  }
+  
+  const newCoefs = { A: Number(A.toFixed(4)), B: Number(B.toFixed(4)) };
   PLATT_COEFFICIENTS[key] = newCoefs;
+
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      localStorage.setItem('fstats_platt_coefs', JSON.stringify(PLATT_COEFFICIENTS));
+    } catch (e) {}
+  }
+
   return newCoefs;
 }
 

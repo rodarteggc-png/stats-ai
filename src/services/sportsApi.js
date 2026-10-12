@@ -579,6 +579,125 @@ async function fetchTheOdds(sportKey) {
   return null;
 }
 
+/**
+ * AUTO-CLV FOCALIZADO (Serverless):
+ * Extrae EXCLUSIVAMENTE la cuota de cierre (Closing Line) de Pinnacle para el mercado específico del pick alertado.
+ * Aplica remoción de vig (margen) de Pinnacle (~2.5%) para obtener la verdadera Closing Line Vig-Free.
+ * @param {Object} pick - Objeto del pick auditado
+ * @returns {Promise<{closingOdds: number, closingOddsNoVig: number, clvPct: number, beatClosingLine: boolean}|null>}
+ */
+export async function fetchClosingOddsForPick(pick) {
+  if (!pick) return null;
+  const sportKeyMap = {
+    mlb: 'baseball_mlb',
+    beisbol: 'baseball_mlb',
+    futbol: 'soccer_epl', // Por defecto; si la liga está disponible se ajusta
+    fútbol: 'soccer_epl',
+    nfl: 'americanfootball_nfl',
+    ncaaf: 'americanfootball_ncaaf'
+  };
+
+  const rawSport = (pick.sport || 'futbol').toLowerCase();
+  let sportApiSport = 'soccer_epl';
+  if (rawSport.includes('mlb') || rawSport.includes('beisbol')) sportApiSport = 'baseball_mlb';
+  else if (rawSport.includes('ncaaf') || rawSport.includes('colegial')) sportApiSport = 'americanfootball_ncaaf';
+  else if (rawSport.includes('nfl')) sportApiSport = 'americanfootball_nfl';
+  else {
+    const l = (pick.league || '').toLowerCase();
+    if (l.includes('champions')) sportApiSport = 'soccer_uefa_champs_league';
+    else if (l.includes('la liga') || l.includes('esp')) sportApiSport = 'soccer_spain_la_liga';
+    else if (l.includes('serie a') || l.includes('ita')) sportApiSport = 'soccer_italy_serie_a';
+    else if (l.includes('bundesliga') || l.includes('ger')) sportApiSport = 'soccer_germany_bundesliga';
+    else if (l.includes('ligue 1') || l.includes('fra')) sportApiSport = 'soccer_france_ligue_one';
+    else if (l.includes('mex') || l.includes('liga mx')) sportApiSport = 'soccer_mexico_ligamx';
+    else sportApiSport = 'soccer_epl';
+  }
+
+  // 1. Obtener la data de cuotas más reciente disponible
+  const oddsData = await fetchTheOdds(sportApiSport);
+  if (!oddsData || !Array.isArray(oddsData)) return null;
+
+  const hName = (pick.homeName || (pick.game ? pick.game.split(' vs ')[0] : '')).toLowerCase();
+  const aName = (pick.awayName || (pick.game ? pick.game.split(' vs ')[1] : '')).toLowerCase();
+
+  const matchedEvent = oddsData.find(e => {
+    const eh = (e.home_team || '').toLowerCase();
+    const ea = (e.away_team || '').toLowerCase();
+    return (eh.includes(hName) || hName.includes(eh) || isTeamMatch(eh, hName)) &&
+           (ea.includes(aName) || aName.includes(ea) || isTeamMatch(ea, aName));
+  });
+
+  if (!matchedEvent || !matchedEvent.bookmakers) return null;
+
+  // Prioridad 1: Pinnacle, Prioridad 2: Bet365 / Bookmaker más líquido
+  const pinny = matchedEvent.bookmakers.find(b => b.key === 'pinnacle') ||
+                matchedEvent.bookmakers.find(b => b.key === 'bet365') ||
+                matchedEvent.bookmakers[0];
+
+  if (!pinny || !pinny.markets) return null;
+
+  const pickStr = (pick.pick || '').toLowerCase();
+  let closingDecimal = null;
+
+  // Analizar mercado del pick: Spreads, Totals o H2H (Moneyline)
+  if (pickStr.includes('over') || pickStr.includes('under') || pickStr.includes('más de') || pickStr.includes('menos de')) {
+    const totalsMarket = pinny.markets.find(m => m.key === 'totals');
+    if (totalsMarket && totalsMarket.outcomes) {
+      const isOver = pickStr.includes('over') || pickStr.includes('más de');
+      const targetOutcome = totalsMarket.outcomes.find(o => o.name?.toLowerCase() === (isOver ? 'over' : 'under'));
+      if (targetOutcome?.price) closingDecimal = parseFloat(targetOutcome.price);
+    }
+  } else if (pickStr.includes('spread') || pickStr.includes('hándicap') || pickStr.includes('handicap') || pickStr.includes('cubre') || pickStr.includes('runline') || pickStr.includes('+1.5') || pickStr.includes('-1.5')) {
+    const spreadsMarket = pinny.markets.find(m => m.key === 'spreads');
+    if (spreadsMarket && spreadsMarket.outcomes) {
+      const isHome = pickStr.includes(hName) || (pick.homeName && pickStr.includes(pick.homeName.toLowerCase()));
+      const targetTeam = isHome ? matchedEvent.home_team : matchedEvent.away_team;
+      const targetOutcome = spreadsMarket.outcomes.find(o => isTeamMatch(o.name, targetTeam));
+      if (targetOutcome?.price) closingDecimal = parseFloat(targetOutcome.price);
+    }
+  }
+
+  // Fallback o mercado Moneyline (H2H)
+  if (!closingDecimal) {
+    const h2hMarket = pinny.markets.find(m => m.key === 'h2h');
+    if (h2hMarket && h2hMarket.outcomes) {
+      const isHome = pickStr.includes(hName) || (pick.homeName && pickStr.includes(pick.homeName.toLowerCase()));
+      const isAway = pickStr.includes(aName) || (pick.awayName && pickStr.includes(pick.awayName.toLowerCase()));
+      const isDraw = pickStr.includes('empate') || pickStr.includes('draw');
+
+      if (isDraw) {
+        const drawOutcome = h2hMarket.outcomes.find(o => o.name?.toLowerCase() === 'draw');
+        if (drawOutcome?.price) closingDecimal = parseFloat(drawOutcome.price);
+      } else if (isHome) {
+        const homeOutcome = h2hMarket.outcomes.find(o => isTeamMatch(o.name, matchedEvent.home_team));
+        if (homeOutcome?.price) closingDecimal = parseFloat(homeOutcome.price);
+      } else if (isAway) {
+        const awayOutcome = h2hMarket.outcomes.find(o => isTeamMatch(o.name, matchedEvent.away_team));
+        if (awayOutcome?.price) closingDecimal = parseFloat(awayOutcome.price);
+      }
+    }
+  }
+
+  if (!closingDecimal || isNaN(closingDecimal) || closingDecimal <= 1.0) {
+    return null;
+  }
+
+  // Cálculo del CLV Vig-Free institucional
+  const placed = parseFloat(pick.odds || pick.placedOdds || 1.90);
+  const vigFactor = 1.025; // 2.5% de margen institucional de Pinnacle
+  const closingOddsNoVig = Number((closingDecimal / vigFactor).toFixed(2));
+  const clvPct = Number((((placed / closingDecimal) - 1) * 100).toFixed(1));
+  const beatClosingLine = clvPct > 0 || placed > closingOddsNoVig;
+
+  return {
+    closingOdds: Number(closingDecimal.toFixed(2)),
+    closingOddsNoVig,
+    clvPct,
+    beatClosingLine,
+    bookmaker: pinny.title || 'Pinnacle'
+  };
+}
+
 // Memory cache para reutilizar los partidos en el simulador
 let liveCache = {
   futbol: [],
