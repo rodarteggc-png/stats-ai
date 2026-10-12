@@ -471,7 +471,11 @@ export async function checkOddsApiUsage(providedRawKeys = null) {
   for (let i = 0; i < keys.length; i++) {
     const k = keys[i];
     try {
-      const res = await fetch(`https://api.the-odds-api.com/v4/sports/?apiKey=${k}`);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2000);
+      const res = await fetch(`https://api.the-odds-api.com/v4/sports/?apiKey=${k}`, {
+        signal: controller.signal
+      }).finally(() => clearTimeout(timeoutId));
       const rem = res.headers.get('x-requests-remaining');
       const usd = res.headers.get('x-requests-used');
       if (rem !== null) {
@@ -525,7 +529,11 @@ async function fetchTheOdds(sportKey) {
   for (let i = 0; i < keys.length; i++) {
     const apiKey = keys[i];
     try {
-      const res = await fetch(`https://api.the-odds-api.com/v4/sports/${sportKey}/odds/?apiKey=${apiKey}&regions=eu,us&markets=h2h,spreads,totals&bookmakers=pinnacle,bet365`);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2500);
+      const res = await fetch(`https://api.the-odds-api.com/v4/sports/${sportKey}/odds/?apiKey=${apiKey}&regions=eu,us&markets=h2h,spreads,totals&bookmakers=pinnacle,bet365`, {
+        signal: controller.signal
+      }).finally(() => clearTimeout(timeoutId));
       
       // Si la llave está agotada (429) o rechazada (401), saltar a la siguiente del pool
       if (res.status === 429 || res.status === 401) {
