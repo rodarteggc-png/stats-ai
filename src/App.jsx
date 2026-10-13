@@ -821,24 +821,6 @@ export default function App() {
               meta: `xG Total: ${totalXG} | Under 2.5: ${probs.under25}%`
             });
           }
-
-          if (parseFloat(propProbs.corners?.over || 0) >= 58) {
-            const cOver = parseFloat(propProbs.corners.over);
-            opportunities.push({
-              match: matchData,
-              probs,
-              mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel },
-              tier: 2,
-              type: '🚩 MERCADO ALTERNO: CÓRNERS >9.5',
-              pick: 'Más de 9.5 Tiros de Esquina',
-              reason: `Volumen alto de juego por bandas (promedio combinado: ${(parseFloat(matchData.home.cornersAvg || 5) + parseFloat(matchData.away.cornersAvg || 4)).toFixed(1)} córners por partido).`,
-              prob: `${propProbs.corners.over}%`,
-              odds: "1.85",
-              edgeVal: Math.max(3.2, cOver - 54),
-              color: "#06b6d4",
-              meta: `Córners Est: ${propProbs.corners.expectedTotal}`
-            });
-          }
         } else if (activeSport === 'mlb') {
           const [hWins, hLosses] = (matchData.home?.record || '0-0').split('-').map(Number);
           const [aWins, aLosses] = (matchData.away?.record || '0-0').split('-').map(Number);

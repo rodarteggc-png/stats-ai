@@ -53,7 +53,7 @@ export function evaluateEnsembleConsensus({
     const totalXg = hXg + aXg;
     const isBttsPick = pTypeUpper.includes('AMBOS ANOTAN') || pTypeUpper.includes('BTTS');
     const isProtectedPick = pTypeUpper.includes('DOBLE') || pTypeUpper.includes('PROTEGIDO') || pTypeUpper.includes('1X') || pTypeUpper.includes('X2') || pTypeUpper.includes('HÁNDICAP') || pTypeUpper.includes('HANDICAP');
-    const isTotalsPick = pTypeUpper.includes('OVER') || pTypeUpper.includes('UNDER') || pTypeUpper.includes('GOLES') || pTypeUpper.includes('CÓRNERS');
+    const isTotalsPick = pTypeUpper.includes('OVER') || pTypeUpper.includes('UNDER') || pTypeUpper.includes('GOLES');
     const isProp = pTypeUpper.includes('PROP') || pTypeUpper.includes('JUGADOR');
     const isOutright1X2 = !isBttsPick && !isProtectedPick && !isTotalsPick && !isProp;
 

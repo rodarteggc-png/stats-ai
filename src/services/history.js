@@ -154,7 +154,16 @@ export function getHistory(sportFilter = null) {
   if (!saved) return [];
   try {
     const parsed = JSON.parse(saved);
-    return sportFilter ? parsed.filter(i => (i.sport === sportFilter || (!i.sport && sportFilter === 'futbol'))) : parsed;
+    // Sanear historial: descartar picks sintéticos de córners para no distorsionar métricas oficiales
+    const sanitized = parsed.filter(i => {
+      const p = (i.pick || '').toLowerCase();
+      const t = (i.type || '').toLowerCase();
+      return !p.includes('tiros de esquina') && !p.includes('córners') && !p.includes('corner') && !t.includes('córners');
+    });
+    if (sanitized.length !== parsed.length && typeof window !== 'undefined' && window.localStorage) {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized)); } catch (e) {}
+    }
+    return sportFilter ? sanitized.filter(i => (i.sport === sportFilter || (!i.sport && sportFilter === 'futbol'))) : sanitized;
   } catch (e) {
     return [];
   }
@@ -471,9 +480,13 @@ export function savePrediction(matchData, probabilities, aiAnalysis, recommended
  * todas las oportunidades que alcancen Unanimidad 3/3 del Tribunal de Consenso.
  */
 export function autoSaveUnanimousPicks(opportunities = [], sport = 'futbol') {
-  const unanimousOpps = opportunities.filter(opp =>
-    opp && opp.tier !== 3 && (opp.consensus?.votesPassed === 3 || opp.consensus?.isUnanimous === true)
-  );
+  const unanimousOpps = opportunities.filter(opp => {
+    if (!opp || opp.tier === 3) return false;
+    const p = (opp.pick || '').toLowerCase();
+    const t = (opp.type || '').toLowerCase();
+    if (p.includes('tiros de esquina') || p.includes('córners') || p.includes('corner') || t.includes('córners')) return false;
+    return opp.consensus?.votesPassed === 3 || opp.consensus?.isUnanimous === true;
+  });
 
   let savedCount = 0;
   const cloudPayload = [];
