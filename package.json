@@ -9,6 +9,8 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "alert:telegram": "node scripts/alertEngine.js",
+    "audit:nightly": "node scripts/auditNightly.mjs",
+    "ledger:summary": "node scripts/closePick.mjs --summary",
     "backtest": "node scripts/backtest.js"
   },
   "dependencies": {

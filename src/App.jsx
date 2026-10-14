@@ -2975,35 +2975,43 @@ export default function App() {
                   {topParley.length >= 2 && (
                     <div style={{ background: isBlindado ? "linear-gradient(135deg, #020617, #064e3b)" : "linear-gradient(135deg, #020617, #312e81)", borderRadius: 16, border: `2px solid ${isBlindado ? '#10b981' : '#6366f1'}`, overflow: "hidden", boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.5)" }}>
                   
-                  {/* Header con Switch de Modo */}
-                  <div style={{ background: isBlindado ? "#064e3b" : "#1e1b4b", padding: "16px 24px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${isBlindado ? '#047857' : '#4338ca'}`, flexWrap: "wrap", gap: 12 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                      <div style={{ fontSize: 28 }}>{isBlindado ? '🛡️' : '🚀'}</div>
-                      <div>
-                        <h3 style={{ margin: 0, color: "#fff", fontSize: 18, fontWeight: 900, letterSpacing: 0.5 }}>
-                          {isBlindado ? 'Parley Blindado (Alta Efectividad 75%+)' : 'Parley de Alto Rendimiento (Max EV+)'}
-                        </h3>
-                        <div style={{ fontSize: 12, color: isBlindado ? "#a7f3d0" : "#c7d2fe", marginTop: 2 }}>
-                          {isBlindado 
-                            ? 'Selección de altísima probabilidad (Doble Oportunidad, DNB o F5) para duplicar la banca con mínimo riesgo.'
-                            : 'Combinada buscando el mayor desajuste de cuotas contra Las Vegas para maximizar el retorno de inversión.'}
+                    {/* Header con Switch de Modo */}
+                    <div style={{ background: isBlindado ? "#064e3b" : "#1e1b4b", padding: "16px 24px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${isBlindado ? '#047857' : '#4338ca'}`, flexWrap: "wrap", gap: 12 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                        <div style={{ fontSize: 28 }}>{isBlindado ? '🛡️' : '🚀'}</div>
+                        <div>
+                          <h3 style={{ margin: 0, color: "#fff", fontSize: 18, fontWeight: 900, letterSpacing: 0.5 }}>
+                            {isBlindado ? 'Combinada de Coberturas Protegidas (Doble Oportunidad & F5)' : 'Combinada de Alto Rendimiento (Max EV+)'}
+                          </h3>
+                          <div style={{ fontSize: 12, color: isBlindado ? "#a7f3d0" : "#c7d2fe", marginTop: 2 }}>
+                            {isBlindado 
+                              ? 'Combina selecciones de alta probabilidad individual (Doble Oportunidad 1X/X2 o F5 MLB) con gestión de micro-stake.'
+                              : 'Combinada buscando el mayor desajuste de cuotas contra Las Vegas con riesgo recreativo.'}
+                          </div>
                         </div>
+                      </div>
+
+                      <div style={{ display: "flex", gap: 6, background: "#0b0f19", padding: "4px", borderRadius: 8, border: "1px solid #1e293b" }}>
+                        <button
+                          onClick={() => setParleyMode('blindado')}
+                          style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: isBlindado ? "#10b981" : "transparent", color: isBlindado ? "#fff" : "#94a3b8", fontWeight: 800, fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+                          🛡️ Cobertura Protegida
+                        </button>
+                        <button
+                          onClick={() => setParleyMode('alto_rendimiento')}
+                          style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: !isBlindado ? "#6366f1" : "transparent", color: !isBlindado ? "#fff" : "#94a3b8", fontWeight: 800, fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+                          🚀 Alto Rendimiento
+                        </button>
                       </div>
                     </div>
 
-                    <div style={{ display: "flex", gap: 6, background: "#0b0f19", padding: "4px", borderRadius: 8, border: "1px solid #1e293b" }}>
-                      <button
-                        onClick={() => setParleyMode('blindado')}
-                        style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: isBlindado ? "#10b981" : "transparent", color: isBlindado ? "#fff" : "#94a3b8", fontWeight: 800, fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
-                        🛡️ Blindado (75%+)
-                      </button>
-                      <button
-                        onClick={() => setParleyMode('alto_rendimiento')}
-                        style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: !isBlindado ? "#6366f1" : "transparent", color: !isBlindado ? "#fff" : "#94a3b8", fontWeight: 800, fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
-                        🚀 Alto Rendimiento
-                      </button>
+                    {/* Advertencia Cuantitativa de Probabilidad Conjunta */}
+                    <div style={{ background: "rgba(245, 158, 11, 0.08)", borderBottom: "1px solid rgba(245, 158, 11, 0.2)", padding: "10px 24px", display: "flex", alignItems: "center", gap: 10, fontSize: 12, color: "#fcd34d" }}>
+                      <span>⚠️</span>
+                      <div>
+                        <b>Auditoría Cuantitativa:</b> Probabilidad real conjunta estimada: <b>{parleyProb.toFixed(1)}%</b>. En combinadas, las probabilidades y el margen del casino se multiplican. Juega únicamente como jugada secundaria recreativa (Stake máx. 0.5u).
+                      </div>
                     </div>
-                  </div>
                   
                   <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16 }}>
                     {topParley.map((pick, i) => (

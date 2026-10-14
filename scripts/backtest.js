@@ -360,60 +360,65 @@ async function backtestMlb(dateList) {
             market: { current: odds.closingHome || '1.85' }
           };
 
-          const consensus = evaluateEnsembleConsensus(matchObj, sabers, mc, learned);
-
-          const f5Home = parseFloat(sabers.f5?.homeMl || 50);
-          const f5Away = parseFloat(sabers.f5?.awayMl || 50);
-          const fullHome = parseFloat(sabers.homeWin || 50);
-          const fullAway = parseFloat(sabers.awayWin || 50);
-
-          let candidatePick = null;
-          let pickType = '';
-          let placedOdds = 1.85;
-          let closingOdds = 1.85;
-          let isWon = false;
-          let isPush = false;
-
-          // Regla F5 vs Full Game ML
+          // Regla F5 vs Full Game ML con cuotas reales de mercado
           if (f5H !== null && f5A !== null && (f5Home >= 60 || f5Away >= 60)) {
             const isH = f5Home >= f5Away;
             const chosen = isH ? homeTeam : awayTeam;
+            const realOdds = isH ? odds.closingHome : odds.closingAway;
+            if (!realOdds) continue;
             candidatePick = `${chosen} F5 Moneyline`;
             pickType = 'F5 MLB';
-            placedOdds = 1.80;
-            closingOdds = isH ? (odds.closingHome || 1.80) : (odds.closingAway || 1.80);
+            placedOdds = realOdds;
+            closingOdds = realOdds;
 
             if (f5H === f5A) isPush = true;
             else isWon = isH ? (f5H > f5A) : (f5A > f5H);
           } else if (fullHome >= 57 || fullAway >= 57) {
             const isH = fullHome >= fullAway;
             const chosen = isH ? homeTeam : awayTeam;
+            const realOdds = isH ? odds.closingHome : odds.closingAway;
+            if (!realOdds) continue;
             candidatePick = `${chosen} Moneyline (ML)`;
             pickType = 'Moneyline';
-            placedOdds = isH ? (odds.closingHome || 1.85) : (odds.closingAway || 1.95);
-            closingOdds = placedOdds;
+            placedOdds = realOdds;
+            closingOdds = realOdds;
             isWon = isH ? (homeScore > awayScore) : (awayScore > homeScore);
           }
 
-          if (candidatePick && (consensus.votesPassed >= 2)) {
+          if (candidatePick) {
             const winProb = Math.max(f5Home, f5Away, fullHome, fullAway);
-            const kelly = calculateKellyStake(winProb, placedOdds, 'mlb');
-            const clv = closingOdds && placedOdds ? Number((((placedOdds / closingOdds) - 1) * 100).toFixed(1)) : 0;
-
-            evaluatedPicks.push({
-              sport: 'MLB',
-              game: `${homeTeam} vs ${awayTeam}`,
-              date: d.date,
-              score: f5H !== null ? `F5: ${f5H}-${f5A} (Final: ${homeScore}-${awayScore})` : `Final: ${homeScore}-${awayScore}`,
-              pick: candidatePick,
+            const edgeVal = winProb - (1 / placedOdds) * 100;
+            const consensus = evaluateEnsembleConsensus({
+              sport: 'mlb',
+              match: matchObj,
+              probs: sabers,
+              mcStats: mc ? { stability: mc.stabilityScore || 70, risk: mc.riskLevel || 'Bajo', iterations: 1000 } : null,
               pickType,
+              pick: candidatePick,
               odds: placedOdds,
-              closingOdds,
-              clv,
-              consensus: `${consensus.votesPassed}/3`,
-              stake: Math.min(2.0, Math.max(1.0, parseFloat(kelly.stakeUnits || 1.0))),
-              result: isPush ? 'PUSH' : isWon ? 'WON' : 'LOST'
+              prob: winProb,
+              edgeVal
             });
+
+            if (consensus.votesPassed >= 2) {
+              const kelly = calculateKellyStake(winProb, placedOdds, 'mlb');
+              const clv = closingOdds && placedOdds ? Number((((placedOdds / closingOdds) - 1) * 100).toFixed(1)) : 0;
+
+              evaluatedPicks.push({
+                sport: 'MLB',
+                game: `${homeTeam} vs ${awayTeam}`,
+                date: d.date || d.iso || '',
+                score: f5H !== null ? `F5: ${f5H}-${f5A} (Final: ${homeScore}-${awayScore})` : `Final: ${homeScore}-${awayScore}`,
+                pick: candidatePick,
+                pickType,
+                odds: placedOdds,
+                closingOdds,
+                clv,
+                consensus: `${consensus.votesPassed}/3`,
+                stake: Math.min(2.0, Math.max(1.0, parseFloat(kelly.stakeUnits || 1.0))),
+                result: isPush ? 'PUSH' : isWon ? 'WON' : 'LOST'
+              });
+            }
           }
         }
       }
@@ -462,7 +467,24 @@ async function backtestSoccer(dateList) {
           const hStats = standings[home.team?.id] || knownSoccerTeams[homeTeam.toLowerCase()] || { xG: "1.50", elo: 1500 };
           const aStats = standings[away.team?.id] || knownSoccerTeams[awayTeam.toLowerCase()] || { xG: "1.20", elo: 1450 };
 
-          const odds = extractOddsFromEspn(comp.odds?.[0]);
+          let oddsObj = comp.odds?.[0];
+          if (!oddsObj || (!oddsObj.moneyline && !oddsObj.total)) {
+            try {
+              const sRes = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${l.code}/summary?event=${ev.id}`);
+              if (sRes.ok) {
+                const sData = await sRes.json();
+                oddsObj = sData.pickcenter?.[0] || sData.odds?.[0] || oddsObj;
+              }
+            } catch (e) {}
+          }
+
+          const odds = extractOddsFromEspn(oddsObj);
+          
+          // PASO 1 AUDITORÍA: CERO CUOTAS SINTÉTICAS
+          // Descartar automáticamente partidos que no tengan cuotas reales de mercado
+          const hasRealOdds = Boolean(odds.closingHome || odds.closingAway || odds.closingOver);
+          if (!hasRealOdds) continue;
+
           const learned = getLearnedAdjustmentsForMatch(homeTeam, awayTeam);
 
           // Poisson
@@ -477,12 +499,10 @@ async function backtestSoccer(dateList) {
           const matchObj = {
             id: ev.id,
             sport: 'futbol',
-            home: { name: homeTeam, elo: hStats.elo },
-            away: { name: awayTeam, elo: aStats.elo },
-            market: { current: odds.closingHome || '1.85' }
+            home: { name: homeTeam, elo: hStats.elo, xG: hStats.xG },
+            away: { name: awayTeam, elo: aStats.elo, xG: aStats.xG },
+            market: { current: odds.closingHome || odds.closingAway || '1.90' }
           };
-
-          const consensus = evaluateEnsembleConsensus(matchObj, probs, mc, learned);
 
           const hWin = parseFloat(probs.homeWin);
           const aWin = parseFloat(probs.awayWin);
@@ -491,60 +511,81 @@ async function backtestSoccer(dateList) {
 
           let candidatePick = null;
           let pickType = '';
-          let placedOdds = 1.85;
-          let closingOdds = 1.85;
+          let placedOdds = null;
+          let closingOdds = null;
           let isWon = false;
           let isPush = false;
 
-          // Reglas de Pick de Fútbol
+          // Reglas Cuantitativas de Pick de Fútbol con Cuotas Reales de Mercado
           if (drWin >= 26 && (hWin >= 42 || aWin >= 42)) {
             const isH = hWin >= aWin;
             const chosen = isH ? homeTeam : awayTeam;
+            const sideOdds = isH ? odds.closingHome : odds.closingAway;
+            const drawOdds = odds.closingDraw || 3.30;
+            if (!sideOdds) continue;
+            // Derivación de Doble Oportunidad desde cuotas reales de bookmaker
+            const mktDC = Number((1 / ((1 / sideOdds) + (1 / drawOdds))).toFixed(2));
+            if (isNaN(mktDC) || mktDC < 1.25 || mktDC > 2.20) continue;
             candidatePick = `${chosen} o Empate (${isH ? '1X' : 'X2'})`;
             pickType = 'Doble Oportunidad';
-            placedOdds = isH ? parseFloat(probs.doubleChance.odds1X) : parseFloat(probs.doubleChance.oddsX2);
-            closingOdds = placedOdds;
+            placedOdds = mktDC;
+            closingOdds = mktDC;
             isWon = isH ? (homeScore >= awayScore) : (awayScore >= homeScore);
-          } else if (hWin >= 56) {
+          } else if (hWin >= 56 && odds.closingHome) {
             candidatePick = `Victoria ${homeTeam}`;
             pickType = '1X2';
-            placedOdds = odds.closingHome || parseFloat(probs.fairHomeOdds || 1.80);
-            closingOdds = odds.closingHome || placedOdds;
+            placedOdds = odds.closingHome;
+            closingOdds = odds.closingHome;
             isWon = homeScore > awayScore;
-          } else if (aWin >= 54) {
+          } else if (aWin >= 54 && odds.closingAway) {
             candidatePick = `Victoria ${awayTeam}`;
             pickType = '1X2';
-            placedOdds = odds.closingAway || parseFloat(probs.fairAwayOdds || 1.85);
-            closingOdds = odds.closingAway || placedOdds;
+            placedOdds = odds.closingAway;
+            closingOdds = odds.closingAway;
             isWon = awayScore > homeScore;
-          } else if (o25 >= 58) {
+          } else if (o25 >= 58 && odds.closingOver) {
             candidatePick = 'Más de 2.5 Goles';
             pickType = 'Totales Goles';
-            placedOdds = odds.closingOver || 1.85;
-            closingOdds = placedOdds;
+            placedOdds = odds.closingOver;
+            closingOdds = odds.closingOver;
             isWon = (homeScore + awayScore) > 2;
           }
 
-          if (candidatePick && (consensus.votesPassed >= 2)) {
-            const winProb = Math.max(hWin, aWin, o25);
-            const kelly = calculateKellyStake(winProb, placedOdds, 'futbol');
-            const clv = closingOdds && placedOdds ? Number((((placedOdds / closingOdds) - 1) * 100).toFixed(1)) : 0;
-
-            evaluatedPicks.push({
-              sport: 'Fútbol',
-              league: l.name,
-              game: `${homeTeam} vs ${awayTeam}`,
-              date: d.iso,
-              score: `${homeTeam} ${homeScore} - ${awayScore} ${awayTeam}`,
-              pick: candidatePick,
+          if (candidatePick && placedOdds) {
+            const winProb = pickType === 'Doble Oportunidad' ? (hWin >= aWin ? (hWin + drWin) : (aWin + drWin)) : Math.max(hWin, aWin, o25);
+            const edgeVal = winProb - (1 / placedOdds) * 100;
+            const consensus = evaluateEnsembleConsensus({
+              sport: 'futbol',
+              match: matchObj,
+              probs,
+              mcStats: mc ? { stability: mc.stabilityScore || 70, risk: mc.riskLevel || 'Bajo', iterations: 1000 } : null,
               pickType,
-              odds: Number(placedOdds.toFixed(2)),
-              closingOdds: Number(closingOdds.toFixed(2)),
-              clv,
-              consensus: `${consensus.votesPassed}/3`,
-              stake: Math.min(2.0, Math.max(1.0, parseFloat(kelly.stakeUnits || 1.0))),
-              result: isWon ? 'WON' : 'LOST'
+              pick: candidatePick,
+              odds: placedOdds,
+              prob: winProb,
+              edgeVal
             });
+
+            if (consensus.votesPassed >= 2) {
+              const kelly = calculateKellyStake(winProb, placedOdds, 'futbol');
+              const clv = closingOdds && placedOdds ? Number((((placedOdds / closingOdds) - 1) * 100).toFixed(1)) : 0;
+
+              evaluatedPicks.push({
+                sport: 'Fútbol',
+                league: l.name,
+                game: `${homeTeam} vs ${awayTeam}`,
+                date: d.iso,
+                score: `${homeTeam} ${homeScore} - ${awayScore} ${awayTeam}`,
+                pick: candidatePick,
+                pickType,
+                odds: Number(placedOdds.toFixed(2)),
+                closingOdds: Number(closingOdds.toFixed(2)),
+                clv,
+                consensus: `${consensus.votesPassed}/3`,
+                stake: Math.min(2.0, Math.max(1.0, parseFloat(kelly.stakeUnits || 1.0))),
+                result: isWon ? 'WON' : 'LOST'
+              });
+            }
           }
         }
       } catch (e) {}

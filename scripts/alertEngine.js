@@ -135,6 +135,106 @@ function saveLocalCache(cache) {
 }
 
 /**
+ * Registra inmutablemente un pick en data/pick_ledger.jsonl en disco para auditoría permanente
+ */
+export function recordPickToLedger(pick, effectiveStake = 1.0) {
+  try {
+    const dataDir = path.join(__dirname, '..', 'data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    const ledgerFile = path.join(dataDir, 'pick_ledger.jsonl');
+
+    let exists = false;
+    if (fs.existsSync(ledgerFile)) {
+      const lines = fs.readFileSync(ledgerFile, 'utf-8').split('\n').filter(Boolean);
+      for (const line of lines) {
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed.id === pick.id) {
+            exists = true;
+            break;
+          }
+        } catch (e) {}
+      }
+    }
+
+    if (!exists) {
+      const entry = {
+        id: pick.id,
+        timestamp: new Date().toISOString(),
+        sport: pick.sport || 'Deporte',
+        league: pick.league || pick.sport || 'General',
+        game: pick.game || `${pick.match?.home?.name || 'Local'} vs ${pick.match?.away?.name || 'Visitante'}`,
+        gameDate: pick.gameDate || new Date().toISOString(),
+        pick: pick.pick,
+        tier: pick.isTopJoya ? 'TIER_1_VIP' : (pick.isWhalePick ? 'TIER_1_ESTELAR' : 'TIER_2_ACTION'),
+        type: pick.type || 'Apuesta',
+        placedOdds: parseFloat(pick.odds) || 1.90,
+        closingOdds: null,
+        clvPct: null,
+        prob: parseFloat(pick.prob) || 60.0,
+        stakeUnits: parseFloat(effectiveStake) || 1.0,
+        consensus: `${pick.consensus?.votesPassed || 3}/3`,
+        source: 'telegram_alert',
+        status: 'PENDING',
+        result: null,
+        score: null,
+        pnlUnits: null
+      };
+      fs.appendFileSync(ledgerFile, JSON.stringify(entry) + '\n', 'utf-8');
+      console.log(`📝 Pick [${pick.id}] asentado en data/pick_ledger.jsonl`);
+    }
+  } catch (err) {
+    console.error('Error registrando pick en pick_ledger.jsonl:', err.message);
+  }
+}
+
+/**
+ * Actualiza el resultado oficial y métricas CLV de un pick cerrado en data/pick_ledger.jsonl
+ */
+export function updatePickLedgerResult(entry) {
+  try {
+    const dataDir = path.join(__dirname, '..', 'data');
+    const ledgerFile = path.join(dataDir, 'pick_ledger.jsonl');
+    if (!fs.existsSync(ledgerFile)) return;
+
+    const lines = fs.readFileSync(ledgerFile, 'utf-8').split('\n').filter(Boolean);
+    let modified = false;
+    const updatedLines = lines.map(line => {
+      try {
+        const item = JSON.parse(line);
+        if (item.id === entry.id) {
+          modified = true;
+          const res = (entry.status || '').toUpperCase();
+          const cleanResult = res === 'WON' ? 'WON' : (res === 'VOID' ? 'PUSH' : 'LOST');
+          return JSON.stringify({
+            ...item,
+            status: 'CLOSED',
+            result: cleanResult,
+            score: (entry.homeScore !== undefined && entry.awayScore !== undefined) ? `${entry.homeScore}-${entry.awayScore}` : (entry.scoreDisplay || item.score || ''),
+            closingOdds: entry.closingOdds ? parseFloat(entry.closingOdds) : (item.closingOdds || item.placedOdds),
+            clvPct: entry.clvPct !== null && entry.clvPct !== undefined ? parseFloat(entry.clvPct) : (item.clvPct || 0),
+            pnlUnits: entry.netUnits !== undefined ? Number(entry.netUnits) : (item.pnlUnits || 0),
+            closedAt: new Date().toISOString()
+          });
+        }
+        return line;
+      } catch (e) {
+        return line;
+      }
+    });
+
+    if (modified) {
+      fs.writeFileSync(ledgerFile, updatedLines.join('\n') + '\n', 'utf-8');
+      console.log(`🏁 Pick [${entry.id}] actualizado a CLOSED en data/pick_ledger.jsonl`);
+    }
+  } catch (err) {
+    console.error('Error actualizando pick en pick_ledger.jsonl:', err.message);
+  }
+}
+
+/**
  * Lee el Ledger persistente desde la nube de Telegram (comprimido con Deflate + Base64)
  */
 export async function loadCloudLedger() {
@@ -1843,6 +1943,8 @@ export async function runDailyTelegramAudit(options = {}) {
         };
         providedCache[entry.id] = updatedEntry;
         ledgerModified = true;
+        // PASO 2 & 3: Sincronización automática de resultados cerrados al ledger en disco
+        updatePickLedgerResult(updatedEntry);
 
         const sportCode = (updatedEntry.sport === 'Fútbol' || updatedEntry.sport === 'futbol') ? 'futbol' : updatedEntry.sport.toLowerCase();
         updateDynamicElo(sportCode, updatedEntry.homeName, updatedEntry.awayName, updatedEntry.homeScore, updatedEntry.awayScore);
@@ -2314,6 +2416,29 @@ export async function runAlertEngine(options = {}) {
 
   console.log(`📢 Enviando ${toSend.length} nueva(s) selección(es) Élite con Consenso a Telegram...`);
 
+  // PASO 4: Enviar primero el Menú Resumen Ejecutivo del Slate si hay 2 o más selecciones
+  if (toSend.length >= 2) {
+    const summaryLines = toSend.map((p, idx) => {
+      const isProp = isPlayerIndividualProp(p);
+      const tierBadge = idx === 0 ? '💎 [VIP]' : (isProp ? '⚡ [PROP]' : '🎯 [COBERTURA]');
+      return `${idx + 1}. ${tierBadge} *${p.sport}:* ${p.game}\n   👉 \`${p.pick}\` @ \`${p.odds}\``;
+    });
+
+    const cdmxNow = new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'America/Mexico_City' });
+    const slateHeader = [
+      `🚀 *STATS-AI PRO — SLATE OFICIAL [${isNightShift ? 'EDICIÓN NOCTURNA' : 'JORNADA ACTIVA'}]* 🚀`,
+      `📅 *${cdmxNow.toUpperCase()}* | CDMX`,
+      `🔬 _Calibración Monte Carlo (10,000 Sims) & Consenso Tripartito_`,
+      ``,
+      `📊 *RESUMEN DEL SLATE (${toSend.length} SELECCIONES ACTIVAS):*`,
+      ...summaryLines,
+      ``,
+      `💼 _A continuación el análisis cuantitativo individual de cada selección: 👇_`
+    ].join('\n');
+
+    await sendTelegramMessage(slateHeader, isDryRun);
+  }
+
   let sentCount = 0;
   for (const pick of toSend) {
     let timeStr = 'Hoy';
@@ -2341,9 +2466,7 @@ export async function runAlertEngine(options = {}) {
     let effectiveStake = parseFloat(pick.consensus?.recommendedStake);
     if (isNaN(effectiveStake)) effectiveStake = isPickProp ? (isPickElite ? 1.5 : 1.0) : 1.5;
 
-    // ACCIÓN 3.B: FILTRO INSTITUCIONAL PARA STAKES >= 1.0u EN MERCADOS DE EQUIPO
-    // Si no cuenta con RLM favorable ni estabilidad Monte Carlo >= 75% con Unanimidad 3/3,
-    // se ajusta prudencialmente a 0.7u para proteger la banca
+    // Ajuste institucional de Kelly para proteger banca
     let stakeLabel = pick.consensus?.recommendedStake || `${effectiveStake.toFixed(1)} Unidades`;
     if (!isPickProp && effectiveStake >= 1.0 && !hasRlm && !isHighStabilityUnanimous) {
       effectiveStake = 0.7;
@@ -2364,13 +2487,15 @@ export async function runAlertEngine(options = {}) {
     
     let headerTitle;
     if (isTopJoya) {
-      headerTitle = `💎 *LA JOYA DEL DÍA — MÁXIMA CERTEZA (PICK ESTELAR)* 💎\n🔬 *CALIBRACIÓN MONTE CARLO & CONSENSO 3v1*`;
+      headerTitle = `💎 *SELECCIÓN ESTELAR VIP — MÁXIMA VENTAJA CUANTITATIVA (+EV)* 💎\n🔬 *CALIBRACIÓN MONTE CARLO & CONSENSO 3v1*`;
     } else if (isNightShift) {
       headerTitle = `🌙 *ALERTA NOCTURNA — JORNADA EUROPEA TEMPRANERA* 🌙\n🔬 *CALIBRACIÓN MONTE CARLO & CONSENSO 3v1*`;
     } else if (isSharpRlm) {
       headerTitle = `🚨 *SELECCIÓN SHARP VIP: DINERO PROFESIONAL (RLM)* 🚨\n💼 *RESPALDO INSTITUCIONAL & CONSENSO 3v1*`;
+    } else if (isPickProp) {
+      headerTitle = `⚡ *PLAYER PROP SABERMÉTRICO — MICRO-VENTAJA* ⚡\n🔬 *ANÁLISIS DE VOLUMEN INDIVIDUAL & RIVAL*`;
     } else {
-      headerTitle = `🎯 *ALERTA DE VALOR CUANTITATIVO — TIER 1* 🎯\n🔬 *CALIBRACIÓN MONTE CARLO & CONSENSO 3v1*`;
+      headerTitle = `🎯 *RADAR DE ACCIÓN & COBERTURAS — ALTA PROBABILIDAD* 🎯\n🔬 *CALIBRACIÓN MONTE CARLO & CONSENSO 3v1*`;
     }
 
     const rlmBlock = pick.consensus?.rlmInfo?.isRlmDetected
@@ -2381,20 +2506,15 @@ export async function runAlertEngine(options = {}) {
       ? [`🧩 *Sinergia Bivariada:* \`${pick.correlationNote}\``, ``]
       : [];
 
-    // Clave oculta de certeza: Selecciones Confirmadas VIP (máximo 4 a 5 en el slate)
-    const isWhalePick = (pick.consensus?.votesPassed === 3) && (
-      isSharpRlm || 
-      (pick.mcStats?.stability >= 75) || 
-      (parseFloat(pick.prob) >= 62.0)
-    );
-    
     let selectionLabel;
     if (isTopJoya) {
-      selectionLabel = `💎 *SELECCIÓN ESTELAR CONFIRMADA (LA JOYA):*`;
-    } else if (isWhalePick) {
-      selectionLabel = `📌 *SELECCIÓN CONFIRMADA (MÁXIMA CERTEZA VIP):*`;
+      selectionLabel = `💎 *SELECCIÓN ESTELAR CONFIRMADA:*`;
+    } else if (isSharpRlm || pick.consensus?.votesPassed === 3) {
+      selectionLabel = `📌 *SELECCIÓN OFICIAL VIP (+EV):*`;
+    } else if (isPickProp) {
+      selectionLabel = `⚡ *PROPS SABERMÉTRICO RECOMENDADO:*`;
     } else {
-      selectionLabel = `🔍 *SELECCIÓN RECOMENDADA (VALOR CON COBERTURA):*`;
+      selectionLabel = `🔍 *SELECCIÓN CON COBERTURA PROTEGIDA:*`;
     }
 
     const message = [
@@ -2422,6 +2542,9 @@ export async function runAlertEngine(options = {}) {
     const ok = await sendTelegramMessage(message, isDryRun);
     if (ok) {
       sentCount++;
+      // PASO 2 AUDITORÍA: Persistencia automática e inmutable en disco
+      recordPickToLedger(pick, effectiveStake);
+
       sentCache[pick.id] = {
         ...(sentCache[pick.id] || {}),
         id: pick.id,
@@ -2508,6 +2631,7 @@ export async function registerPortalUnanimousPicks(picks = []) {
         reportedInTelegram: false,
         timestamp: Date.now()
       };
+      recordPickToLedger(sentCache[id], sentCache[id].stakeUnits);
       registeredCount++;
     }
   }

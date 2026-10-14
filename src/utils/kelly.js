@@ -133,14 +133,7 @@ export function formatDynamicStake({ prob, odds, votesPassed = 3, isProp = false
   const kelly = calculateKellyStake(prob, odds, fraction, cap);
 
   if (kelly.rawUnits <= 0 || parseFloat(kelly.edge) <= 0) {
-    if (isProp) {
-      return (isEliteProp || votesPassed === 3)
-        ? '1.0 Unidad (Player Prop Élite Protegido)'
-        : '0.5 Unidades (Player Prop Prudencial)';
-    }
-    return votesPassed === 3 
-      ? '1.0 Unidad (Stake Fijo de Protección)' 
-      : '0.5 Unidades (Stake Prudente de Cobertura)';
+    return '0.0 Unidades (Veto Cuantitativo — Sin Ventaja Matemática +EV)';
   }
 
   return `${kelly.units} Unidades (${fractionLabel} | Edge +${kelly.edge}%)`;

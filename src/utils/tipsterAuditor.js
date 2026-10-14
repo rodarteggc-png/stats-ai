@@ -167,14 +167,14 @@ export function evaluateMotivationalLeverage(match = {}, pick = '') {
   const isAwayPicked = pickStr.includes((away.name || '').toLowerCase());
 
   // Alerta de equipo desmotivado en caída libre
-  if (isHomePicked && homeStreak.includes('L5') || homeStreak.includes('L6')) {
+  if (isHomePicked && (homeStreak.includes('L5') || homeStreak.includes('L6'))) {
     return {
       isLeverageTrap: true,
       motivationNote: `⚠️ Crisis de Confianza: ${home.name} arrastra 5+ derrotas consecutivas. Moral y química comprometidas.`
     };
   }
 
-  if (isAwayPicked && awayStreak.includes('L5') || awayStreak.includes('L6')) {
+  if (isAwayPicked && (awayStreak.includes('L5') || awayStreak.includes('L6'))) {
     return {
       isLeverageTrap: true,
       motivationNote: `⚠️ Crisis de Confianza: ${away.name} arrastra 5+ derrotas consecutivas fuera de casa. Moral comprometida.`

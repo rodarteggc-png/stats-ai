@@ -26,3 +26,4 @@ dist-ssr
 .env*
 !.env.example
 scripts/.sent_alerts.json
+scratch/
