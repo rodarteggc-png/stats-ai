@@ -1372,7 +1372,7 @@ export default function App() {
       opportunities = opportunities.filter((v) => {
         if (v.tier === 3 || v.pick.includes('⛔')) return false;
         if (v.consensus && v.consensus.votesPassed < 2) return false;
-        if (v.consensus?.rlmInfo?.isTrapForPick) return false; // Veto preventivo de trampa institucional
+        if (v.consensus?.rlmInfo?.isTrapForPick || v.consensus?.rlmInfo?.isVetoedByMarket) return false; // Veto preventivo de trampa institucional o flujo adverso
 
         const homeName = v.match?.home?.name || 'unknown';
         const gamePicks = gamePicksTracker.get(homeName) || [];

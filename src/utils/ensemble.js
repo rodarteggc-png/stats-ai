@@ -5,7 +5,7 @@
 // Voto 2: Prueba de Estrés Estocástica (Monte Carlo 10,000 Simulaciones)
 // Voto 3: Filtro de Mercado y Memoria de Fallos Históricos
 
-import { getAllLessons } from '../services/history.js';
+import { getAllLessons, isTeamMatch } from '../services/history.js';
 import { formatDynamicStake, calculateKellyStake } from './kelly.js';
 import { detectReverseLineMovement } from './rlmDetector.js';
 
