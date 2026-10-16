@@ -84,7 +84,41 @@ export function evaluateEnsembleConsensus({
         vote1Reason = `Cuota fuera de rango rentable (${numericOdds.toFixed(2)}) o cobertura insuficiente.`;
       }
     } else if (isTotalsPick) {
-      if (parseFloat(prob) >= 57 || totalXg >= 2.75 || edgeVal >= 4.0) {
+      const isOver25 = (typeof pick === 'string' && (pick.toLowerCase().includes('más de 2.5') || pick.toLowerCase().includes('over 2.5'))) || pTypeUpper.includes('OVER 2.5');
+      const hName = (match.home?.name || '').toLowerCase();
+      const aName = (match.away?.name || '').toLowerCase();
+      const lName = (match.league || '').toLowerCase();
+
+      const isDerbyOrClasico = (
+        (hName.includes('atlas') && aName.includes('guadalajara')) ||
+        (hName.includes('guadalajara') && aName.includes('atlas')) ||
+        (hName.includes('américa') && aName.includes('guadalajara')) ||
+        (hName.includes('guadalajara') && aName.includes('américa')) ||
+        (hName.includes('cruz azul') && aName.includes('américa')) ||
+        (hName.includes('américa') && aName.includes('cruz azul')) ||
+        (hName.includes('tigres') && aName.includes('monterrey')) ||
+        (hName.includes('monterrey') && aName.includes('tigres')) ||
+        (hName.includes('real madrid') && (aName.includes('villarreal') || aName.includes('atlético') || aName.includes('barcelona'))) ||
+        (hName.includes('barcelona') && (aName.includes('real madrid') || aName.includes('espanyol') || aName.includes('atlético'))) ||
+        (hName.includes('boca') && aName.includes('river')) ||
+        (hName.includes('river') && aName.includes('boca')) ||
+        (hName.includes('inter') && (aName.includes('milan') || aName.includes('juventus'))) ||
+        (hName.includes('milan') && (aName.includes('inter') || aName.includes('juventus'))) ||
+        (hName.includes('roma') && aName.includes('lazio')) ||
+        (hName.includes('lazio') && aName.includes('roma')) ||
+        (hName.includes('arsenal') && (aName.includes('tottenham') || aName.includes('chelsea'))) ||
+        (hName.includes('tottenham') && aName.includes('arsenal'))
+      );
+
+      const isDefensiveLeague = lName.includes('liga mx') || lName.includes('femenil') || lName.includes('serie a') || lName.includes('ligue 1');
+
+      if (isOver25 && isDerbyOrClasico) {
+        vote1Passed = false;
+        vote1Reason = `⛔ Veto Táctico Derbi/Clásico: 'Más de 2.5 Goles' vetado en duelos de máxima rivalidad. Bloques bajos y tensión táctica reducen el ritmo. Exige Más de 1.5 o 1X/X2.`;
+      } else if (isOver25 && isDefensiveLeague && numericOdds >= 2.00) {
+        vote1Passed = false;
+        vote1Reason = `⛔ Veto Liga Defensiva: 'Más de 2.5 Goles' a cuota ${numericOdds.toFixed(2)} (> 2.00) en liga de baja anotación. Falso valor con alta varianza negativa.`;
+      } else if (parseFloat(prob) >= 57 || totalXg >= 2.75 || edgeVal >= 4.0) {
         vote1Passed = true;
         vote1Reason = `Proyección de goles validada (${totalXg.toFixed(2)} xG combinados | Prob: ${parseFloat(prob || 60).toFixed(0)}%).`;
       } else {
@@ -136,12 +170,48 @@ export function evaluateEnsembleConsensus({
     const absSpread = Math.abs(spread);
     const keyEval = probs.keyEvaluation || {};
     const isTotalsNfl = pTypeUpper.includes('TOTALES') || pTypeUpper.includes('OVER') || pTypeUpper.includes('UNDER');
+    const pickStr = (typeof pick === 'string' ? pick : '').toLowerCase();
+
+    // CANDADO 1: VETO A LA LÍNEA TRAMPA (+2.5 / -2.5) EN NFL
+    const isSucker25Spread = !isTotalsNfl && (absSpread === 2.5 || pickStr.includes('+2.5') || pickStr.includes('-2.5'));
+    
+    // CANDADO 3: FILTRO ANTI-BLOWOUT EN PERROS INCOMPETENTES
+    const isUnderdogSpread = !isTotalsNfl && ((spread < 0 && awayCover >= homeCover) || (spread > 0 && homeCover >= awayCover));
+    const dogTeam = spread < 0 ? match.away : match.home;
+    const dogYpp = parseFloat(dogTeam?.ypp || dogTeam?.stats?.ypp || 5.0);
+    const dogEpa = parseFloat(dogTeam?.epa || dogTeam?.stats?.epa || 0.0);
+    const dogTurnover = parseFloat(dogTeam?.turnoverMargin || dogTeam?.stats?.turnoverMargin || 0);
+    const hasBlowoutRisk = isUnderdogSpread && (dogYpp < 4.65 || dogEpa < -0.12 || dogTurnover <= -5);
+
+    // CANDADO 4: VETO A UNDERS EN DOMOS CON LÍNEA PESADA
+    const isUnderNfl = isTotalsNfl && (pTypeUpper.includes('UNDER') || pickStr.includes('under'));
+    const stadiumName = (match.stadium?.name || match.stadium || match.weather?.stadium || '').toLowerCase();
+    const isDome = match.weather?.isDome === true || 
+                   stadiumName.includes('dome') || 
+                   stadiumName.includes('ford field') || 
+                   stadiumName.includes('allegiant') || 
+                   stadiumName.includes('sofi') || 
+                   stadiumName.includes('mercedes-benz') || 
+                   stadiumName.includes('att stadium') || 
+                   stadiumName.includes('lucas oil') || 
+                   stadiumName.includes('us bank') || 
+                   stadiumName.includes('state farm');
+    const vegasTotalNum = parseFloat(match.market?.overUnder || match.vegas?.overUnder || 45.5);
 
     // Veto preventivo a favoritos en spreads pesados (>= 7.5 puntos por gancho sobre TD y riesgo de Backdoor Cover)
     const isFavoriteCover = !isTotalsNfl && ((spread < 0 && homeCover >= awayCover) || (spread > 0 && awayCover >= homeCover));
     const isHeavySpread = absSpread >= 7.5;
 
-    if (isHeavySpread && isFavoriteCover) {
+    if (isSucker25Spread) {
+      vote1Passed = false;
+      vote1Reason = `⛔ Sucker Line Veto: Spread de 2.5 puntos (+2.5/-2.5) prohibido en NFL. El margen de 3 puntos (15.2% de partidos) rompe la cobertura. Exige línea en 3.0/3.5 o Moneyline directo.`;
+    } else if (hasBlowoutRisk) {
+      vote1Passed = false;
+      vote1Reason = `⛔ Blowout Risk Veto: Underdog con ataque inerte (YPP ${dogYpp} < 4.65 / EPA ${dogEpa}) o sangrado de pérdidas (${dogTurnover}). Riesgo extremo de derrota por 20+ puntos.`;
+    } else if (isUnderNfl && isDome && vegasTotalNum >= 47.0) {
+      vote1Passed = false;
+      vote1Reason = `⛔ Dome Pace Veto: 'UNDER' vetado en estadio techado (domo) con total alto (${vegasTotalNum} pts). Sin viento y alto ritmo de juego favorecen el over.`;
+    } else if (isHeavySpread && isFavoriteCover) {
       vote1Passed = false;
       vote1Reason = `⛔ Veto Preventivo NFL: Spread pesado con gancho (${absSpread} pts >= 7.5). Exige más de un TD y tiene alto riesgo de Backdoor Cover. No jugar al favorito.`;
     } else if (!isTotalsNfl && absSpread > 10.5) {
@@ -153,9 +223,6 @@ export function evaluateEnsembleConsensus({
     } else if (keyEval.trapWarning) {
       vote1Passed = true;
       vote1Reason = `Trampa de Medio Punto detectada en Las Vegas. Colchón de número clave a favor del Underdog (+${absSpread}).`;
-    } else if (keyEval.keyAlert) {
-      vote1Passed = true;
-      vote1Reason = `Oportunidad Clave en -2.5. Línea por debajo del número crítico 3.`;
     } else if (maxCover >= 56.5 || edgeVal >= 5.0) {
       vote1Passed = true;
       vote1Reason = `Diferencial de EPA/Net YPP otorga ${maxCover.toFixed(1)}% de probabilidad de cubrir la línea (Edge: +${(maxCover - 52.4).toFixed(1)}%).`;
@@ -265,9 +332,30 @@ export function evaluateEnsembleConsensus({
     vote3Reason = `⛔ Falso Smart Money descartado: Cuota de longshot (${numericOdds.toFixed(2)} > 2.55) fuera de rango institucional.`;
   }
 
+  let isAggressiveSharpRlmTrap = false;
+
+  // 1b. CANDADO 5: VETO PREVENTIVO POR MOVIMIENTO ADVERSO DE MERCADO (Steam Contrario / Línea en Fuga)
+  const openOdds = parseFloat(mkt.open || (isHomeSidePick ? mkt.openHome : mkt.openAway) || 0);
+  const currentOdds = parseFloat(mkt.current || numericOdds || 0);
+  if (openOdds >= 1.25 && currentOdds >= openOdds * 1.035) {
+    vote3Passed = false;
+    isAggressiveSharpRlmTrap = true;
+    vote3Reason = `⛔ VETO DE FLUJO ADVERSO: Cuota depreciada de ${openOdds.toFixed(2)} a ${currentOdds.toFixed(2)} (+${((currentOdds/openOdds - 1)*100).toFixed(1)}%). El dinero profesional institucional entró en contra del pick.`;
+  }
+
+  // Veto si hay Steam institucional explícito a favor del rival
+  if (mkt.isSteamMove && mkt.steamTeam) {
+    const isSteamAgainstPick = (isHomeSidePick && !isTeamMatch(mkt.steamTeam, match.home?.name)) ||
+                               (isAwaySidePick && !isTeamMatch(mkt.steamTeam, match.away?.name));
+    if (isSteamAgainstPick) {
+      vote3Passed = false;
+      isAggressiveSharpRlmTrap = true;
+      vote3Reason = `⛔ VETO DE STEAM CONTRARIO: Fuerte entrada de dinero institucional sobre el rival (${mkt.steamTeam}). Flujo adverso directo.`;
+    }
+  }
+
   // 2. Detector Avanzado de Reverse Line Movement (RLM) y Flujo Institucional
   const rlm = detectReverseLineMovement({ sport, match, pick, pickType });
-  let isAggressiveSharpRlmTrap = false;
   
   if (rlm.isTrapForPick) {
     vote3Passed = false;
@@ -483,6 +571,10 @@ export function evaluateEnsembleConsensus({
     breakdown,
     recommendedStake,
     kellyData,
-    rlmInfo: rlm
+    rlmInfo: {
+      ...rlm,
+      isTrapForPick: rlm.isTrapForPick || isAggressiveSharpRlmTrap,
+      isVetoedByMarket: rlm.isVetoedByMarket || isAggressiveSharpRlmTrap
+    }
   };
 }
