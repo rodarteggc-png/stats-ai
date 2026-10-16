@@ -19,15 +19,42 @@ function poissonProbability(lambda, k) {
 /**
  * TAREA 1: Factor de ajuste Dixon-Coles para Poisson Bivariado
  * Corrige la subestimación de empates de baja anotación (0-0, 1-1).
- * Parámetro rho por defecto: rho = -0.13
- * 
- * Fórmulas:
- * - x=0, y=0: multiplicar por (1 - lambda * mu * rho)
- * - x=1, y=0: multiplicar por (1 + lambda * rho)
- * - x=0, y=1: multiplicar por (1 + mu * rho)
- * - x=1, y=1: multiplicar por (1 - rho)
- * - otros casos: multiplicar por 1.0
+ * Parámetro rho calibrado por liga deportiva:
+ * - Ligas de baja anotación / empates frecuentes (Liga MX, Serie A): rho ≈ -0.16
+ * - Ligas balanceadas / élite (Premier League, La Liga, UCL): rho ≈ -0.12
+ * - Ligas ofensivas y abiertas (Bundesliga, Eredivisie, MLS): rho ≈ -0.06
  */
+export const LEAGUE_RHO_MAP = {
+  'liga mx': -0.16,
+  'mexico': -0.16,
+  'serie a': -0.15,
+  'ligue 1': -0.15,
+  'argentina': -0.16,
+  'copa libertadores': -0.15,
+  'copa sudamericana': -0.15,
+  'premier league': -0.12,
+  'laliga': -0.12,
+  'la liga': -0.12,
+  'champions league': -0.11,
+  'uefa champions': -0.11,
+  'europa league': -0.11,
+  'conference league': -0.11,
+  'bundesliga': -0.06,
+  'eredivisie': -0.05,
+  'mls': -0.06,
+  'major league soccer': -0.06,
+  'primeira liga': -0.10
+};
+
+export function getCalibratedRhoForLeague(leagueName = '') {
+  if (!leagueName) return -0.13;
+  const norm = String(leagueName).toLowerCase().trim();
+  for (const [key, rhoVal] of Object.entries(LEAGUE_RHO_MAP)) {
+    if (norm.includes(key)) return rhoVal;
+  }
+  return -0.13;
+}
+
 export function dixonColesAdjustment(lambda1, lambda2, x, y, rho = -0.13) {
   if (x === 0 && y === 0) {
     return Math.max(0, 1 - (lambda1 * lambda2 * rho));
@@ -46,7 +73,7 @@ export function dixonColesAdjustment(lambda1, lambda2, x, y, rho = -0.13) {
 
 /**
  * Calcula la matriz de probabilidades de un partido usando Poisson Bivariado (Dixon-Coles),
- * Elo, Fatiga, Localía y Memoria IA.
+ * Elo, Fatiga, Localía y Memoria IA con calibración dinámica de rho por liga.
  */
 export function calculateMatchProbabilities(
   homeXG, awayXG, 
@@ -55,10 +82,12 @@ export function calculateMatchProbabilities(
   homePenalty = 0, awayPenalty = 0,
   maxGoals = 6,
   applyHomeAdvantage = false,
-  rho = -0.13
+  rho = -0.13,
+  leagueName = ''
 ) {
   let hXG = parseFloat(homeXG) || 1.25;
   let aXG = parseFloat(awayXG) || 1.10;
+  const effectiveRho = leagueName ? getCalibratedRhoForLeague(leagueName) : rho;
 
   // 1. Modificador ELO (Fuerza de Calendario calibrada: 100 pts Elo = 0.05 xG)
   const eloDiff = homeElo - awayElo;
@@ -104,8 +133,8 @@ export function calculateMatchProbabilities(
     for (let j = 0; j <= maxGoals; j++) {
       const baseProb = poissonProbability(hXG, i) * poissonProbability(aXG, j);
       
-      // Aplicar Poisson Bivariado con Dixon-Coles exacto (rho = -0.13)
-      const adjustment = dixonColesAdjustment(hXG, aXG, i, j, rho);
+      // Aplicar Poisson Bivariado con Dixon-Coles exacto calibrado por liga
+      const adjustment = dixonColesAdjustment(hXG, aXG, i, j, effectiveRho);
       const prob = baseProb * adjustment;
       
       exactScores[`${i}-${j}`] = prob;

@@ -5,6 +5,7 @@ import path from 'path';
 import zlib from 'zlib';
 import { fileURLToPath } from 'url';
 import { fetchDailySchedule, fetchClosingOddsForPick } from '../src/services/sportsApi.js';
+import { fetchPinnacleOdds } from '../src/services/oddsFeed.js';
 import { calculateMatchProbabilities } from '../src/utils/poisson.js';
 import { calculateMlbProbabilities, isExtremeAltitudePark, calculateMlbTotalProbabilities } from '../src/utils/sabermetrics.js';
 import { generateDailyMlbProps } from '../src/utils/mlbProps.js';
@@ -176,6 +177,8 @@ export function recordPickToLedger(pick, effectiveStake = 1.0) {
         prob: parseFloat(pick.prob) || 60.0,
         stakeUnits: parseFloat(effectiveStake) || 1.0,
         consensus: `${pick.consensus?.votesPassed || 3}/3`,
+        sharpBook: pick.sharpBookmaker || null,
+        isPinnacle: Boolean(pick.isPinnacle),
         source: 'telegram_alert',
         status: 'PENDING',
         result: null,
@@ -690,7 +693,11 @@ export function buildOpportunitiesAndTopSlate({
       m.home.xG, m.away.xG,
       m.home.elo, m.away.elo,
       m.home.daysRest, m.away.daysRest,
-      hPen, aPen
+      hPen, aPen,
+      6,
+      false,
+      -0.13,
+      m.league
     );
 
     const hWin = parseFloat(probs.homeWin);
@@ -1439,6 +1446,10 @@ export function buildOpportunitiesAndTopSlate({
   // ================= D. TRIBUNAL DE CONSENSO Y ORDENAMIENTO ESTRICTO POR EFECTIVIDAD =================
   rawOpportunities.forEach(opp => {
     opp.isToday = isMatchTodayInCdmx(opp.gameDate);
+    if (!opp.sharpBookmaker && (opp.match?.market?.sharpBookmaker || opp.match?.sharpBook)) {
+      opp.sharpBookmaker = opp.match.market?.sharpBookmaker || opp.match.sharpBook;
+      opp.isPinnacle = Boolean(opp.match.market?.isPinnacle);
+    }
     // Calibración Bayesiana de Platt por deporte para corregir sesgos de cola
     const rawP = parseFloat(opp.prob) || 60;
     const calibrated = applyPlattCalibration(rawP, opp.sport);
@@ -2241,6 +2252,96 @@ export async function runDailyTelegramAudit(options = {}) {
   };
 }
 
+/**
+ * Cruza los partidos de la programación con cuotas institucionales de Pinnacle / Bet365 en tiempo real.
+ */
+async function enrichMatchesWithSharpOdds(matches = [], sportKey = 'nfl') {
+  if (!matches || matches.length === 0) return matches;
+  try {
+    const sharpEvents = await fetchPinnacleOdds(sportKey);
+    if (!sharpEvents || sharpEvents.length === 0) return matches;
+
+    let enrichedCount = 0;
+    const enriched = matches.map(m => {
+      const hNorm = (m.home?.name || '').toLowerCase().trim();
+      const aNorm = (m.away?.name || '').toLowerCase().trim();
+
+      const matchedSharp = sharpEvents.find(s => {
+        const sh = (s.homeTeam || '').toLowerCase().trim();
+        const sa = (s.awayTeam || '').toLowerCase().trim();
+        return (sh.includes(hNorm) || hNorm.includes(sh)) && (sa.includes(aNorm) || aNorm.includes(sa));
+      });
+
+      if (!matchedSharp) return m;
+
+      enrichedCount++;
+      const market = { ...(m.market || {}) };
+      market.hasRealOdds = true;
+      market.sharpBookmaker = matchedSharp.bookmaker;
+      market.isPinnacle = matchedSharp.isPinnacle;
+
+      if (matchedSharp.moneyline?.home) {
+        market.homeOdds = matchedSharp.moneyline.home.toString();
+      }
+      if (matchedSharp.moneyline?.away) {
+        market.awayOdds = matchedSharp.moneyline.away.toString();
+      }
+      if (matchedSharp.moneyline?.draw) {
+        market.drawOdds = matchedSharp.moneyline.draw.toString();
+      }
+
+      const vegas = { ...(m.vegas || {}) };
+      if (matchedSharp.spread?.homePoint !== null && matchedSharp.spread?.homePoint !== undefined) {
+        vegas.spread = matchedSharp.spread.homePoint;
+        if (matchedSharp.spread.homeOdds) vegas.spreadHomeOdds = matchedSharp.spread.homeOdds.toString();
+        if (matchedSharp.spread.awayOdds) vegas.spreadAwayOdds = matchedSharp.spread.awayOdds.toString();
+      }
+      if (matchedSharp.totals?.line !== null && matchedSharp.totals?.line !== undefined) {
+        vegas.overUnder = matchedSharp.totals.line;
+        if (matchedSharp.totals.overOdds) vegas.overOdds = matchedSharp.totals.overOdds.toString();
+        if (matchedSharp.totals.underOdds) vegas.underOdds = matchedSharp.totals.underOdds.toString();
+      }
+
+      return {
+        ...m,
+        market,
+        vegas,
+        sharpValidated: true,
+        sharpBook: matchedSharp.bookmaker
+      };
+    });
+
+    if (enrichedCount > 0) {
+      console.log(`🏛️ [Sharp Feed] ${enrichedCount} partidos de ${sportKey.toUpperCase()} validados con cuotas de ${sharpEvents[0]?.bookmaker || 'Pinnacle/Bet365'}.`);
+    }
+    return enriched;
+  } catch (e) {
+    console.warn(`[Sharp Feed] Error consultando cuotas de ${sportKey}:`, e.message);
+    return matches;
+  }
+}
+
+async function enrichSoccerWithSharpOdds(soccerMatches = []) {
+  if (!soccerMatches || soccerMatches.length === 0) return soccerMatches;
+
+  const leaguesToCheck = new Set();
+  soccerMatches.forEach(m => {
+    const l = (m.league || '').toLowerCase();
+    if (l.includes('premier league')) leaguesToCheck.add('epl');
+    else if (l.includes('la liga') || l.includes('laliga')) leaguesToCheck.add('laliga');
+    else if (l.includes('champions league') || l.includes('uefa champions')) leaguesToCheck.add('champions');
+    else if (l.includes('liga mx')) leaguesToCheck.add('ligamx');
+    else if (l.includes('bundesliga')) leaguesToCheck.add('bundesliga');
+    else if (l.includes('serie a')) leaguesToCheck.add('seriea');
+  });
+
+  let currentMatches = [...soccerMatches];
+  for (const lKey of leaguesToCheck) {
+    currentMatches = await enrichMatchesWithSharpOdds(currentMatches, lKey);
+  }
+  return currentMatches;
+}
+
 // 5. MOTOR PRINCIPAL DE EVALUACIÓN Y DESPACHO A TELEGRAM
 export async function runAlertEngine(options = {}) {
   const isDryRun = options.dryRun || process.argv.includes('--dry-run');
@@ -2332,10 +2433,27 @@ export async function runAlertEngine(options = {}) {
     console.log(`⚽ Fútbol en ventana: ${soccerMatches.length} | ⚾ MLB: ${mlbMatches.length} | 🏈 NFL: ${nflMatches.length} | 🎓 NCAAF: ${ncaafMatches.length}`);
   }
 
+  // Enriquecimiento en tiempo real con cuotas institucionales de Pinnacle / Bet365
+  let enrichedNfl = nflMatches;
+  let enrichedMlb = mlbMatches;
+  let enrichedSoccer = soccerMatches;
+
+  try {
+    const [sharpNfl, sharpMlb] = await Promise.all([
+      enrichMatchesWithSharpOdds(nflMatches, 'nfl'),
+      enrichMatchesWithSharpOdds(mlbMatches, 'mlb')
+    ]);
+    enrichedNfl = sharpNfl;
+    enrichedMlb = sharpMlb;
+    enrichedSoccer = await enrichSoccerWithSharpOdds(soccerMatches);
+  } catch (err) {
+    console.warn('Aviso enriqueciendo cuotas sharp:', err.message);
+  }
+
   const { rawOpportunities, approvedOpps, topSlate } = buildOpportunitiesAndTopSlate({
-    soccerMatches,
-    mlbMatches,
-    nflMatches,
+    soccerMatches: enrichedSoccer,
+    mlbMatches: enrichedMlb,
+    nflMatches: enrichedNfl,
     ncaafMatches,
     maxPicksToSend,
     runtimePenalties: auditResult.runtimePenalties,
@@ -2530,7 +2648,7 @@ export async function runAlertEngine(options = {}) {
       ...(pick.tipsterAudit ? [pick.tipsterAudit.badgeTitle, `  _${pick.tipsterAudit.reason}_`, ``] : []),
       `📊 *Probabilidad Calibrada:* \`${pick.prob}\``,
       stabilityLine,
-      `💰 *Cuota de Mercado:* \`${pick.odds}\``,
+      `💰 *Cuota de Mercado:* \`${pick.odds}\`${pick.sharpBookmaker ? ` (${pick.sharpBookmaker}${pick.isPinnacle ? ' Sharp' : ''})` : ''}`,
       `📈 *Ventaja Cuantitativa:* *${pick.edgeStr}*`,
       ``,
       ...rlmBlock,

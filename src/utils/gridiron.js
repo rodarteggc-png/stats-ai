@@ -38,9 +38,11 @@ export const KEY_NUMBERS = [
  * @param {number} expectedHomeLead - Margen proyectado a favor del local (> 0 gana local)
  * @param {number} vegasHomeSpread - Línea de spread del local (ej: -3.5 favorito, +3.5 underdog)
  * @param {boolean} forHome - True para calcular cobertura del local, False para visitante
+ * @param {boolean} isCollege - True para colegial FBS, False para NFL
+ * @param {number} totalPoints - Total proyectado o línea Over/Under de Las Vegas
  * @returns {number} Probabilidad porcentual entre 5% y 95%
  */
-export function calculateSpreadCoverProbability(expectedHomeLead, vegasHomeSpread, forHome = true, isCollege = false) {
+export function calculateSpreadCoverProbability(expectedHomeLead, vegasHomeSpread, forHome = true, isCollege = false, totalPoints = 44.5) {
   const sigma = isCollege ? 16.5 : 13.45; // Desviación estándar: 16.5 en Colegial FBS / 13.45 en NFL
   const spread = parseFloat(vegasHomeSpread);
   const lead = parseFloat(expectedHomeLead);
@@ -50,20 +52,32 @@ export function calculateSpreadCoverProbability(expectedHomeLead, vegasHomeSprea
   // P(Local Cubre) = P(Margen > -vegasHomeSpread) = 1 - Φ((-spread - lead) / σ) = Φ((lead + spread) / σ)
   let homeCoverProb = normalCdf(lead + spread, 0, sigma);
 
-  // Calibración fina empírica en números clave
+  // Escalamiento analítico del peso de los números clave según el total de puntos (Over/Under).
+  // En duelos de baja anotación (< 40 pts), los números 3 y 7 representan una mayor densidad de probabilidad.
+  const tPts = parseFloat(totalPoints) || (isCollege ? 53.5 : 44.5);
+  const baseTotal = isCollege ? 53.5 : 44.5;
+  const totalScale = Math.min(1.35, Math.max(0.70, baseTotal / Math.max(30.0, tPts)));
+
+  // Calibración fina empírica en números clave (3, 7, 6, 10, 4)
   const absSpread = Math.abs(spread);
   const favMargin = spread < 0 ? lead : -lead;
-  const keyFactor = isCollege ? 0.6 : 1.0;
+  const keyFactor = (isCollege ? 0.6 : 1.0) * totalScale;
 
   if (absSpread === 3.5 && favMargin <= 3.8) {
-    if (spread < 0) homeCoverProb = Math.max(0.35, homeCoverProb - (0.04 * keyFactor));
-    else homeCoverProb = Math.min(0.75, homeCoverProb + (0.04 * keyFactor));
+    if (spread < 0) homeCoverProb = Math.max(0.35, homeCoverProb - (0.045 * keyFactor));
+    else homeCoverProb = Math.min(0.75, homeCoverProb + (0.045 * keyFactor));
   } else if (absSpread === 7.5 && favMargin <= 7.8) {
-    if (spread < 0) homeCoverProb = Math.max(0.38, homeCoverProb - (0.035 * keyFactor));
-    else homeCoverProb = Math.min(0.74, homeCoverProb + (0.035 * keyFactor));
+    if (spread < 0) homeCoverProb = Math.max(0.38, homeCoverProb - (0.038 * keyFactor));
+    else homeCoverProb = Math.min(0.74, homeCoverProb + (0.038 * keyFactor));
   } else if (absSpread === 2.5 && favMargin >= 2.6) {
-    if (spread < 0) homeCoverProb = Math.min(0.70, homeCoverProb + (0.035 * keyFactor));
-    else homeCoverProb = Math.max(0.30, homeCoverProb - (0.035 * keyFactor));
+    if (spread < 0) homeCoverProb = Math.min(0.70, homeCoverProb + (0.038 * keyFactor));
+    else homeCoverProb = Math.max(0.30, homeCoverProb - (0.038 * keyFactor));
+  } else if (absSpread === 6.5 && favMargin <= 6.8) {
+    if (spread < 0) homeCoverProb = Math.max(0.40, homeCoverProb - (0.025 * keyFactor));
+    else homeCoverProb = Math.min(0.70, homeCoverProb + (0.025 * keyFactor));
+  } else if (absSpread === 9.5 && favMargin <= 9.8) {
+    if (spread < 0) homeCoverProb = Math.max(0.42, homeCoverProb - (0.020 * keyFactor));
+    else homeCoverProb = Math.min(0.68, homeCoverProb + (0.020 * keyFactor));
   }
 
   const resultProb = forHome ? homeCoverProb : (1 - homeCoverProb);
@@ -252,9 +266,21 @@ export function calculateNflProbabilities(
   const homeWinProb = normalCdf(predictedPointSpread, 0, sigma) * 100;
   const awayWinProb = 100 - homeWinProb;
 
-  // Probabilidad de Cobertura de Spread (True Normal CDF) con inyección de byeWeekBoost
-  let rawHomeCover = calculateSpreadCoverProbability(predictedPointSpread, spreadNum, true, isCollege);
-  let rawAwayCover = calculateSpreadCoverProbability(predictedPointSpread, spreadNum, false, isCollege);
+  // Total de Puntos Estimado Calibrado:
+  const baseAvgTotal = isCollege ? 52.8 : 43.8;
+  const totalYpp = adjHomeYPP + adjAwayYPP;
+  const epaTotalAdj = (homeEpa !== null && awayEpa !== null && !isNaN(parseFloat(homeEpa)) && !isNaN(parseFloat(awayEpa)))
+    ? (parseFloat(homeEpa) + parseFloat(awayEpa)) * 28
+    : 0;
+  const rawModelTotal = baseAvgTotal + ((totalYpp - (isCollege ? 11.2 : 10.8)) * 3.2) + epaTotalAdj;
+  const vTotNum = parseFloat(vegasTotal);
+  const predictedTotalPoints = (!isNaN(vTotNum) && vTotNum > 24)
+    ? Math.max(vTotNum - 7.0, Math.min(vTotNum + 7.0, (rawModelTotal * 0.60) + (vTotNum * 0.40)))
+    : Math.max(28.0, Math.min(75.0, rawModelTotal));
+
+  // Probabilidad de Cobertura de Spread (True Normal CDF) calibrada al total de puntos y con inyección de byeWeekBoost
+  let rawHomeCover = calculateSpreadCoverProbability(predictedPointSpread, spreadNum, true, isCollege, predictedTotalPoints);
+  let rawAwayCover = calculateSpreadCoverProbability(predictedPointSpread, spreadNum, false, isCollege, predictedTotalPoints);
 
   // Inyección del modificador de +3.2% a la probabilidad de cubrir el Spread
   if (homeByeBoost) {
@@ -267,18 +293,6 @@ export function calculateNflProbabilities(
 
   const homeCoverProb = rawHomeCover;
   const awayCoverProb = rawAwayCover;
-
-  // Total de Puntos Estimado Calibrado:
-  const baseAvgTotal = isCollege ? 52.8 : 43.8;
-  const totalYpp = adjHomeYPP + adjAwayYPP;
-  const epaTotalAdj = (homeEpa !== null && awayEpa !== null && !isNaN(parseFloat(homeEpa)) && !isNaN(parseFloat(awayEpa)))
-    ? (parseFloat(homeEpa) + parseFloat(awayEpa)) * 28
-    : 0;
-  const rawModelTotal = baseAvgTotal + ((totalYpp - (isCollege ? 11.2 : 10.8)) * 3.2) + epaTotalAdj;
-  const vTotNum = parseFloat(vegasTotal);
-  const predictedTotalPoints = (!isNaN(vTotNum) && vTotNum > 24)
-    ? Math.max(vTotNum - 7.0, Math.min(vTotNum + 7.0, (rawModelTotal * 0.60) + (vTotNum * 0.40)))
-    : Math.max(28.0, Math.min(75.0, rawModelTotal));
 
   // Evaluación de Totales (Over/Under) contra Las Vegas y Viento
   const totalsEvaluation = calculateTotalOverUnderProbability(predictedTotalPoints, vegasTotal, windSpeedMph, isCollege);
