@@ -41,6 +41,7 @@ Ubicados en [src/utils/ensemble.js](file:///c:/Users/RO106536/Documents/Perso/Pr
 ---
 
 ## 📜 5. HISTORIAL DE HITOS CLAVE
+* **2026-10-17:** Optimización del Turno Nocturno de Fin de Semana (Viernes y Sábados 11:00 PM). Se amplió el horizonte a 20h para incluir selecciones de EQUIPO de toda la cartelera del día siguiente (NFL, NCAAF y Fútbol), preservando al 100% el Candado Anti-DNP de 90min para Player Props y los 5 Candados de Veto.
 * **2026-10-16:** Activación de los 5 Candados Analíticos de Veto. Backtest reporta $92.9\%$ en fútbol y $83.9\%$ general. Corrección de importación de `isTeamMatch` en `ensemble.js`. Despliegue exitoso en Vercel.
 * **2026-10-12:** Optimización Serverless y Fast Retry con timeouts de 1.5s/2.0s para evitar el límite de 30s de cron-job.org.
 * **2026-10-08:** Blindaje de auditoría nocturna: filtrado exclusivo de picks enviados a Telegram.
