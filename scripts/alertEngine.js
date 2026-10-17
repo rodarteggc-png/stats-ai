@@ -2365,12 +2365,12 @@ export async function runAlertEngine(options = {}) {
 
   const rangeArg = process.argv.find(a => a.startsWith('--range='));
   const defaultRange = isNightShift ? 'hoy_y_manana' : (isMorningShift ? 'hoy' : 'hoy_y_manana');
-  const defaultHorizon = isNightShift ? 14 : (isMorningShift ? 16 : 28);
+  const defaultHorizon = isNightShift ? 20 : (isMorningShift ? 16 : 28);
 
   const dateRange = options.dateRange || (rangeArg ? rangeArg.split('=')[1] : defaultRange);
   const maxHoursAhead = options.maxHoursAhead !== undefined ? options.maxHoursAhead : defaultHorizon;
 
-  const shiftLabel = isNightShift ? '🌙 NOCTURNO (Cartelera Europea 5:30-8:30 AM)' : (isMorningShift ? '☀️ MATUTINO' : '🌆 VESPERTINO');
+  const shiftLabel = isNightShift ? '🌙 NOCTURNO (Cartelera Fin de Semana)' : (isMorningShift ? '☀️ MATUTINO' : '🌆 VESPERTINO');
   console.log(`[${new Date().toISOString()}] 🚀 Iniciando Escaneo Cuantitativo Stats-AI Pro (Turno CDMX ${cdmxHour}h [${shiftLabel}], Rango: ${dateRange}, Cupo Máximo: ${maxPicksToSend})...`);
   if (isDryRun) console.log('⚠️ Modo Dry-Run activo: no se mandarán mensajes reales.');
 
@@ -2416,12 +2416,7 @@ export async function runAlertEngine(options = {}) {
 
   const filterUpcoming = (m) => {
     if (!m || m.isCompleted) return false;
-    if (!isMatchWithinHorizon(m.gameDate, maxHoursAhead)) return false;
-    if (isNightShift) {
-      // En el turno nocturno de fin de semana, enfocar exclusivamente en la jornada europea matutina temprana (5:00 a 9:00 a.m. CDMX)
-      return isEarlyEuropeanMorningMatch(m.gameDate);
-    }
-    return true;
+    return isMatchWithinHorizon(m.gameDate, maxHoursAhead);
   };
 
   const soccerMatches = soccerRaw.filter(filterUpcoming);
@@ -2607,7 +2602,7 @@ export async function runAlertEngine(options = {}) {
     if (isTopJoya) {
       headerTitle = `💎 *SELECCIÓN ESTELAR VIP — MÁXIMA VENTAJA CUANTITATIVA (+EV)* 💎\n🔬 *CALIBRACIÓN MONTE CARLO & CONSENSO 3v1*`;
     } else if (isNightShift) {
-      headerTitle = `🌙 *ALERTA NOCTURNA — JORNADA EUROPEA TEMPRANERA* 🌙\n🔬 *CALIBRACIÓN MONTE CARLO & CONSENSO 3v1*`;
+      headerTitle = `🌙 *ALERTA NOCTURNA — CARTELERA DE FIN DE SEMANA* 🌙\n🔬 *CALIBRACIÓN MONTE CARLO & CONSENSO 3v1*`;
     } else if (isSharpRlm) {
       headerTitle = `🚨 *SELECCIÓN SHARP VIP: DINERO PROFESIONAL (RLM)* 🚨\n💼 *RESPALDO INSTITUCIONAL & CONSENSO 3v1*`;
     } else if (isPickProp) {
