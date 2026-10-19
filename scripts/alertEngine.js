@@ -460,6 +460,63 @@ function isMatchWithinHorizon(gameDate, maxHoursAhead = 36) {
 }
 
 /**
+ * REGLA INSTITUCIONAL DE VENTANAS DE ALERTAS (SIN TRASLAPE):
+ * - Turno Matutino (09:30 AM): Partidos de ese horario hasta las 3:30 PM (15:30) del MISMO DÍA.
+ * - Turno Vespertino (03:30 PM): Partidos de ese horario hasta las 9:30 AM (09:30) del DÍA SIGUIENTE.
+ * - Turno Nocturno Fin de Semana (11:00 PM Viernes y Sábado): Partidos desde ese horario hasta las 9:30 AM de la MAÑANA SIGUIENTE (Europa Temprana).
+ */
+export function isMatchWithinShiftWindow(gameDate, shiftType = 'matutino', maxHoursOverride = null) {
+  if (!gameDate) return true;
+  const now = Date.now();
+  const matchTime = new Date(gameDate).getTime();
+  if (isNaN(matchTime)) return true;
+
+  const hoursUntilGame = (matchTime - now) / (1000 * 60 * 60);
+
+  // Descartar si el partido ya inició hace más de 10 minutos
+  if (hoursUntilGame < -0.15) return false;
+
+  // Si se proporcionó un override manual de horas (ej. CLI --horizon=X), respetarlo
+  if (maxHoursOverride !== null && maxHoursOverride !== undefined) {
+    return hoursUntilGame <= maxHoursOverride;
+  }
+
+  try {
+    const matchDate = new Date(gameDate);
+    const matchDateCdmxStr = matchDate.toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+    const matchHourCdmx = parseInt(matchDate.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', timeZone: 'America/Mexico_City' }), 10);
+    const matchMinCdmx = parseInt(matchDate.toLocaleTimeString('en-US', { hour12: false, minute: '2-digit', timeZone: 'America/Mexico_City' }), 10);
+    const matchTimeDec = matchHourCdmx + (matchMinCdmx / 60);
+
+    const nowDate = new Date();
+    const todayCdmxStr = nowDate.toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+    const tomorrowDate = new Date(nowDate.getTime() + 24 * 60 * 60 * 1000);
+    const tomorrowCdmxStr = tomorrowDate.toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+
+    if (shiftType === 'matutino') {
+      // 9:30 AM -> estrictamente juegos de HOY en CDMX que arranquen antes de las 15:30 (3:30 PM)
+      if (matchDateCdmxStr !== todayCdmxStr) return false;
+      return matchTimeDec <= 15.5;
+    }
+
+    if (shiftType === 'vespertino' || shiftType === 'nocturno') {
+      // 3:30 PM o 11:00 PM -> juegos de HOY en la tarde/noche O de MAÑANA hasta las 09:30 AM
+      if (matchDateCdmxStr === todayCdmxStr) {
+        return true;
+      }
+      if (matchDateCdmxStr === tomorrowCdmxStr) {
+        return matchTimeDec <= 9.5; // Hasta las 9:30 AM del día siguiente
+      }
+      return false;
+    }
+  } catch (err) {
+    return hoursUntilGame <= 20;
+  }
+
+  return true;
+}
+
+/**
  * Verifica si la fecha del partido corresponde exactamente al día de HOY en horario de Ciudad de México (CDMX)
  */
 function isMatchTodayInCdmx(gameDate) {
@@ -2350,6 +2407,8 @@ export async function runAlertEngine(options = {}) {
   const forceAudit = options.audit || process.argv.includes('--audit');
   const cdmxNow = new Date();
   const cdmxHour = parseInt(cdmxNow.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', timeZone: 'America/Mexico_City' }), 10);
+  const cdmxMinute = parseInt(cdmxNow.toLocaleTimeString('en-US', { hour12: false, minute: '2-digit', timeZone: 'America/Mexico_City' }), 10);
+  const cdmxTimeDec = cdmxHour + (cdmxMinute / 60);
   const cdmxDateStr = cdmxNow.toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
   const cdmxDayOfWeek = cdmxNow.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'America/Mexico_City' });
 
@@ -2359,18 +2418,31 @@ export async function runAlertEngine(options = {}) {
   const isHighVolumeDay = cdmxDayOfWeek === 'Thu' || cdmxDayOfWeek === 'Sat' || cdmxDayOfWeek === 'Sun';
   const maxPicksToSend = options.maxPicks || (isHighVolumeDay ? 10 : 6);
 
+  const shiftArg = process.argv.find(a => a.startsWith('--shift='));
+  const cliShift = shiftArg ? shiftArg.split('=')[1] : null;
   const isWeekendNight = (cdmxDayOfWeek === 'Fri' || cdmxDayOfWeek === 'Sat') && cdmxHour >= 21;
-  const isNightShift = options.shift === 'nocturno' || process.argv.includes('--nocturno') || isWeekendNight;
-  const isMorningShift = !isNightShift && cdmxHour < 14;
+  const isNightShift = options.shift === 'nocturno' || cliShift === 'nocturno' || process.argv.includes('--nocturno') || isWeekendNight;
+  const isMorningShift = !isNightShift && (options.shift === 'matutino' || cliShift === 'matutino' || process.argv.includes('--matutino') || (cliShift !== 'vespertino' && options.shift !== 'vespertino' && cdmxTimeDec < 14.0));
+  const isEveningShift = !isNightShift && !isMorningShift;
+
+  const activeShiftType = isNightShift ? 'nocturno' : (isMorningShift ? 'matutino' : 'vespertino');
 
   const rangeArg = process.argv.find(a => a.startsWith('--range='));
-  const defaultRange = isNightShift ? 'hoy_y_manana' : (isMorningShift ? 'hoy' : 'hoy_y_manana');
-  const defaultHorizon = isNightShift ? 20 : (isMorningShift ? 16 : 28);
+  const defaultRange = isMorningShift ? 'hoy' : 'hoy_y_manana';
+  // Horizontes calibrados para cero canibalización entre turnos:
+  // - Matutino (9:30 AM): 6.0h (hasta 15:30 CDMX del mismo día)
+  // - Vespertino (3:30 PM): 18.0h (hasta 09:30 CDMX del día siguiente)
+  // - Nocturno fin de semana (11:00 PM Vie/Sáb): 10.5h (hasta 09:30 CDMX mañana siguiente)
+  const defaultHorizon = isNightShift ? 10.5 : (isMorningShift ? 6.0 : 18.0);
 
   const dateRange = options.dateRange || (rangeArg ? rangeArg.split('=')[1] : defaultRange);
   const maxHoursAhead = options.maxHoursAhead !== undefined ? options.maxHoursAhead : defaultHorizon;
 
-  const shiftLabel = isNightShift ? '🌙 NOCTURNO (Cartelera Fin de Semana)' : (isMorningShift ? '☀️ MATUTINO' : '🌆 VESPERTINO');
+  const shiftLabel = isNightShift 
+    ? '🌙 NOCTURNO [Viernes/Sábado] (23:00 -> 09:30 Mañana Siguiente)' 
+    : (isMorningShift 
+      ? '☀️ MATUTINO (09:30 -> 15:30 Mismo Día)' 
+      : '🌆 VESPERTINO (15:30 -> 09:30 Día Siguiente)');
   console.log(`[${new Date().toISOString()}] 🚀 Iniciando Escaneo Cuantitativo Stats-AI Pro (Turno CDMX ${cdmxHour}h [${shiftLabel}], Rango: ${dateRange}, Cupo Máximo: ${maxPicksToSend})...`);
   if (isDryRun) console.log('⚠️ Modo Dry-Run activo: no se mandarán mensajes reales.');
 
@@ -2416,7 +2488,10 @@ export async function runAlertEngine(options = {}) {
 
   const filterUpcoming = (m) => {
     if (!m || m.isCompleted) return false;
-    return isMatchWithinHorizon(m.gameDate, maxHoursAhead);
+    if (options.maxHoursAhead !== undefined) {
+      return isMatchWithinHorizon(m.gameDate, options.maxHoursAhead);
+    }
+    return isMatchWithinShiftWindow(m.gameDate, activeShiftType);
   };
 
   const soccerMatches = soccerRaw.filter(filterUpcoming);
@@ -2431,15 +2506,18 @@ export async function runAlertEngine(options = {}) {
   // Enriquecimiento en tiempo real con cuotas institucionales de Pinnacle / Bet365
   let enrichedNfl = nflMatches;
   let enrichedMlb = mlbMatches;
+  let enrichedNcaaf = ncaafMatches;
   let enrichedSoccer = soccerMatches;
 
   try {
-    const [sharpNfl, sharpMlb] = await Promise.all([
+    const [sharpNfl, sharpMlb, sharpNcaaf] = await Promise.all([
       enrichMatchesWithSharpOdds(nflMatches, 'nfl'),
-      enrichMatchesWithSharpOdds(mlbMatches, 'mlb')
+      enrichMatchesWithSharpOdds(mlbMatches, 'mlb'),
+      enrichMatchesWithSharpOdds(ncaafMatches, 'ncaaf')
     ]);
     enrichedNfl = sharpNfl;
     enrichedMlb = sharpMlb;
+    enrichedNcaaf = sharpNcaaf;
     enrichedSoccer = await enrichSoccerWithSharpOdds(soccerMatches);
   } catch (err) {
     console.warn('Aviso enriqueciendo cuotas sharp:', err.message);
@@ -2449,7 +2527,7 @@ export async function runAlertEngine(options = {}) {
     soccerMatches: enrichedSoccer,
     mlbMatches: enrichedMlb,
     nflMatches: enrichedNfl,
-    ncaafMatches,
+    ncaafMatches: enrichedNcaaf,
     maxPicksToSend,
     runtimePenalties: auditResult.runtimePenalties,
     sentCache,
@@ -2538,8 +2616,13 @@ export async function runAlertEngine(options = {}) {
     });
 
     const cdmxNow = new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'America/Mexico_City' });
+    const shiftBadge = isNightShift 
+      ? 'EDICIÓN NOCTURNA [Cartelera Europa Temprana]' 
+      : (isMorningShift 
+        ? 'EDICIÓN MATUTINA [Cartelera 09:30 - 15:30]' 
+        : 'EDICIÓN VESPERTINA [Cartelera Tarde/Noche & Madrugada]');
     const slateHeader = [
-      `🚀 *STATS-AI PRO — SLATE OFICIAL [${isNightShift ? 'EDICIÓN NOCTURNA' : 'JORNADA ACTIVA'}]* 🚀`,
+      `🚀 *STATS-AI PRO — SLATE OFICIAL [${shiftBadge}]* 🚀`,
       `📅 *${cdmxNow.toUpperCase()}* | CDMX`,
       `🔬 _Calibración Monte Carlo (10,000 Sims) & Consenso Tripartito_`,
       ``,

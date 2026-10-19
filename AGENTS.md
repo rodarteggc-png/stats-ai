@@ -14,9 +14,10 @@ Plataforma cuantitativa de predicción deportiva y generación automatizada de a
 * **Frontend:** React 19 + Vite. Dashboard de visualización, radar de oportunidades y visor de consenso.
 * **Backend / Serverless:** Vercel Serverless Functions (`/api/scan.js` y `/api/audit.js`) con ejecución desacoplada mediante `Promise.allSettled`.
 * **Notificaciones:** Bot de Telegram con integración al canal privado/público.
-* **Automatización:** Tareas programadas en **cron-job.org** apuntando a `https://stats-ai-pi.vercel.app/api/scan` a las:
-  - **9:30 AM CDMX:** Turno Matutino (Escaneo del día + Corte de Caja Oficial nocturno de ayer).
-  - **3:30 PM CDMX:** Turno Vespertino (Escaneo de tarde/noche y jornada matutina del día siguiente).
+* **Automatización:** Tareas programadas en **cron-job.org** apuntando a `https://stats-ai-pi.vercel.app/api/scan` con ventanas no traslapadas:
+  - **9:30 AM CDMX (Turno Matutino):** Cubre exclusivamente partidos de **09:30 AM a 3:30 PM del mismo día** (6.0h). Acción inmediata en ligas europeas y juegos tempranos. Incluye Corte de Caja Oficial diario de ayer.
+  - **3:30 PM CDMX (Turno Vespertino):** Cubre partidos de **3:30 PM a 9:30 AM del día siguiente** (18.0h). Cartelera estelar tarde/noche (NFL Prime Time, Liga MX, MLB) y fútbol europeo matutino entre semana.
+  - **11:00 PM CDMX (Turno Nocturno Viernes y Sábado):** Cubre partidos de **11:00 PM a 9:30 AM de la mañana siguiente** (10.5h). Diseñado específicamente para carteleras tempranas de Europa (Premier League, Serie A, LaLiga desde las 5:30 AM) sin tocar el fútbol americano ni la tarde del fin de semana.
 * **Persistencia Contable:** `data/pick_ledger.jsonl` (Libro mayor contable inmutable para auditoría pública y verificación de CLV).
 
 ---
@@ -41,7 +42,12 @@ Ubicados en [src/utils/ensemble.js](file:///c:/Users/RO106536/Documents/Perso/Pr
 ---
 
 ## 📜 5. HISTORIAL DE HITOS CLAVE
-* **2026-10-17:** Optimización del Turno Nocturno de Fin de Semana (Viernes y Sábados 11:00 PM). Se amplió el horizonte a 20h para incluir selecciones de EQUIPO de toda la cartelera del día siguiente (NFL, NCAAF y Fútbol), preservando al 100% el Candado Anti-DNP de 90min para Player Props y los 5 Candados de Veto.
+* **2026-10-19:** Implementación de la Partición Estricta de Ventanas de Alertas (Cero Canibalización):
+  - Alerta 9:30 AM -> [09:30 a 15:30 mismo día].
+  - Alerta 3:30 PM -> [15:30 a 09:30 día siguiente].
+  - Alerta Nocturna 11:00 PM (Vie/Sáb) -> [23:00 a 09:30 mañana siguiente].
+  - Blindaje de cuotas institucionales: Integración de `ncaaf` al pool de The Odds API con rotación de 4 llaves (2,000 req/mes) y prioridad absoluta a selecciones con dinero inteligente (RLM).
+* **2026-10-17:** Optimización del Turno Nocturno de Fin de Semana (Viernes y Sábados 11:00 PM). Se amplió el horizonte para incluir selecciones de EQUIPO de toda la cartelera del día siguiente, preservando el Candado Anti-DNP de 90min para Player Props y los 5 Candados de Veto.
 * **2026-10-16:** Activación de los 5 Candados Analíticos de Veto. Backtest reporta $92.9\%$ en fútbol y $83.9\%$ general. Corrección de importación de `isTeamMatch` en `ensemble.js`. Despliegue exitoso en Vercel.
 * **2026-10-12:** Optimización Serverless y Fast Retry con timeouts de 1.5s/2.0s para evitar el límite de 30s de cron-job.org.
 * **2026-10-08:** Blindaje de auditoría nocturna: filtrado exclusivo de picks enviados a Telegram.
