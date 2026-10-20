@@ -52,6 +52,10 @@ Ubicados en [src/utils/ensemble.js](file:///c:/Users/RO106536/Documents/Perso/Pr
   - **Verificación en Vivo y Despacho Exitoso:**
     * Tanda Matutina: 4 selecciones de Champions League despachadas a Telegram (Liverpool Over 2.5 @ 2.10, Roma Over 2.5 @ 1.63, Malen Más de 1.5 SOT @ 1.65, Barcola Más de 1.5 SOT @ 1.65).
     * Tanda Vespertina: Validada en simulación con cartelera completa y diversificada (Guadalajara 1X2 @ 1.90, Over 2.5 Goles @ 1.74, NCAAF Marshall vs South Alabama Under 66.5 @ 1.91 y South Alabama -2.5 @ 1.91).
+  - **Integración Oficial de API-SPORTS (api-sports.io):**
+    * Llave registrada a nombre de Gustavo Rodarte (`7184f1016b68c388a5c1e102b0f6eaef`), activa hasta 2027 con 100 requests/día (~3,000 requests/mes).
+    * Adaptador oficial en [src/services/apiSports.js](file:///c:/Users/RO106536/Documents/Perso/Proy_Gemini/stats-ai-pro/src/services/apiSports.js) para sincronizar cuotas institucionales de Pinnacle (bookmaker 4) y Bet365 (bookmaker 8) como respaldo de alta resiliencia ante agotamiento de The Odds API.
+    * Endpoint de diagnóstico en vivo en [https://stats-ai-pi.vercel.app/api/quota](https://stats-ai-pi.vercel.app/api/quota) con auditoría dual de The Odds API y API-Sports en tiempo real.
 * **2026-10-19:** Implementación de la Partición Estricta de Ventanas de Alertas (Cero Canibalización):
   - Alerta 9:30 AM -> [09:30 a 15:30 mismo día].
   - Alerta 3:30 PM -> [15:30 a 09:30 día siguiente].
