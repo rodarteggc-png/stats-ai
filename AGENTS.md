@@ -56,6 +56,14 @@ Ubicados en [src/utils/ensemble.js](file:///c:/Users/RO106536/Documents/Perso/Pr
     * Llave registrada a nombre de Gustavo Rodarte (`7184f1016b68c388a5c1e102b0f6eaef`), activa hasta 2027 con 100 requests/día (~3,000 requests/mes).
     * Adaptador oficial en [src/services/apiSports.js](file:///c:/Users/RO106536/Documents/Perso/Proy_Gemini/stats-ai-pro/src/services/apiSports.js) para sincronizar cuotas institucionales de Pinnacle (bookmaker 4) y Bet365 (bookmaker 8) como respaldo de alta resiliencia ante agotamiento de The Odds API.
     * Endpoint de diagnóstico en vivo en [https://stats-ai-pi.vercel.app/api/quota](https://stats-ai-pi.vercel.app/api/quota) con auditoría dual de The Odds API y API-Sports en tiempo real.
+  - **Enrutamiento Dual de Telegram (Canal Público vs Canal Privado VIP):**
+    * Se implementó el soporte para targetChatId en `scripts/alertEngine.js` y `api/scan.js` (`?vip=1` o `--vip`).
+    * Chat público general de suscriptores: `-1004410747027` (protegido contra saturación y pruebas experimentales).
+    * Chat privado de Tavo Rodarte: `1258878024` (`TELEGRAM_VIP_CHAT_ID`), verificado con entrega directa bidireccional para pruebas en tiempo real.
+  - **Candado Anti-Saturación de Player Props:**
+    * Regla estricta: las apuestas de equipo (1X2 Moneyline, Spreads de puntos, Totales Over/Under y BTTS) representan >= 75%-85% de cada cartelera.
+    * Los Player Props individuales quedan limitados a un máximo estricto de 1 por turno regular (y máximo 2 en días de alto volumen masivo con NFL/Fútbol).
+
 * **2026-10-19:** Implementación de la Partición Estricta de Ventanas de Alertas (Cero Canibalización):
   - Alerta 9:30 AM -> [09:30 a 15:30 mismo día].
   - Alerta 3:30 PM -> [15:30 a 09:30 día siguiente].

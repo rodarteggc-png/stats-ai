@@ -393,7 +393,7 @@ function pruneCache(cache) {
 }
 
 // 3. ENVÍO DE MENSAJES VÍA TELEGRAM API
-async function sendTelegramMessage(text, dryRun = false) {
+async function sendTelegramMessage(text, dryRun = false, targetChatId = null) {
   if (dryRun) {
     console.log('\n[DRY RUN - Mensaje que se enviaría a Telegram]:');
     console.log(text);
@@ -401,7 +401,7 @@ async function sendTelegramMessage(text, dryRun = false) {
   }
 
   const botToken = process.env.TELEGRAM_BOT_TOKEN || TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID || TELEGRAM_CHAT_ID;
+  const chatId = targetChatId || process.env.TELEGRAM_CHAT_ID || TELEGRAM_CHAT_ID;
 
   if (!botToken || !chatId) {
     console.error('Faltan credenciales de Telegram: TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID no definidos.');
@@ -2033,6 +2033,7 @@ export async function runDailyTelegramAudit(options = {}) {
   const sendWeeklyAudit = options.sendWeeklyAudit !== undefined ? options.sendWeeklyAudit : (process.argv.includes('--weekly') || process.argv.includes('--semanal'));
   const forceResend = options.forceAudit || process.argv.includes('--audit');
   const providedCache = options.ledger || await loadCloudLedger();
+  const targetChatId = options.targetChatId || options.chatId || null;
 
   // Descargar marcadores oficiales de ayer y hoy de forma desacoplada con Promise.allSettled
   const scheduleResults = await Promise.allSettled([
@@ -2286,7 +2287,7 @@ export async function runDailyTelegramAudit(options = {}) {
       memoryLine + pendingLine
     ].join('\n');
 
-    auditSent = await sendTelegramMessage(reportMsg, isDryRun);
+    auditSent = await sendTelegramMessage(reportMsg, isDryRun, targetChatId);
     if (auditSent && !isDryRun) {
       picksToReport.forEach(p => {
         if (providedCache[p.id]) {
@@ -2364,7 +2365,7 @@ export async function runDailyTelegramAudit(options = {}) {
         `🏦 *Gestión de Banca (Kelly):* _${totalNet >= 0 ? 'Crecimiento sostenible de capital con varianza controlada.' : 'Preservación de banca y disciplina de control de riesgo activa.'}_`
       ].join('\n');
 
-      weeklyAuditSent = await sendTelegramMessage(weeklyReportMsg, isDryRun);
+      weeklyAuditSent = await sendTelegramMessage(weeklyReportMsg, isDryRun, targetChatId);
       if (weeklyAuditSent && !isDryRun) {
         if (!providedCache._meta) providedCache._meta = {};
         const cdmxToday = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
@@ -2522,6 +2523,11 @@ export async function runAlertEngine(options = {}) {
   const isVerbose = options.verbose || process.argv.includes('--verbose');
   const isForce = options.force || process.argv.includes('--force');
   const forceAudit = options.audit || process.argv.includes('--audit');
+  const isVipOnly = options.vip || process.argv.includes('--vip');
+  const targetChatId = isVipOnly 
+    ? (process.env.TELEGRAM_VIP_CHAT_ID || '1258878024') 
+    : (options.chatId || null);
+
   const cdmxNow = new Date();
   const cdmxHour = parseInt(cdmxNow.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', timeZone: 'America/Mexico_City' }), 10);
   const cdmxMinute = parseInt(cdmxNow.toLocaleTimeString('en-US', { hour12: false, minute: '2-digit', timeZone: 'America/Mexico_City' }), 10);
@@ -2561,6 +2567,9 @@ export async function runAlertEngine(options = {}) {
       ? '☀️ MATUTINO (09:30 -> 15:30 Mismo Día)' 
       : '🌆 VESPERTINO (15:30 -> 09:30 Día Siguiente)');
   console.log(`[${new Date().toISOString()}] 🚀 Iniciando Escaneo Cuantitativo Stats-AI Pro (Turno CDMX ${cdmxHour}h [${shiftLabel}], Rango: ${dateRange}, Cupo Máximo: ${maxPicksToSend})...`);
+  if (isVipOnly) {
+    console.log(`👑 MODO VIP ACTIVO: Despacho enrutado exclusivamente al Chat Privado ${targetChatId} (Grupo público protegido).`);
+  }
   if (isDryRun) console.log('⚠️ Modo Dry-Run activo: no se mandarán mensajes reales.');
 
   const sentCache = await loadCloudLedger();
@@ -2581,7 +2590,8 @@ export async function runAlertEngine(options = {}) {
       sendToTelegram: shouldSendAuditReport,
       sendWeeklyAudit: shouldSendWeeklyAudit,
       forceAudit,
-      ledger: sentCache
+      ledger: sentCache,
+      targetChatId
     });
     if (auditResult.auditSent && !isDryRun) {
       sentCache._meta.lastAuditDate = cdmxDateStr;
@@ -2749,7 +2759,7 @@ export async function runAlertEngine(options = {}) {
       `💼 _A continuación el análisis cuantitativo individual de cada selección: 👇_`
     ].join('\n');
 
-    await sendTelegramMessage(slateHeader, isDryRun);
+    await sendTelegramMessage(slateHeader, isDryRun, targetChatId);
   }
 
   let sentCount = 0;
@@ -2852,7 +2862,7 @@ export async function runAlertEngine(options = {}) {
       consensusLines
     ].join('\n');
 
-    const ok = await sendTelegramMessage(message, isDryRun);
+    const ok = await sendTelegramMessage(message, isDryRun, targetChatId);
     if (ok) {
       sentCount++;
       // PASO 2 AUDITORÍA: Persistencia automática e inmutable en disco
@@ -2895,7 +2905,9 @@ export async function runAlertEngine(options = {}) {
     totalAnalyzed: rawOpportunities.length,
     totalOpportunities: approvedOpps.length,
     auditSummary: auditResult.summary,
-    auditSent: auditResult.auditSent
+    auditSent: auditResult.auditSent,
+    vip: isVipOnly,
+    targetChatId: targetChatId || process.env.TELEGRAM_CHAT_ID
   };
 }
 

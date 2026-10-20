@@ -18,7 +18,12 @@ export default async function handler(req, res) {
     const force = req.query?.force === 'true' || req.query?.force === '1';
     const audit = req.query?.audit === 'true' || req.query?.audit === '1';
     const shift = req.query?.shift || (req.query?.nocturno ? 'nocturno' : null);
-    const result = await runAlertEngine({ force, audit, shift });
+    const vip = req.query?.vip === 'true' || req.query?.vip === '1';
+    const result = await runAlertEngine({ force, audit, shift, vip });
+    const targetChat = vip 
+      ? (process.env.TELEGRAM_VIP_CHAT_ID || '1258878024') 
+      : (process.env.TELEGRAM_CHAT_ID || '');
+
     return res.status(200).json({
       success: true,
       timestamp: new Date().toISOString(),
@@ -27,7 +32,8 @@ export default async function handler(req, res) {
       auditSent: result.auditSent,
       auditSummary: result.auditSummary,
       forced: force,
-      chatTarget: process.env.TELEGRAM_CHAT_ID ? `${process.env.TELEGRAM_CHAT_ID.slice(0, 4)}...${process.env.TELEGRAM_CHAT_ID.slice(-4)}` : 'none'
+      vip: vip,
+      chatTarget: vip ? `VIP_PRIVATE (${targetChat})` : (targetChat ? `${targetChat.slice(0, 4)}...${targetChat.slice(-4)}` : 'none')
     });
   } catch (error) {
     console.error('Error en api/scan:', error);
