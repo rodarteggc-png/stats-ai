@@ -42,6 +42,11 @@ Ubicados en [src/utils/ensemble.js](file:///c:/Users/RO106536/Documents/Perso/Pr
 ---
 
 ## 📜 5. HISTORIAL DE HITOS CLAVE
+* **2026-10-20:** Corrección crítica del turno matutino (Alerta 9:30 AM):
+  - Se eliminó el bloqueo del Protocolo Anti-DNP de 90 minutos para partidos dentro de la ventana del turno activo (hasta 6 horas / 360 min). Anteriormente, partidos estelares de Champions League a las 13:00 CDMX (210 min de anticipación) eran descartados erróneamente en el escaneo de las 9:30 AM.
+  - Activación de Totales de Fútbol (Over/Under 2.5 Goles) con Candado 2 anti-derbi, desbloqueando valor en partidos donde los momios de Moneyline son castigados.
+  - Ampliación de cupo de Player Props a 2 por turno en slates regulares.
+  - Despacho en vivo verificado de 4 selecciones de Champions League a Telegram.
 * **2026-10-19:** Implementación de la Partición Estricta de Ventanas de Alertas (Cero Canibalización):
   - Alerta 9:30 AM -> [09:30 a 15:30 mismo día].
   - Alerta 3:30 PM -> [15:30 a 09:30 día siguiente].
