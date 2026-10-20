@@ -3,6 +3,7 @@
 // Gestiona el pool de llaves gratuitas con rotación automática, caché de 3 horas y detección de RLM institucional.
 
 import { getOddsApiKeys } from './sportsApi.js';
+import { fetchApiSportsPinnacleOdds } from './apiSports.js';
 
 // Mapeo oficial de deportes Tier 1 a llaves de The Odds API
 export const SPORT_KEY_MAP = {
@@ -21,7 +22,7 @@ const ODDS_CACHE_TTL_MS = 3 * 60 * 60 * 1000; // 3 Horas de caché
 const localMemoryCache = new Map();
 
 /**
- * Consulta cuotas de Pinnacle y Bet365 utilizando el pool rotativo de llaves
+ * Consulta cuotas de Pinnacle y Bet365 utilizando el pool rotativo de llaves y API-Sports
  * @param {string} sport - Clave de deporte (nfl, mlb, epl, laliga, champions, etc.)
  * @returns {Promise<Array>} Lista de eventos con cuotas sharp
  */
@@ -37,42 +38,44 @@ export async function fetchPinnacleOdds(sport = 'nfl') {
     }
   }
 
-  // 2. Obtener pool de llaves
+  // 2. Obtener pool de llaves de The Odds API
   const keys = getOddsApiKeys();
-  if (!keys || keys.length === 0) {
-    console.warn('⚠️ No hay llaves de The Odds API disponibles en el pool.');
-    return null;
+  let theOddsApiSuccess = false;
+
+  // 3. Probar llaves secuencialmente (rotación automática) si hay disponibles
+  if (keys && keys.length > 0) {
+    for (let i = 0; i < keys.length; i++) {
+      const apiKey = keys[i];
+      try {
+        const url = `https://api.the-odds-api.com/v4/sports/${sportKey}/odds/?apiKey=${apiKey}&regions=eu,us&markets=h2h,spreads,totals&bookmakers=pinnacle,bet365`;
+        const res = await fetch(url);
+
+        if (res.status === 429 || res.status === 401) {
+          continue;
+        }
+
+        if (!res.ok) continue;
+
+        const data = await res.json();
+        const parsedMatches = normalizeOddsApiResponse(data);
+        if (parsedMatches && parsedMatches.length > 0) {
+          localMemoryCache.set(sportKey, { data: parsedMatches, timestamp: now });
+          return parsedMatches;
+        }
+      } catch (err) {}
+    }
   }
 
-  // 3. Probar llaves secuencialmente (rotación automática)
-  for (let i = 0; i < keys.length; i++) {
-    const apiKey = keys[i];
-    try {
-      const url = `https://api.the-odds-api.com/v4/sports/${sportKey}/odds/?apiKey=${apiKey}&regions=eu,us&markets=h2h,spreads,totals&bookmakers=pinnacle,bet365`;
-      const res = await fetch(url);
-
-      if (res.status === 429 || res.status === 401) {
-        console.warn(`[The Odds API] Llave ${i + 1}/${keys.length} agotada o inválida. Pasando a la siguiente...`);
-        continue;
-      }
-
-      if (!res.ok) continue;
-
-      const data = await res.json();
-      const remaining = res.headers.get('x-requests-remaining');
-      const used = res.headers.get('x-requests-used');
-
-      if (remaining !== null) {
-        console.log(`📡 [The Odds API] Créditos restantes en llave ${i + 1}: ${remaining} (Usados: ${used || 0})`);
-      }
-
-      // Normalizar estructura sharp
-      const parsedMatches = normalizeOddsApiResponse(data);
-      localMemoryCache.set(sportKey, { data: parsedMatches, timestamp: now });
-      return parsedMatches;
-    } catch (err) {
-      console.warn(`Error consultando The Odds API con llave ${i + 1}:`, err.message);
+  // 4. Respaldo de Alta Capacidad: API-Sports (100 requests/día gratis)
+  try {
+    const apiSportsMatches = await fetchApiSportsPinnacleOdds();
+    if (apiSportsMatches && apiSportsMatches.length > 0) {
+      console.log(`🏛️ [oddsFeed] Cuotas de Pinnacle provistas exitosamente por API-Sports (${apiSportsMatches.length} partidos).`);
+      localMemoryCache.set(sportKey, { data: apiSportsMatches, timestamp: now });
+      return apiSportsMatches;
     }
+  } catch (apiSportsErr) {
+    console.warn('[Respaldo API-Sports] Error:', apiSportsErr.message);
   }
 
   return null;
