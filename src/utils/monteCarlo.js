@@ -80,6 +80,8 @@ export function simulateSoccerMatch(homeXg, awayXg, iterations = 10000) {
   let over25 = 0;
   let over35 = 0;
   let btts = 0;
+  let homeMinus15 = 0;
+  let awayMinus15 = 0;
   let collapseEvents = 0; // Ocasiones en que el favorito proyectado no gana por eventos de varianza
 
   const isHomeFav = hLambda >= aLambda;
@@ -128,6 +130,9 @@ export function simulateSoccerMatch(homeXg, awayXg, iterations = 10000) {
     else if (hGoals === aGoals) draws++;
     else awayWins++;
 
+    if (hGoals - aGoals >= 2) homeMinus15++;
+    if (aGoals - hGoals >= 2) awayMinus15++;
+
     if (totalGoals > 1.5) over15++;
     if (totalGoals > 2.5) over25++;
     if (totalGoals > 3.5) over35++;
@@ -150,6 +155,8 @@ export function simulateSoccerMatch(homeXg, awayXg, iterations = 10000) {
   const o25Prob = Number(((over25 / numIterations) * 100).toFixed(1));
   const o35Prob = Number(((over35 / numIterations) * 100).toFixed(1));
   const bttsProb = Number(((btts / numIterations) * 100).toFixed(1));
+  const hMinus15Prob = Number(((homeMinus15 / numIterations) * 100).toFixed(1));
+  const aMinus15Prob = Number(((awayMinus15 / numIterations) * 100).toFixed(1));
   const collapseRate = Number(((collapseEvents / numIterations) * 100).toFixed(1));
 
   // Puntuación de Estabilidad (0 a 100) basada en el Coeficiente de Variación (CV) real
@@ -179,6 +186,10 @@ export function simulateSoccerMatch(homeXg, awayXg, iterations = 10000) {
     over25Prob: o25Prob,
     over35Prob: o35Prob,
     bttsProb: bttsProb,
+    homeMinus15Prob: hMinus15Prob,
+    awayMinus15Prob: aMinus15Prob,
+    calibratedHomeMinus15: bayesianCalibrate(hMinus15Prob, 40, 'futbol_1x2'),
+    calibratedAwayMinus15: bayesianCalibrate(aMinus15Prob, 30, 'futbol_1x2'),
     calibratedHomeWin: bayesianCalibrate(hProb, 45, 'futbol_1x2'),
     calibratedAwayWin: bayesianCalibrate(aProb, 30, 'futbol_1x2'),
     calibratedBtts: bayesianCalibrate(bttsProb, 52, 'futbol_btts'),

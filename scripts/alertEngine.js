@@ -995,6 +995,61 @@ export function buildOpportunitiesAndTopSlate({
         });
       }
     }
+
+    // 6. EVALUACIÓN DE HÁNDICAP ASIÁTICO (-1.5) PARA FAVORITOS PESADOS (CUOTA 1X2 <= 1.48)
+    // Permite monetizar equipos dominantes a cuotas rentables (1.65 a 2.30)
+    const probHomeMinus15 = parseFloat(probs.spreads?.homeMinus15 || mc.homeMinus15Prob || 0);
+    const probAwayMinus15 = parseFloat(probs.spreads?.awayMinus15 || mc.awayMinus15Prob || 0);
+
+    // A) Favorito Local -1.5 (Gana por 2 o más goles)
+    if (homeOddsDec <= 1.48 && probHomeMinus15 >= 50.0 && mc.riskLevel !== 'Alto') {
+      const spreadOddsDec = parseFloat(m.vegas?.spreadHomeOdds || m.market?.homeSpreadOdds) || parseFloat(getFairOddsDecimal(probHomeMinus15 * 0.94));
+      const impliedSpread = (1 / spreadOddsDec) * 100;
+      const spreadEdge = probHomeMinus15 - impliedSpread;
+      if (spreadOddsDec >= 1.60 && spreadOddsDec <= 2.35 && spreadEdge >= 2.5) {
+        rawOpportunities.push({
+          id: `ah-home-${m.id}`,
+          sport: 'Fútbol',
+          league: m.league,
+          game: `${m.home.name} vs ${m.away.name}`,
+          gameDate: m.gameDate,
+          type: '⚡ HÁNDICAP ASIÁTICO (-1.5)',
+          pick: `${m.home.name} -1.5 (Gana por 2+ goles)`,
+          prob: `${probHomeMinus15.toFixed(0)}%`,
+          odds: spreadOddsDec.toFixed(2),
+          edgeVal: Math.max(spreadEdge, 3.5),
+          edgeStr: `Cover -1.5: ${probHomeMinus15.toFixed(0)}% | Edge: +${spreadEdge.toFixed(1)}%`,
+          argument: `Favorito pesado con cuota 1X2 impagable (${homeOddsDec.toFixed(2)}). Se monetiza con Hándicap Asiático (-1.5) respaldado por Poisson (${probHomeMinus15.toFixed(0)}% de margen por 2 o más goles) y superioridad de xG (${m.home.xG} vs ${m.away.xG}).`,
+          mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel, iterations: 10000 },
+          match: m,
+          probs: probs
+        });
+      }
+    } else if (awayOddsDec <= 1.48 && probAwayMinus15 >= 50.0 && mc.riskLevel !== 'Alto') {
+      // B) Favorito Visitante -1.5 (Gana por 2 o más goles)
+      const awaySpreadOddsDec = parseFloat(m.vegas?.spreadAwayOdds || m.market?.awaySpreadOdds) || parseFloat(getFairOddsDecimal(probAwayMinus15 * 0.94));
+      const impliedAwaySpread = (1 / awaySpreadOddsDec) * 100;
+      const awaySpreadEdge = probAwayMinus15 - impliedAwaySpread;
+      if (awaySpreadOddsDec >= 1.60 && awaySpreadOddsDec <= 2.35 && awaySpreadEdge >= 2.5) {
+        rawOpportunities.push({
+          id: `ah-away-${m.id}`,
+          sport: 'Fútbol',
+          league: m.league,
+          game: `${m.home.name} vs ${m.away.name}`,
+          gameDate: m.gameDate,
+          type: '⚡ HÁNDICAP ASIÁTICO (-1.5)',
+          pick: `${m.away.name} -1.5 (Gana por 2+ goles)`,
+          prob: `${probAwayMinus15.toFixed(0)}%`,
+          odds: awaySpreadOddsDec.toFixed(2),
+          edgeVal: Math.max(awaySpreadEdge, 3.5),
+          edgeStr: `Cover -1.5: ${probAwayMinus15.toFixed(0)}% | Edge: +${awaySpreadEdge.toFixed(1)}%`,
+          argument: `Favorito visitante dominante monetizado con Hándicap Asiático (-1.5) respaldado por Poisson (${probAwayMinus15.toFixed(0)}% por 2 o más goles) y ventaja de xG (${m.away.xG} vs ${m.home.xG}).`,
+          mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel, iterations: 10000 },
+          match: m,
+          probs: probs
+        });
+      }
+    }
   });
 
   // ================= A.2 EVALUACIÓN DE PLAYER PROPS (FÚTBOL) =================
@@ -1622,10 +1677,19 @@ export function buildOpportunitiesAndTopSlate({
     }
 
     const probNum = parseFloat(opp.prob) || 0;
+    const oddsNum = parseFloat(opp.odds) || 1.90;
     const pickStr = (opp.pick || '').toLowerCase();
     const isSpreadOrTotal = pickStr.includes('cubre') || pickStr.includes('hándicap') || pickStr.includes('handicap') || pickStr.includes('over') || pickStr.includes('under') || /[+-]\d+/.test(pickStr);
-    if (isSpreadOrTotal && probNum < 57.5) return false;
-    if (!isSpreadOrTotal && probNum < 60.5) return false;
+
+    // Filtros calibrados por mercado (elimina parálisis algorítmica sin relajar el EV positivo):
+    // - Para Spreads y Totales (mercados equilibrados con momios 1.65-2.30): exige prob >= 53.0%
+    // - Para Victoria Directa 1X2 / Moneyline: exige prob >= 54.0% (y prob >= 58.0% si cuota <= 1.70)
+    if (isSpreadOrTotal) {
+      if (probNum < 53.0) return false;
+    } else {
+      if (probNum < 54.0) return false;
+      if (oddsNum <= 1.70 && probNum < 58.0) return false;
+    }
     return true;
   });
 
@@ -1735,12 +1799,12 @@ export function buildOpportunitiesAndTopSlate({
     }
 
     // CANDADO 3: PROTOCOLO ANTI-DNP
-    // En el turno matutino o vespertino, se permiten props de la cartelera activa del turno (hasta 360 min / 6 horas).
-    // Se descartan props que jueguen a más de 6 horas para evitar incertidumbre de alineaciones en días posteriores.
+    // En el turno matutino o vespertino, se permiten props de la cartelera activa del turno (hasta 480 min / 8 horas).
+    // Se descartan props que jueguen a más de 8 horas para evitar incertidumbre de alineaciones en días posteriores.
     if (isPickProp && pick.gameDate) {
       const gTime = new Date(pick.gameDate).getTime();
       const minsToStart = (gTime - Date.now()) / (1000 * 60);
-      if (minsToStart > 360 || minsToStart < -15) {
+      if (minsToStart > 480 || minsToStart < -15) {
         continue;
       }
     }

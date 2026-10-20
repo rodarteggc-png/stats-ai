@@ -52,10 +52,11 @@ export function evaluateEnsembleConsensus({
     const aXg = parseFloat(match.away?.xG || 1.05);
     const totalXg = hXg + aXg;
     const isBttsPick = pTypeUpper.includes('AMBOS ANOTAN') || pTypeUpper.includes('BTTS');
-    const isProtectedPick = pTypeUpper.includes('DOBLE') || pTypeUpper.includes('PROTEGIDO') || pTypeUpper.includes('1X') || pTypeUpper.includes('X2') || pTypeUpper.includes('HÁNDICAP') || pTypeUpper.includes('HANDICAP');
+    const isProtectedPick = pTypeUpper.includes('DOBLE') || pTypeUpper.includes('PROTEGIDO') || pTypeUpper.includes('1X') || pTypeUpper.includes('X2');
+    const isAsianHandicap = pTypeUpper.includes('ASIÁTICO') || pTypeUpper.includes('ASIATICO') || (pTypeUpper.includes('HÁNDICAP') && !isProtectedPick) || (pTypeUpper.includes('HANDICAP') && !isProtectedPick) || (typeof pick === 'string' && (pick.includes('-1.5') || pick.includes('-2.5')));
     const isTotalsPick = pTypeUpper.includes('OVER') || pTypeUpper.includes('UNDER') || pTypeUpper.includes('GOLES');
     const isProp = pTypeUpper.includes('PROP') || pTypeUpper.includes('JUGADOR');
-    const isOutright1X2 = !isBttsPick && !isProtectedPick && !isTotalsPick && !isProp;
+    const isOutright1X2 = !isBttsPick && !isProtectedPick && !isAsianHandicap && !isTotalsPick && !isProp;
 
     if (isProp) {
       if (edgeVal >= 3.0) {
@@ -75,10 +76,18 @@ export function evaluateEnsembleConsensus({
         vote1Passed = false;
         vote1Reason = `Ataque asimétrico (${hXg.toFixed(2)} vs ${aXg.toFixed(2)} xG); insuficiente para Ambos Anotan Élite.`;
       }
-    } else if (isProtectedPick) {
-      if (numericOdds >= 1.36 && numericOdds <= 2.35 && (parseFloat(prob) >= 68 || edgeVal >= 3.5)) {
+    } else if (isAsianHandicap) {
+      if (numericOdds >= 1.55 && numericOdds <= 2.45 && (parseFloat(prob) >= 50.0 || edgeVal >= 2.5)) {
         vote1Passed = true;
-        vote1Reason = `Hándicap / Doble Oportunidad blindada (${parseFloat(prob || 72).toFixed(0)}% cobro, cuota ${numericOdds.toFixed(2)}) protegiendo el empate.`;
+        vote1Reason = `Hándicap Asiático validado por Poisson y xG (${parseFloat(prob || 55).toFixed(0)}% cobro, cuota ${numericOdds.toFixed(2)}, Edge: +${edgeVal.toFixed(1)}%). Dominio proyectado por 2+ goles.`;
+      } else {
+        vote1Passed = false;
+        vote1Reason = `Cuota fuera de rango (${numericOdds.toFixed(2)}) o cobertura insuficiente (${parseFloat(prob || 0).toFixed(0)}%).`;
+      }
+    } else if (isProtectedPick) {
+      if (numericOdds >= 1.36 && numericOdds <= 2.35 && (parseFloat(prob) >= 65 || edgeVal >= 3.0)) {
+        vote1Passed = true;
+        vote1Reason = `Doble Oportunidad blindada (${parseFloat(prob || 72).toFixed(0)}% cobro, cuota ${numericOdds.toFixed(2)}) protegiendo el empate.`;
       } else {
         vote1Passed = false;
         vote1Reason = `Cuota fuera de rango rentable (${numericOdds.toFixed(2)}) o cobertura insuficiente.`;
@@ -118,17 +127,17 @@ export function evaluateEnsembleConsensus({
       } else if (isOver25 && isDefensiveLeague && numericOdds >= 2.00) {
         vote1Passed = false;
         vote1Reason = `⛔ Veto Liga Defensiva: 'Más de 2.5 Goles' a cuota ${numericOdds.toFixed(2)} (> 2.00) en liga de baja anotación. Falso valor con alta varianza negativa.`;
-      } else if (parseFloat(prob) >= 57 || totalXg >= 2.75 || edgeVal >= 4.0) {
+      } else if (parseFloat(prob) >= 54 || totalXg >= 2.75 || edgeVal >= 3.0) {
         vote1Passed = true;
         vote1Reason = `Proyección de goles validada (${totalXg.toFixed(2)} xG combinados | Prob: ${parseFloat(prob || 60).toFixed(0)}%).`;
       } else {
         vote1Reason = `Proyección de totales sin ventaja suficiente (${totalXg.toFixed(2)} xG).`;
       }
-    } else if (numericOdds >= 1.35 && (edgeVal >= 4.5 || (hWin >= 55 && edgeVal >= 2.0) || (aWin >= 54 && edgeVal >= 2.5))) {
+    } else if (numericOdds >= 1.35 && (edgeVal >= 3.0 || (hWin >= 54 && edgeVal >= 1.8) || (aWin >= 53 && edgeVal >= 2.0))) {
       vote1Passed = true;
       vote1Reason = `Favorito con +EV confirmado (+${edgeVal.toFixed(1)}% vs Vegas, cuota ${numericOdds.toFixed(2)} <= 2.05). xG: ${hXg.toFixed(2)} vs ${aXg.toFixed(2)}.`;
     } else {
-      vote1Reason = `Ventaja matemática insuficiente (+${edgeVal.toFixed(1)}% EV inferior al umbral del 4.5%).`;
+      vote1Reason = `Ventaja matemática insuficiente (+${edgeVal.toFixed(1)}% EV inferior al umbral del 3.0%).`;
     }
   } else if (sLower.includes('mlb') || sLower.includes('béisbol') || sLower.includes('beisbol')) {
     const f5Home = parseFloat(probs.f5?.homeMl || 50);

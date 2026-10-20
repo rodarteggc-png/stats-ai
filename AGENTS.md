@@ -42,11 +42,16 @@ Ubicados en [src/utils/ensemble.js](file:///c:/Users/RO106536/Documents/Perso/Pr
 ---
 
 ## 📜 5. HISTORIAL DE HITOS CLAVE
-* **2026-10-20:** Corrección crítica del turno matutino (Alerta 9:30 AM):
-  - Se eliminó el bloqueo del Protocolo Anti-DNP de 90 minutos para partidos dentro de la ventana del turno activo (hasta 6 horas / 360 min). Anteriormente, partidos estelares de Champions League a las 13:00 CDMX (210 min de anticipación) eran descartados erróneamente en el escaneo de las 9:30 AM.
-  - Activación de Totales de Fútbol (Over/Under 2.5 Goles) con Candado 2 anti-derbi, desbloqueando valor en partidos donde los momios de Moneyline son castigados.
-  - Ampliación de cupo de Player Props a 2 por turno en slates regulares.
-  - Despacho en vivo verificado de 4 selecciones de Champions League a Telegram.
+* **2026-10-20 (Desbloqueo de Mercados & Calibración de Fluidez Operativa):**
+  - **Hándicap Asiático (-1.5) en Fútbol:** Se implementó y calibró la monetización de favoritos pesados (cuotas 1X2 <= 1.48 como Real Madrid, Man City, Liverpool o AS Roma) mediante Hándicaps Asiáticos (-1.5) a cuotas rentables (1.65 a 2.30), respaldados por la matriz bivariada Poisson Dixon-Coles y simulación Monte Carlo 10k (`homeMinus15Prob`, `awayMinus15Prob`).
+  - **Calibración de Umbrales de Probabilidad (Fin de la Parálisis Algorítmica):** Se eliminó el filtro plano arbitrario de 60.5% en `approvedOpps` que descartaba selecciones rentables con momios de 1.85-2.05 y probabilidades legítimas de 55-58% (+EV verificado). El umbral ahora se calibra por tipo de mercado:
+    * Spreads y Totales (líneas de dos vías): exige prob >= 53.0% y Edge >= 2.0% (garantía matemática sobre cuotas ~1.90).
+    * Moneylines / 1X2: exige prob >= 54.0% (y prob >= 58.0% si la cuota es baja <= 1.70).
+  - **Totales de Fútbol (Over/Under 2.5):** Integrados plenamente en el motor con Candado 2 anti-derbi, asegurando acción de alto valor en partidos ofensivos (ej. Liverpool vs Villarreal Over 2.5 @ 2.10 con +21.5% Edge).
+  - **Protocolo Anti-DNP Ampliado a 480 min (8 horas):** Se resolvió el bloqueo matutino de las 9:30 AM (partidos a las 13:00 CDMX estaban a 210 min y eran descartados). Ahora cubre toda la cartelera del turno activo.
+  - **Verificación en Vivo y Despacho Exitoso:**
+    * Tanda Matutina: 4 selecciones de Champions League despachadas a Telegram (Liverpool Over 2.5 @ 2.10, Roma Over 2.5 @ 1.63, Malen Más de 1.5 SOT @ 1.65, Barcola Más de 1.5 SOT @ 1.65).
+    * Tanda Vespertina: Validada en simulación con cartelera completa y diversificada (Guadalajara 1X2 @ 1.90, Over 2.5 Goles @ 1.74, NCAAF Marshall vs South Alabama Under 66.5 @ 1.91 y South Alabama -2.5 @ 1.91).
 * **2026-10-19:** Implementación de la Partición Estricta de Ventanas de Alertas (Cero Canibalización):
   - Alerta 9:30 AM -> [09:30 a 15:30 mismo día].
   - Alerta 3:30 PM -> [15:30 a 09:30 día siguiente].

@@ -182,7 +182,28 @@ export function calculateMatchProbabilities(
   const drawPct = (draw * 100).toFixed(1);
   const aWinPct = (awayWin * 100).toFixed(1);
 
-  // Calcular mercados protegidos (DNB y Doble Oportunidad)
+  // Calcular probabilidades de Hándicap Asiático / Spread (-1.5 y -2.5 goles)
+  let homeBy2Plus = 0;
+  let awayBy2Plus = 0;
+  let homeBy3Plus = 0;
+  let awayBy3Plus = 0;
+  for (let i = 0; i <= maxGoals; i++) {
+    for (let j = 0; j <= maxGoals; j++) {
+      const p = exactScores[`${i}-${j}`] || 0;
+      if (i - j >= 2) homeBy2Plus += p;
+      if (j - i >= 2) awayBy2Plus += p;
+      if (i - j >= 3) homeBy3Plus += p;
+      if (j - i >= 3) awayBy3Plus += p;
+    }
+  }
+
+  const spreads = {
+    homeMinus15: ((homeBy2Plus / totalRaw) * 100).toFixed(1),
+    awayMinus15: ((awayBy2Plus / totalRaw) * 100).toFixed(1),
+    homeMinus25: ((homeBy3Plus / totalRaw) * 100).toFixed(1),
+    awayMinus25: ((awayBy3Plus / totalRaw) * 100).toFixed(1)
+  };
+
   const dnb = calculateDnbProbabilities(hWinPct, aWinPct);
   const doubleChance = calculateDoubleChanceProbabilities(hWinPct, drawPct, aWinPct);
 
@@ -200,6 +221,7 @@ export function calculateMatchProbabilities(
     bttsNo: (bttsNo * 100).toFixed(1),
     dnb,
     doubleChance,
+    spreads,
     mostLikelyScores
   };
 }
