@@ -393,7 +393,7 @@ function pruneCache(cache) {
 }
 
 // 3. ENVÍO DE MENSAJES VÍA TELEGRAM API
-async function sendTelegramMessage(text, dryRun = false, targetChatId = null) {
+export async function sendTelegramMessage(text, dryRun = false, targetChatId = null, replyMarkup = null) {
   if (dryRun) {
     console.log('\n[DRY RUN - Mensaje que se enviaría a Telegram]:');
     console.log(text);
@@ -410,15 +410,19 @@ async function sendTelegramMessage(text, dryRun = false, targetChatId = null) {
 
   const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
   try {
+    const payload = {
+      chat_id: chatId,
+      text: text,
+      parse_mode: 'Markdown',
+      disable_web_page_preview: true
+    };
+    if (replyMarkup) {
+      payload.reply_markup = replyMarkup;
+    }
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: text,
-        parse_mode: 'Markdown',
-        disable_web_page_preview: true
-      })
+      body: JSON.stringify(payload)
     });
     const data = await res.json();
     if (!data.ok) {
