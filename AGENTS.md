@@ -63,6 +63,12 @@ Ubicados en [src/utils/ensemble.js](file:///c:/Users/RO106536/Documents/Perso/Pr
   - **Candado Anti-Saturación de Player Props:**
     * Regla estricta: las apuestas de equipo (1X2 Moneyline, Spreads de puntos, Totales Over/Under y BTTS) representan >= 75%-85% de cada cartelera.
     * Los Player Props individuales quedan limitados a un máximo estricto de 1 por turno regular (y máximo 2 en días de alto volumen masivo con NFL/Fútbol).
+  - **Webhook Interactivo de Telegram con Teclado Simplificado de 3 Botones:**
+    * Endpoint Serverless desplegado en [api/webhook.js](file:///c:/Users/RO106536/Documents/Perso/Proy_Gemini/stats-ai-pro/api/webhook.js) y enlazado a `https://stats-ai-pi.vercel.app/api/webhook`.
+    * Teclado persistente con 3 botones directos en Telegram: `[/vip]`, `[/cuota]`, `[/corte]`.
+    * Candado de seguridad exclusivo: solo responde a Tavo Rodarte (`1258878024`), bloqueando cualquier otro usuario.
+    * Permite invocar la Cartelera VIP en tiempo real, auditar saldo de APIs y ver corte diario con un solo toque desde el celular sin ingresar a consolas ni computadoras.
+
 
 * **2026-10-19:** Implementación de la Partición Estricta de Ventanas de Alertas (Cero Canibalización):
   - Alerta 9:30 AM -> [09:30 a 15:30 mismo día].
