@@ -941,6 +941,60 @@ export function buildOpportunitiesAndTopSlate({
         probs: probs
       });
     }
+
+    // 5. EVALUACIÓN DE TOTALES (OVER / UNDER 2.5 GOLES) EN FÚTBOL TIER 1
+    const calOver = parseFloat(probs.over25 || 50);
+    const calUnder = parseFloat(probs.under25 || 50);
+    const overOddsDec = parseFloat(m.market?.overOdds) || 1.90;
+    const underOddsDec = parseFloat(m.market?.underOdds) || 1.90;
+
+    // A) UNDER 2.5 Goles: Ritmo defensivo / bajo xG combinado (<= 2.25) con probabilidad >= 60%
+    if (calUnder >= 60.0 && (hXgNum + aXgNum) <= 2.25 && underOddsDec >= 1.60 && underOddsDec <= 2.20 && mc.riskLevel !== 'Alto') {
+      const impliedUnder = (1 / underOddsDec) * 100;
+      const underEdge = calUnder - impliedUnder;
+      if (underEdge >= 3.0) {
+        rawOpportunities.push({
+          id: `tot-u-${m.id}`,
+          sport: 'Fútbol',
+          league: m.league,
+          game: `${m.home.name} vs ${m.away.name}`,
+          gameDate: m.gameDate,
+          type: '💨 TOTALES FÚTBOL (VALOR UNDER)',
+          pick: 'UNDER 2.5 Goles',
+          prob: `${calUnder.toFixed(0)}%`,
+          odds: underOddsDec.toFixed(2),
+          edgeVal: Math.max(underEdge, 4.0),
+          edgeStr: `Under 2.5: ${calUnder.toFixed(0)}% | Edge: +${underEdge.toFixed(1)}%`,
+          argument: `Duelo de bajo ritmo y defensas cerradas (xG combinado de ${(hXgNum + aXgNum).toFixed(2)} goles). Simulación Monte Carlo y Poisson proyectan partido táctico con menos de 3 anotaciones.`,
+          mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel, iterations: 10000 },
+          match: m,
+          probs: probs
+        });
+      }
+    } else if (calOver >= 60.0 && (hXgNum + aXgNum) >= 2.85 && overOddsDec >= 1.60 && overOddsDec <= 2.20 && mc.riskLevel !== 'Alto') {
+      // B) OVER 2.5 Goles: Ataques de alto volumen (Candado 2 anti-derbi se evalúa en ensembleConsensus)
+      const impliedOver = (1 / overOddsDec) * 100;
+      const overEdge = calOver - impliedOver;
+      if (overEdge >= 3.0) {
+        rawOpportunities.push({
+          id: `tot-o-${m.id}`,
+          sport: 'Fútbol',
+          league: m.league,
+          game: `${m.home.name} vs ${m.away.name}`,
+          gameDate: m.gameDate,
+          type: '🔥 TOTALES FÚTBOL (VALOR OVER)',
+          pick: 'OVER 2.5 Goles',
+          prob: `${calOver.toFixed(0)}%`,
+          odds: overOddsDec.toFixed(2),
+          edgeVal: Math.max(overEdge, 4.0),
+          edgeStr: `Over 2.5: ${calOver.toFixed(0)}% | Edge: +${overEdge.toFixed(1)}%`,
+          argument: `Generación ofensiva bilateral masiva (${(hXgNum + aXgNum).toFixed(2)} xG combinados). Proyección matemática supera la cuota de Las Vegas con +${overEdge.toFixed(1)}% de ventaja.`,
+          mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel, iterations: 10000 },
+          match: m,
+          probs: probs
+        });
+      }
+    }
   });
 
   // ================= A.2 EVALUACIÓN DE PLAYER PROPS (FÚTBOL) =================
@@ -1672,23 +1726,21 @@ export function buildOpportunitiesAndTopSlate({
     }
 
     // CANDADO 2: CUPO MÁXIMO ESTRICTO PARA PLAYER PROPS INDIVIDUALES
-    // Máximo 1 Player Prop (o 2 si la jornada ampliada es de 10) en todo el Top Slate de Telegram
-    const maxPropsAllowed = maxPicksToSend >= 10 ? 2 : 1;
+    // Máximo 2 Player Props (o 3 si la jornada ampliada es de 10) en todo el Top Slate de Telegram
+    const maxPropsAllowed = maxPicksToSend >= 10 ? 3 : 2;
     const currentPropsInSlate = topSlate.filter(p => isPlayerIndividualProp(p)).length;
 
     if (isPickProp && currentPropsInSlate >= maxPropsAllowed) {
       continue;
     }
 
-    // CANDADO 3: PROTOCOLO ANTI-DNP (VENTANA DE 90 MINUTOS ENFOCADA EXCLUSIVAMENTE EN PROPS INDIVIDUALES)
-    // Para no arriesgar saldo a ciegas sin alineaciones confirmadas, ningún Player Prop individual
-    // puede enviarse a Telegram con más de 90 minutos de anticipación al partido.
-    // SI EL PICK ES POR EQUIPO (Sides, Spreads, Totales, BTTS, F5, Moneyline), ESTE CANDADO NO APLICA
-    // y se envía normalmente con horas de anticipación para que los usuarios puedan meter su apuesta con calma.
+    // CANDADO 3: PROTOCOLO ANTI-DNP
+    // En el turno matutino o vespertino, se permiten props de la cartelera activa del turno (hasta 360 min / 6 horas).
+    // Se descartan props que jueguen a más de 6 horas para evitar incertidumbre de alineaciones en días posteriores.
     if (isPickProp && pick.gameDate) {
       const gTime = new Date(pick.gameDate).getTime();
       const minsToStart = (gTime - Date.now()) / (1000 * 60);
-      if (minsToStart > 90 || minsToStart < -15) {
+      if (minsToStart > 360 || minsToStart < -15) {
         continue;
       }
     }
