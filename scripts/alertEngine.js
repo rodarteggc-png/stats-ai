@@ -1790,8 +1790,9 @@ export function buildOpportunitiesAndTopSlate({
     }
 
     // CANDADO 2: CUPO MÁXIMO ESTRICTO PARA PLAYER PROPS INDIVIDUALES
-    // Máximo 2 Player Props (o 3 si la jornada ampliada es de 10) en todo el Top Slate de Telegram
-    const maxPropsAllowed = maxPicksToSend >= 10 ? 3 : 2;
+    // Máximo 1 Player Prop (o 2 si la jornada ampliada de fin de semana es de 10) en todo el Top Slate de Telegram
+    // Garantiza que el 75%-85% de la cartelera sean apuestas de EQUIPO (Moneylines, Spreads, Totales, BTTS)
+    const maxPropsAllowed = maxPicksToSend >= 10 ? 2 : 1;
     const currentPropsInSlate = topSlate.filter(p => isPlayerIndividualProp(p)).length;
 
     if (isPickProp && currentPropsInSlate >= maxPropsAllowed) {
