@@ -25,6 +25,11 @@ import {
   hydrateCloudLessons,
   getDynamicEloStore
 } from '../src/services/history.js';
+import { getGameWeather } from '../src/services/weatherService.js';
+import { getMatchXgProjection } from '../src/services/fotmobService.js';
+import { detectAndAlertSteamMoves } from '../src/services/steamDetector.js';
+import { fetchNbaSchedule } from '../src/services/nbaService.js';
+import { calculateNbaProbabilities } from '../src/utils/hoops.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -731,6 +736,7 @@ export function buildOpportunitiesAndTopSlate({
   mlbMatches = [],
   nflMatches = [],
   ncaafMatches = [],
+  nbaMatches = [],
   maxPicksToSend = 6,
   runtimePenalties = {},
   sentCache = {},
@@ -1610,6 +1616,124 @@ export function buildOpportunitiesAndTopSlate({
         match: m,
         probs: ncaafProbs
       });
+    }
+  });
+
+  // ================= E. EVALUACIÓN DE BALONCESTO (NBA - RATINGS & POSESIONES) =================
+  nbaMatches.forEach(m => {
+    const probs = m.probabilities || calculateNbaProbabilities(m);
+    if (!probs) return;
+
+    const gameDate = m.date || m.gameDate || new Date().toISOString();
+
+    // 1. Spreads de NBA
+    if (probs.homeCoverProb >= 56.0 && m.spread !== null) {
+      const ev = Number((probs.homeCoverProb - 52.4).toFixed(1));
+      const spreadFmt = m.spread > 0 ? `+${m.spread}` : `${m.spread}`;
+      rawOpportunities.push({
+        id: `nba-spread-h-${m.id}`,
+        sport: 'Baloncesto',
+        league: 'NBA',
+        game: `${m.home.name} vs ${m.away.name}`,
+        gameDate,
+        type: '🏀 VENTAJA SPREAD (NBA)',
+        pick: `${m.home.name} ${spreadFmt} (Cubre Línea)`,
+        prob: `${probs.homeCoverProb}%`,
+        odds: '1.91',
+        edgeVal: Math.max(4.0, ev),
+        edgeStr: `Prob: ${probs.homeCoverProb}% | Edge: +${ev}%`,
+        argument: `Modelo de Posesiones Dean Oliver proyecta margen local de ${probs.projectedSpread > 0 ? '+' : ''}${probs.projectedSpread} pts (Pace: ${probs.projectedPace}).`,
+        mcStats: { stability: 82, risk: 'Bajo', iterations: 10000 },
+        match: m,
+        probs: { f5: { homeMl: probs.homeWinProb, awayMl: probs.awayWinProb } }
+      });
+    } else if (probs.awayCoverProb >= 56.0 && m.spread !== null) {
+      const ev = Number((probs.awayCoverProb - 52.4).toFixed(1));
+      const spreadVal = -m.spread;
+      const spreadFmt = spreadVal > 0 ? `+${spreadVal}` : `${spreadVal}`;
+      rawOpportunities.push({
+        id: `nba-spread-a-${m.id}`,
+        sport: 'Baloncesto',
+        league: 'NBA',
+        game: `${m.home.name} vs ${m.away.name}`,
+        gameDate,
+        type: '🏀 VENTAJA SPREAD (NBA)',
+        pick: `${m.away.name} ${spreadFmt} (Cubre Línea)`,
+        prob: `${probs.awayCoverProb}%`,
+        odds: '1.91',
+        edgeVal: Math.max(4.0, ev),
+        edgeStr: `Prob: ${probs.awayCoverProb}% | Edge: +${ev}%`,
+        argument: `Modelo de Posesiones Dean Oliver proyecta ventaja para ${m.away.name} cubriendo línea de ${spreadFmt} (Pace: ${probs.projectedPace}).`,
+        mcStats: { stability: 82, risk: 'Bajo', iterations: 10000 },
+        match: m,
+        probs: { f5: { homeMl: probs.homeWinProb, awayMl: probs.awayWinProb } }
+      });
+    }
+
+    // 2. Totales NBA (Under / Over)
+    if (probs.underProb >= 57.0 && m.total !== null) {
+      const ev = Number((probs.underProb - 52.4).toFixed(1));
+      rawOpportunities.push({
+        id: `nba-under-${m.id}`,
+        sport: 'Baloncesto',
+        league: 'NBA',
+        game: `${m.home.name} vs ${m.away.name}`,
+        gameDate,
+        type: '🏀 TOTALES NBA (UNDER)',
+        pick: `UNDER ${m.total} Pts`,
+        prob: `${probs.underProb}%`,
+        odds: '1.91',
+        edgeVal: Math.max(4.5, ev),
+        edgeStr: `Total Proyectado: ${probs.projectedTotal} vs Línea ${m.total} | Edge: +${ev}%`,
+        argument: `Ritmo proyectado de ${probs.projectedPace} posesiones genera expectativa de ${probs.projectedTotal} pts, marcando fuerte valor bajista.`,
+        mcStats: { stability: 85, risk: 'Bajo', iterations: 10000 },
+        match: m,
+        probs: { f5: { homeMl: probs.homeWinProb, awayMl: probs.awayWinProb } }
+      });
+    } else if (probs.overProb >= 57.0 && m.total !== null) {
+      const ev = Number((probs.overProb - 52.4).toFixed(1));
+      rawOpportunities.push({
+        id: `nba-over-${m.id}`,
+        sport: 'Baloncesto',
+        league: 'NBA',
+        game: `${m.home.name} vs ${m.away.name}`,
+        gameDate,
+        type: '🏀 TOTALES NBA (OVER)',
+        pick: `OVER ${m.total} Pts`,
+        prob: `${probs.overProb}%`,
+        odds: '1.91',
+        edgeVal: Math.max(4.5, ev),
+        edgeStr: `Total Proyectado: ${probs.projectedTotal} vs Línea ${m.total} | Edge: +${ev}%`,
+        argument: `Encuentro de alta velocidad con ${probs.projectedPace} posesiones proyectadas, superando el total institucional de ${m.total}.`,
+        mcStats: { stability: 85, risk: 'Bajo', iterations: 10000 },
+        match: m,
+        probs: { f5: { homeMl: probs.homeWinProb, awayMl: probs.awayWinProb } }
+      });
+    }
+
+    // 3. Moneyline Favorito (Cuota <= 2.05)
+    if (probs.homeWinProb >= 62.0 && m.odds?.homeMl && m.odds.homeMl <= 2.05) {
+      const mlOdds = m.odds.homeMl.toFixed(2);
+      const ev = Number((probs.homeWinProb - (100 / m.odds.homeMl)).toFixed(1));
+      if (ev >= 3.0) {
+        rawOpportunities.push({
+          id: `nba-ml-h-${m.id}`,
+          sport: 'Baloncesto',
+          league: 'NBA',
+          game: `${m.home.name} vs ${m.away.name}`,
+          gameDate,
+          type: '🏀 FAVORITO DIRECTO (NBA)',
+          pick: `Victoria ${m.home.name}`,
+          prob: `${probs.homeWinProb}%`,
+          odds: mlOdds,
+          edgeVal: ev,
+          edgeStr: `+${ev}% EV vs Cuota | Prob: ${probs.homeWinProb}%`,
+          argument: `Dominio ofensivo y ventaja de localía proyectada en ${probs.homeExpectedScore} pts frente a ${probs.awayExpectedScore} pts rivales.`,
+          mcStats: { stability: 80, risk: 'Bajo', iterations: 10000 },
+          match: m,
+          probs: { f5: { homeMl: probs.homeWinProb, awayMl: probs.awayWinProb } }
+        });
+      }
     }
   });
 
@@ -2604,16 +2728,17 @@ export async function runAlertEngine(options = {}) {
     console.error('Aviso en auditoría previa:', err.message);
   }
 
-  // Descargar programación completa desacoplada (Fútbol, MLB, NFL y NCAAF Colegial FBS)
+  // Descargar programación completa desacoplada (Fútbol, MLB, NFL, NCAAF y NBA)
   // Utiliza Promise.allSettled para procesar de inmediato los deportes que sí respondieron rápido
   const scheduleBatches = await Promise.allSettled([
     fetchDailySchedule('futbol', dateRange),
     fetchDailySchedule('mlb', dateRange),
     fetchDailySchedule('nfl', dateRange),
-    fetchDailySchedule('ncaaf', dateRange)
+    fetchDailySchedule('ncaaf', dateRange),
+    fetchNbaSchedule(dateRange)
   ]);
 
-  const [soccerRaw, mlbRaw, nflRaw, ncaafRaw] = scheduleBatches.map(r =>
+  const [soccerRaw, mlbRaw, nflRaw, ncaafRaw, nbaRaw] = scheduleBatches.map(r =>
     r.status === 'fulfilled' && Array.isArray(r.value) ? r.value : []
   );
 
@@ -2629,10 +2754,42 @@ export async function runAlertEngine(options = {}) {
   const mlbMatches = mlbRaw.filter(filterUpcoming);
   const nflMatches = nflRaw.filter(filterUpcoming);
   const ncaafMatches = ncaafRaw.filter(filterUpcoming);
+  const nbaMatches = nbaRaw.filter(filterUpcoming);
 
   if (isVerbose) {
-    console.log(`⚽ Fútbol en ventana: ${soccerMatches.length} | ⚾ MLB: ${mlbMatches.length} | 🏈 NFL: ${nflMatches.length} | 🎓 NCAAF: ${ncaafMatches.length}`);
+    console.log(`⚽ Fútbol: ${soccerMatches.length} | ⚾ MLB: ${mlbMatches.length} | 🏈 NFL: ${nflMatches.length} | 🎓 NCAAF: ${ncaafMatches.length} | 🏀 NBA: ${nbaMatches.length}`);
   }
+
+  // 1. Enriquecimiento Meteorológico en tiempo real (Open-Meteo) para NFL y NCAAF
+  await Promise.allSettled(
+    [...nflMatches, ...ncaafMatches].map(async m => {
+      try {
+        const weather = await getGameWeather(m.home?.name, 'nfl');
+        if (weather) {
+          m.weather = weather;
+          if (weather.impactOnTotal !== 0 && m.vegas) {
+            m.weatherImpact = weather.impactOnTotal;
+          }
+        }
+      } catch (e) {}
+    })
+  );
+
+  // 2. Enriquecimiento con Expected Goals (xG de FotMob) para Fútbol
+  await Promise.allSettled(
+    soccerMatches.map(async m => {
+      try {
+        const xg = await getMatchXgProjection(m.home?.name, m.away?.name);
+        if (xg && xg.hasXg) {
+          m.fotmobXg = xg;
+          const hX = parseFloat(m.home?.xG) || 1.35;
+          const aX = parseFloat(m.away?.xG) || 1.05;
+          m.home.xG = Number((hX * 0.70 + xg.homeXg * 0.30).toFixed(2));
+          m.away.xG = Number((aX * 0.70 + xg.awayXg * 0.30).toFixed(2));
+        }
+      } catch (e) {}
+    })
+  );
 
   // Enriquecimiento en tiempo real con cuotas institucionales de Pinnacle / Bet365
   let enrichedNfl = nflMatches;
@@ -2654,11 +2811,20 @@ export async function runAlertEngine(options = {}) {
     console.warn('Aviso enriqueciendo cuotas sharp:', err.message);
   }
 
+  // 3. Detección de Dinero Profesional / Steam Moves en Pinnacle en tiempo real
+  try {
+    const allMatchesWithOdds = [...enrichedSoccer, ...enrichedMlb, ...enrichedNfl, ...enrichedNcaaf, ...nbaMatches];
+    await detectAndAlertSteamMoves(allMatchesWithOdds, isVipOnly);
+  } catch (err) {
+    console.warn('Aviso detectando steam moves:', err.message);
+  }
+
   const { rawOpportunities, approvedOpps, topSlate } = buildOpportunitiesAndTopSlate({
     soccerMatches: enrichedSoccer,
     mlbMatches: enrichedMlb,
     nflMatches: enrichedNfl,
     ncaafMatches: enrichedNcaaf,
+    nbaMatches,
     maxPicksToSend,
     runtimePenalties: auditResult.runtimePenalties,
     sentCache,

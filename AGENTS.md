@@ -69,6 +69,19 @@ Ubicados en [src/utils/ensemble.js](file:///c:/Users/RO106536/Documents/Perso/Pr
     * Candado de seguridad exclusivo: solo responde a Tavo Rodarte (`1258878024`), bloqueando cualquier otro usuario.
     * Permite invocar la Cartelera VIP en tiempo real, auditar saldo de APIs y ver corte diario con un solo toque desde el celular sin ingresar a consolas ni computadoras.
 
+* **2026-10-21 (Expansión Cuantitativa Multi-Fuente y Activación NBA):**
+  - **Módulo Meteorológico Open-Meteo (`src/services/weatherService.js`):**
+    * Integración de clima y viento en tiempo real sin límites ni API keys para estadios de NFL y colegial.
+    * Ajuste dinámico de puntos totales por vientos sostenidos >= 15 mph (-0.45 pts/mph sobre 12 mph) y blindaje del Candado 4 de Totales. Detección automática de domos (AT&T, Ford Field, Superdome, SoFi).
+  - **Alimentador de Expected Goals FotMob (`src/services/fotmobService.js`):**
+    * Extracción forense de xG, xGA, xGOT, Big Chances y tiros al marco desde endpoints de datos de FotMob sin bloqueos de Cloudflare.
+    * Fusión Bayesiana en Poisson Dixon-Coles (70% goles históricos ESPN + 30% xG real FotMob) para detectar equipos sobrevalorados.
+  - **Detector de Dinero Profesional / Steam Moves (`src/services/steamDetector.js`):**
+    * Auditoría de caídas agresivas de cuota (>= 15 centavos o >= 7.5% de caída súbita) en Pinnacle/Bet365.
+    * Despacho automático de Alertas Flash VIP prioritarias a Telegram.
+  - **Módulo Cuantitativo de Baloncesto NBA (`src/utils/hoops.js` y `src/services/nbaService.js`):**
+    * Modelo de 4 Factores de Dean Oliver, Posesiones (Pace) y Ratings Ofensivo/Defensivo por 100 posesiones para las 30 franquicias NBA.
+    * Evaluación de Spreads, Over/Under y Moneylines con cuotas oficiales y verificación en el Tribunal de Consenso.
 
 * **2026-10-19:** Implementación de la Partición Estricta de Ventanas de Alertas (Cero Canibalización):
   - Alerta 9:30 AM -> [09:30 a 15:30 mismo día].

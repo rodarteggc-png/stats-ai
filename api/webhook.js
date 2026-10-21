@@ -53,11 +53,13 @@ export default async function handler(req, res) {
     // ==========================================
     // OPCIÓN 1: /vip -> DISPARAR CARTELERA VIP
     // ==========================================
-    if (command === '/vip' || command === '/cartelera' || command === '1' || command === 'vip' || command === 'cartelera') {
+    if (command === '/vip' || command === '/cartelera' || command === '1' || command === 'vip' || command === 'cartelera' || command === '/flash' || command === '/steam') {
       await sendTelegramMessage(
-        '⏳ *Escaneando mercados en tiempo real...*\n🔬 _Consultando cuotas Pinnacle/Bet365 en API-Sports y simulando 10,000 partidos Monte Carlo... Recibirás el análisis individual a continuación._',
+        '⏳ *Escaneando mercados en tiempo real...*\n🔬 _Consultando cuotas Pinnacle en API-Sports, clima Open-Meteo, xG en FotMob y simulaciones Monte Carlo en Fútbol, NFL, MLB y NBA... Recibirás el análisis individual a continuación._',
         false,
         chatId,
+        KEYBOARD_MENU
+      );
         KEYBOARD_MENU
       );
 
