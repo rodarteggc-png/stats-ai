@@ -60,8 +60,6 @@ export default async function handler(req, res) {
         chatId,
         KEYBOARD_MENU
       );
-        KEYBOARD_MENU
-      );
 
       try {
         const result = await runAlertEngine({ force: true, vip: true });

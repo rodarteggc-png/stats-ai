@@ -2,9 +2,30 @@
 // DETECTOR DE STEAM MOVES (INYECCIÓN DE DINERO PROFESIONAL EN TIEMPO REAL)
 // Monitorea cambios abruptos en cuotas de Pinnacle y Bet365 para enviar Alertas Flash VIP
 
-import { sendTelegramMessage } from '../../scripts/alertEngine.js';
-
 const ODDS_SNAPSHOT_CACHE = new Map();
+
+async function sendDirectTelegramAlert(text, targetChatId) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = targetChatId || process.env.TELEGRAM_VIP_CHAT_ID || '1258878024';
+  if (!token || !chatId) return false;
+  try {
+    const url = `https://api.telegram.org/bot${token}/sendMessage`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: 'Markdown',
+        disable_web_page_preview: true
+      })
+    });
+    const d = await res.json();
+    return d.ok;
+  } catch (e) {
+    return false;
+  }
+}
 
 /**
  * Registra o compara cuotas para detectar caídas bruscas (Steam Moves)
@@ -94,7 +115,7 @@ export async function detectAndAlertSteamMoves(gamesWithOdds = [], dispatchAlert
         `_${steam.reason} Los sindicatos de apuestas acaban de golpear esta línea. Valor de entrada temprana antes del ajuste total._`
       ].join('\n');
 
-      await sendTelegramMessage(msg, false, vipChatId);
+      await sendDirectTelegramAlert(msg, vipChatId);
     }
   }
 
