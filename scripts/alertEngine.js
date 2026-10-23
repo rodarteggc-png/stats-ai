@@ -441,6 +441,29 @@ export async function sendTelegramMessage(text, dryRun = false, targetChatId = n
   }
 }
 
+/**
+ * Responde a un callback_query de Telegram para remover el spinner de carga
+ */
+export async function answerTelegramCallback(callbackQueryId, text = '') {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN || TELEGRAM_BOT_TOKEN;
+  if (!botToken || !callbackQueryId) return false;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        callback_query_id: callbackQueryId,
+        text: text
+      })
+    });
+    const data = await res.json();
+    return Boolean(data.ok);
+  } catch (err) {
+    console.error('Error respondiendo callback_query:', err.message);
+    return false;
+  }
+}
+
 function getFairOddsDecimal(probPct) {
   const p = parseFloat(probPct);
   if (!p || p <= 0) return '2.00';
@@ -2732,14 +2755,22 @@ export async function runAlertEngine(options = {}) {
     console.error('Aviso en auditoría previa:', err.message);
   }
 
+  // Soporte para filtrado selectivo por deporte (ej. VIP por deporte) o cartelera general
+  const targetSport = (options.sport || options.sportFilter || 'all').toLowerCase();
+  const fetchSoccer = targetSport === 'all' || targetSport === 'futbol' || targetSport === 'soccer';
+  const fetchMlb = targetSport === 'all' || targetSport === 'mlb';
+  const fetchNfl = targetSport === 'all' || targetSport === 'nfl';
+  const fetchNcaaf = targetSport === 'all' || targetSport === 'nfl' || targetSport === 'ncaaf';
+  const fetchNba = targetSport === 'all' || targetSport === 'nba' || targetSport === 'basket';
+
   // Descargar programación completa desacoplada (Fútbol, MLB, NFL, NCAAF y NBA)
   // Utiliza Promise.allSettled para procesar de inmediato los deportes que sí respondieron rápido
   const scheduleBatches = await Promise.allSettled([
-    fetchDailySchedule('futbol', dateRange),
-    fetchDailySchedule('mlb', dateRange),
-    fetchDailySchedule('nfl', dateRange),
-    fetchDailySchedule('ncaaf', dateRange),
-    fetchNbaSchedule(dateRange)
+    fetchSoccer ? fetchDailySchedule('futbol', dateRange) : Promise.resolve([]),
+    fetchMlb ? fetchDailySchedule('mlb', dateRange) : Promise.resolve([]),
+    fetchNfl ? fetchDailySchedule('nfl', dateRange) : Promise.resolve([]),
+    fetchNcaaf ? fetchDailySchedule('ncaaf', dateRange) : Promise.resolve([]),
+    fetchNba ? fetchNbaSchedule(dateRange) : Promise.resolve([])
   ]);
 
   const [soccerRaw, mlbRaw, nflRaw, ncaafRaw, nbaRaw] = scheduleBatches.map(r =>
@@ -2836,7 +2867,17 @@ export async function runAlertEngine(options = {}) {
   });
 
   // topSlate ya viene filtrado contra sentCache y con prioridad estricta para los juegos de HOY
-  const toSend = topSlate;
+  const toSend = (targetSport && targetSport !== 'all')
+    ? topSlate.filter(p => {
+        const s = (p.sport || '').toLowerCase();
+        const l = (p.league || '').toLowerCase();
+        if (targetSport === 'futbol' || targetSport === 'soccer') return s.includes('fútbol') || s.includes('futbol') || s.includes('soccer');
+        if (targetSport === 'nba' || targetSport === 'basket') return s.includes('baloncesto') || l.includes('nba');
+        if (targetSport === 'nfl') return s === 'nfl' || s === 'ncaaf' || l.includes('nfl') || l.includes('ncaaf');
+        if (targetSport === 'mlb') return s === 'mlb' || l.includes('mlb') || l.includes('baseball');
+        return true;
+      })
+    : topSlate;
 
   // Además, identificar TODAS las oportunidades con Unanimidad 3/3 (incluyendo las que no entraron al Top 6 de Telegram)
   // para guardarlas automáticamente en la Memoria de Auditoría y calificarlas contra resultados oficiales
