@@ -50,7 +50,7 @@ export default async function handler(req, res) {
     const callback = update.callback_query;
     const message = isCallback ? callback.message : (update.message || update.edited_message);
     const senderId = isCallback ? callback.from?.id : message?.from?.id;
-    const chatId = message?.chat?.id;
+    const chatId = message?.chat?.id || (isCallback ? callback.from?.id : null);
     const rawText = isCallback ? (callback.data || '') : (message?.text || '').trim();
     const command = rawText.toLowerCase();
 
@@ -124,7 +124,7 @@ export default async function handler(req, res) {
       );
 
       try {
-        const result = await runAlertEngine({ force: true, vip: true, sport: targetSport });
+        const result = await runAlertEngine({ force: true, vip: true, sport: targetSport, skipAudit: true, targetChatId: chatId });
         if (result.sentCount === 0) {
           await sendTelegramMessage(
             `✅ *Mercado al día en ${sportLabel}:*\nNo se encontraron selecciones que superen los 5 Candados de Veto (+EV) en este momento o los partidos de hoy ya concluyeron.`,

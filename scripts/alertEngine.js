@@ -2737,22 +2737,24 @@ export async function runAlertEngine(options = {}) {
   const isMondayMorning = isAuditWindow && cdmxDayOfWeek === 'Mon';
   const shouldSendWeeklyAudit = (options.weekly !== undefined ? options.weekly : (process.argv.includes('--weekly') || process.argv.includes('--semanal'))) || (isMondayMorning && sentCache._meta.lastWeeklyAuditDate !== cdmxDateStr);
 
-  // Ejecutar siempre la auditoría para calificar alertas pendientes, actualizar Elo y obtener castigos
+  // Ejecutar siempre la auditoría para calificar alertas pendientes, actualizar Elo y obtener castigos (salvo si se solicita skipAudit para velocidad)
   let auditResult = { auditedPicks: [], pendingPicks: [], runtimePenalties: {}, summary: null, auditSent: false };
-  try {
-    auditResult = await runDailyTelegramAudit({
-      dryRun: isDryRun,
-      sendToTelegram: shouldSendAuditReport,
-      sendWeeklyAudit: shouldSendWeeklyAudit,
-      forceAudit,
-      ledger: sentCache,
-      targetChatId
-    });
-    if (auditResult.auditSent && !isDryRun) {
-      sentCache._meta.lastAuditDate = cdmxDateStr;
+  if (!options.skipAudit) {
+    try {
+      auditResult = await runDailyTelegramAudit({
+        dryRun: isDryRun,
+        sendToTelegram: shouldSendAuditReport,
+        sendWeeklyAudit: shouldSendWeeklyAudit,
+        forceAudit,
+        ledger: sentCache,
+        targetChatId
+      });
+      if (auditResult.auditSent && !isDryRun) {
+        sentCache._meta.lastAuditDate = cdmxDateStr;
+      }
+    } catch (err) {
+      console.error('Aviso en auditoría previa:', err.message);
     }
-  } catch (err) {
-    console.error('Aviso en auditoría previa:', err.message);
   }
 
   // Soporte para filtrado selectivo por deporte (ej. VIP por deporte) o cartelera general
