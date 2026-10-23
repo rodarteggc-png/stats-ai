@@ -2170,10 +2170,12 @@ export async function runDailyTelegramAudit(options = {}) {
     fetchDailySchedule('mlb', 'ayer'),
     fetchDailySchedule('mlb', 'hoy'),
     fetchDailySchedule('nfl', 'ayer'),
-    fetchDailySchedule('ncaaf', 'ayer')
+    fetchDailySchedule('ncaaf', 'ayer'),
+    fetchDailySchedule('nba', 'ayer'),
+    fetchDailySchedule('nba', 'hoy')
   ]);
 
-  const [soccerYest, soccerToday, mlbYest, mlbToday, nflWeek, ncaafWeek] = scheduleResults.map(r =>
+  const [soccerYest, soccerToday, mlbYest, mlbToday, nflWeek, ncaafWeek, nbaYest, nbaToday] = scheduleResults.map(r =>
     r.status === 'fulfilled' && Array.isArray(r.value) ? r.value : []
   );
 
@@ -2183,7 +2185,9 @@ export async function runDailyTelegramAudit(options = {}) {
     ...mlbYest,
     ...mlbToday,
     ...nflWeek,
-    ...ncaafWeek
+    ...ncaafWeek,
+    ...nbaYest,
+    ...nbaToday
   ].filter(m => m && m.isCompleted);
 
   const ledgerEntries = Object.keys(providedCache)
