@@ -54,9 +54,26 @@ export async function fetchNbaSchedule(range = 'hoy') {
         home: { name: homeName, score: homeComp.score ? parseInt(homeComp.score, 10) : null },
         away: { name: awayName, score: awayComp.score ? parseInt(awayComp.score, 10) : null },
         date: evt.date,
+        gameDate: evt.date,
         isCompleted: evt.status?.type?.completed || false,
         spread: marketSpread,
         total: marketTotal,
+        vegas: {
+          spread: marketSpread,
+          overUnder: marketTotal,
+          spreadHomeOdds: '1.91',
+          spreadAwayOdds: '1.91',
+          overOdds: '1.91',
+          underOdds: '1.91'
+        },
+        market: {
+          homeOdds: toDecimalOdds(homeMl).toString(),
+          awayOdds: toDecimalOdds(awayMl).toString(),
+          spread: marketSpread,
+          overUnder: marketTotal,
+          hasRealOdds: true,
+          details: `NBA Spread ${marketSpread !== null ? (marketSpread > 0 ? `+${marketSpread}` : marketSpread) : '0'} | Total ${marketTotal || 224.5}`
+        },
         odds: {
           spread: marketSpread,
           overUnder: marketTotal,

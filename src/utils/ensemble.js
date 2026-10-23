@@ -238,6 +238,44 @@ export function evaluateEnsembleConsensus({
     } else {
       vote1Reason = `Ventaja matemática insuficiente en NFL (${maxCover.toFixed(1)}% inferior al umbral preventivo del 56.5%).`;
     }
+  } else if (sLower.includes('nba') || sLower.includes('baloncesto') || sLower.includes('basket')) {
+    const isTotalsNba = pTypeUpper.includes('TOTAL') || pTypeUpper.includes('OVER') || pTypeUpper.includes('UNDER');
+    const isSpreadNba = pTypeUpper.includes('SPREAD') || pTypeUpper.includes('CUBRE');
+    const homeCover = parseFloat(probs.homeCoverProb || 50);
+    const awayCover = parseFloat(probs.awayCoverProb || 50);
+    const maxCover = Math.max(homeCover, awayCover);
+    const underProb = parseFloat(probs.underProb || 50);
+    const overProb = parseFloat(probs.overProb || 50);
+    const maxTotalProb = Math.max(underProb, overProb);
+
+    if (isTotalsNba) {
+      if (maxTotalProb >= 56.5 || edgeVal >= 4.0) {
+        vote1Passed = true;
+        vote1Reason = `Ventaja en Totales NBA Dean Oliver: Proyección con ritmo (${probs.projectedPace || '99.2'} posesiones) supera el total de Vegas (Edge: +${edgeVal.toFixed(1)}%).`;
+      } else {
+        vote1Reason = `Ritmo proyectado y eficiencia sin ventaja suficiente en Totales (${maxTotalProb.toFixed(1)}% < 56.5%).`;
+      }
+    } else if (isSpreadNba) {
+      if (maxCover >= 56.0 || edgeVal >= 4.0) {
+        vote1Passed = true;
+        vote1Reason = `Ventaja contra el Spread NBA (+${edgeVal.toFixed(1)}% Edge). Ratings ofensivos/defensivos netos superan el margen de Vegas.`;
+      } else {
+        vote1Reason = `Diferencial de rating insuficiente contra el Spread (${maxCover.toFixed(1)}% < 56.0%).`;
+      }
+    } else {
+      const hWin = parseFloat(probs.homeWinProb || 50);
+      const aWin = parseFloat(probs.awayWinProb || 50);
+      const maxWin = Math.max(hWin, aWin);
+      if (numericOdds <= 2.05 && maxWin >= 55.0) {
+        vote1Passed = true;
+        vote1Reason = `Favorito directo NBA validado por Modelo de Posesiones (Prob: ${maxWin.toFixed(1)}% en cuota segura ${numericOdds.toFixed(2)}).`;
+      } else if (numericOdds > 2.05) {
+        vote1Passed = false;
+        vote1Reason = `⛔ Candado Anti-Underdog NBA: Cuota ${numericOdds.toFixed(2)} (> 2.05) en Moneyline directo. Proteger con Spread o Hándicap positivo.`;
+      } else {
+        vote1Reason = `Margen de victoria directo sin ventaja matemática suficiente.`;
+      }
+    }
   }
 
   // Candado Matemático Universal: Ningún pick puede aprobar el Voto 1 (+EV) si su probabilidad real no supera la probabilidad implícita de la cuota
@@ -326,6 +364,10 @@ export function evaluateEnsembleConsensus({
       const f5H = parseFloat(probs.f5?.homeMl || 50);
       const f5A = parseFloat(probs.f5?.awayMl || 50);
       isHomeSidePick = f5H >= f5A;
+      isAwaySidePick = !isHomeSidePick;
+    } else if (sLower.includes('nba') || sLower.includes('baloncesto') || sLower.includes('basket')) {
+      const expSpread = parseFloat(probs.projectedSpread || 0);
+      isHomeSidePick = expSpread >= 0;
       isAwaySidePick = !isHomeSidePick;
     } else {
       const hW = parseFloat(probs.homeWin || 50);

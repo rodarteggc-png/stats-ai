@@ -2,7 +2,7 @@
 // Web Worker para ejecutar simulaciones Monte Carlo (10,000 iteraciones por partido)
 // en un hilo de CPU paralelo sin congelar la UI de React.
 
-import { simulateSoccerMatch, simulateMlbMatch, simulateNflMatch } from '../utils/monteCarlo.js';
+import { simulateSoccerMatch, simulateMlbMatch, simulateNflMatch, simulateNbaMatch } from '../utils/monteCarlo.js';
 
 self.onmessage = (event) => {
   const { taskId, type, items } = event.data;
@@ -27,6 +27,13 @@ self.onmessage = (event) => {
             params.lead, params.spread, params.total, params.wind,
             params.iterations || 10000,
             params.isCollege || (sport === 'ncaaf')
+          );
+        } else if (sport === 'nba') {
+          results[id] = simulateNbaMatch(
+            params.lead || params.projectedLead || 0,
+            params.spread || 0,
+            params.total || 224.5,
+            params.iterations || 10000
           );
         }
       }

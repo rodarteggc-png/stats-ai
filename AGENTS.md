@@ -83,6 +83,13 @@ Ubicados en [src/utils/ensemble.js](file:///c:/Users/RO106536/Documents/Perso/Pr
     * Modelo de 4 Factores de Dean Oliver, Posesiones (Pace) y Ratings Ofensivo/Defensivo por 100 posesiones para las 30 franquicias NBA.
     * Evaluación de Spreads, Over/Under y Moneylines con cuotas oficiales y verificación en el Tribunal de Consenso.
 
+* **2026-10-23 (Replicación y Despliegue de NBA en el Portal Web):**
+  - **Selector de Deportes en UI:** Botón interactivo 🏀 Baloncesto (NBA) añadido a la barra segmentada principal de [src/App.jsx](file:///c:/Users/RO106536/Documents/Perso/Proy_Gemini/stats-ai-pro/src/App.jsx).
+  - **Radar de Oportunidades en Vivo:** Conexión nativa de `fetchDailySchedule('nba')` con `fetchNbaSchedule`, loteo en Web Worker Monte Carlo 10k (`simulateNbaMatch`), y generación de oportunidades en Spreads, Totales (Over/Under) y Moneylines.
+  - **Simulador Cuantitativo 3v1:** Soporte integral para partidos de NBA manuales o programados, proyectando Pace, Eficiencias ORtg/DRtg, Puntos y radiografía forense con Gemini.
+  - **Tribunal de Consenso y Calibración Platt:** Incorporación de NBA a [src/utils/ensemble.js](file:///c:/Users/RO106536/Documents/Perso/Proy_Gemini/stats-ai-pro/src/utils/ensemble.js) (Voto 1 estructural y Voto 3 de mercado) y coeficientes calibrados en [src/utils/calibration.js](file:///c:/Users/RO106536/Documents/Perso/Proy_Gemini/stats-ai-pro/src/utils/calibration.js).
+  - **Historial y Auto-Verificación:** Conexión de `autoVerifyResultsWithAPIs` con el feed de ESPN NBA Scoreboard para calificar automáticamente picks pendientes y calcular CLV real.
+
 * **2026-10-19:** Implementación de la Partición Estricta de Ventanas de Alertas (Cero Canibalización):
   - Alerta 9:30 AM -> [09:30 a 15:30 mismo día].
   - Alerta 3:30 PM -> [15:30 a 09:30 día siguiente].

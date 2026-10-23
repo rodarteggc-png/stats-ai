@@ -98,6 +98,7 @@ export function updateDynamicElo(sport, homeTeam, awayTeam, homeScore, awayScore
   else if (sport === 'ncaaf') hfa = 75;   // ~3.2 - 3.5 pts de spread colegial
   else if (sport === 'nfl') hfa = 55;     // ~2.5 - 3.0 pts de spread
   else if (sport === 'mlb') hfa = 25;     // ~54% win rate base de local
+  else if (sport === 'nba' || sport === 'baloncesto') hfa = 45; // ~2.4 pts ventaja de localía en NBA
 
   // 2. Expected score considerando la ventaja de localía
   const expectedHome = 1 / (1 + Math.pow(10, (aElo - (hElo + hfa)) / 400));
@@ -124,6 +125,7 @@ export function updateDynamicElo(sport, homeTeam, awayTeam, homeScore, awayScore
   else if (sport === 'ncaaf') baseK = 24;
   else if (sport === 'nfl') baseK = 20;
   else if (sport === 'mlb') baseK = 14;   // Temporada de 162 juegos
+  else if (sport === 'nba' || sport === 'baloncesto') baseK = 18; // Temporada regular de 82 juegos
 
   const kFactor = baseK * (scoreDiff > 0 ? movMultiplier : 1.0);
 
@@ -163,7 +165,13 @@ export function getHistory(sportFilter = null) {
     if (sanitized.length !== parsed.length && typeof window !== 'undefined' && window.localStorage) {
       try { localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized)); } catch (e) {}
     }
-    return sportFilter ? sanitized.filter(i => (i.sport === sportFilter || (!i.sport && sportFilter === 'futbol'))) : sanitized;
+    return sportFilter ? sanitized.filter(i => {
+      const s = (i.sport || '').toLowerCase();
+      const sf = sportFilter.toLowerCase();
+      if (sf === 'nba' || sf === 'baloncesto') return s === 'nba' || s === 'baloncesto';
+      if (sf === 'futbol') return s === 'futbol' || !i.sport;
+      return s === sf;
+    }) : sanitized;
   } catch (e) {
     return [];
   }
@@ -188,7 +196,13 @@ export function getAllLessons(sportFilter = null) {
   }
 
   return sportFilter 
-    ? lessons.filter(l => (l.sport === sportFilter || (!l.sport && sportFilter === 'futbol')))
+    ? lessons.filter(l => {
+      const s = (l.sport || '').toLowerCase();
+      const sf = sportFilter.toLowerCase();
+      if (sf === 'nba' || sf === 'baloncesto') return s === 'nba' || s === 'baloncesto';
+      if (sf === 'futbol') return s === 'futbol' || !l.sport;
+      return s === sf;
+    })
     : lessons;
 }
 
@@ -1218,6 +1232,48 @@ export async function autoVerifyResultsWithAPIs(sportFilter = null) {
         }
       } catch (e) {
         console.error("Error consultando resultados NFL:", e);
+      }
+    }
+  }
+
+  if (pendingSports.has('nba') || pendingSports.has('baloncesto')) {
+    const datesToFetchNba = new Set();
+    pendingItems.forEach(i => {
+      if ((i.sport || '').toLowerCase() === 'nba' || (i.sport || '').toLowerCase() === 'baloncesto') {
+        const d = (i.match?.gameDate || i.gameDate || i.match?.date || i.timestamp || '').split('T')[0];
+        if (d) {
+          datesToFetchNba.add(d.replace(/-/g, ''));
+        }
+      }
+    });
+
+    for (const dStr of datesToFetchNba) {
+      try {
+        const resNba = await fetch(`https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${dStr}`);
+        if (resNba.ok) {
+          const dataNba = await resNba.json();
+          const events = dataNba.events || [];
+          events.forEach(evt => {
+            const comp = evt.competitions?.[0];
+            if (comp && evt.status?.type?.completed) {
+              const home = comp.competitors?.find(c => c.homeAway === 'home');
+              const away = comp.competitors?.find(c => c.homeAway === 'away');
+              if (home && away) {
+                const odds = parseEspnOdds(comp.odds);
+                completedGames.push({
+                  sport: 'nba',
+                  home: home.team?.displayName || '',
+                  homeScore: parseInt(home.score || 0, 10),
+                  away: away.team?.displayName || '',
+                  awayScore: parseInt(away.score || 0, 10),
+                  ...odds
+                });
+              }
+            }
+          });
+        }
+      } catch (e) {
+        console.error("Error consultando resultados NBA:", e);
       }
     }
   }

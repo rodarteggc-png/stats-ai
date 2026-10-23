@@ -12,7 +12,8 @@ let PLATT_COEFFICIENTS = {
   futbol: { A: 0.88, B: -0.04 }, // Ajusta riesgo de empate en favoritos inflados
   nfl: { A: 0.92, B: 0.00 },    // Calibrado con números clave 3 y 7
   ncaaf: { A: 0.85, B: 0.00 },  // Mayor regresión a la media por volatilidad colegial
-  mlb: { A: 0.82, B: 0.02 }     // Suaviza sobreestimaciones provocadas por bullpen tardío
+  mlb: { A: 0.82, B: 0.02 },    // Suaviza sobreestimaciones provocadas por bullpen tardío
+  nba: { A: 0.90, B: 0.00 }     // Calibrado con posesiones y ritmo NBA
 };
 
 // Cargar coeficientes auto-aprendidos (Área 11) de memoria local si existen
@@ -49,6 +50,7 @@ export function recalibrateFromAudit(auditedPicks, sport) {
   if (sLower.includes('ncaaf') || sLower.includes('colegial')) key = 'ncaaf';
   else if (sLower.includes('nfl')) key = 'nfl';
   else if (sLower.includes('mlb') || sLower.includes('beisbol')) key = 'mlb';
+  else if (sLower.includes('nba') || sLower.includes('baloncesto') || sLower.includes('basket')) key = 'nba';
 
   // Filtrar exclusivamente selecciones completadas del deporte en cuestión
   const valid = auditedPicks.filter(p => {
@@ -57,6 +59,7 @@ export function recalibrateFromAudit(auditedPicks, sport) {
     if (key === 'ncaaf') return pSport.includes('ncaaf') || pSport.includes('colegial');
     if (key === 'nfl') return pSport.includes('nfl');
     if (key === 'mlb') return pSport.includes('mlb') || pSport.includes('beisbol');
+    if (key === 'nba') return pSport.includes('nba') || pSport.includes('baloncesto') || pSport.includes('basket');
     return pSport.includes('futbol') || pSport.includes('fútbol') || (!pSport && key === 'futbol');
   });
 
@@ -128,6 +131,7 @@ export function applyPlattCalibration(rawProb, sport = 'futbol') {
   if (sLower.includes('ncaaf') || sLower.includes('colegial')) key = 'ncaaf';
   else if (sLower.includes('nfl')) key = 'nfl';
   else if (sLower.includes('mlb') || sLower.includes('beisbol')) key = 'mlb';
+  else if (sLower.includes('nba') || sLower.includes('baloncesto') || sLower.includes('basket')) key = 'nba';
 
   const { A, B } = PLATT_COEFFICIENTS[key] || PLATT_COEFFICIENTS.futbol;
 

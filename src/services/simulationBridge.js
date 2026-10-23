@@ -2,7 +2,7 @@
 // Puente de simulación Monte Carlo con fallback automático síncrono.
 // Garantiza 0 fallos de ejecución si el navegador no soporta Web Workers.
 
-import { simulateSoccerMatch, simulateMlbMatch, simulateNflMatch } from '../utils/monteCarlo.js';
+import { simulateSoccerMatch, simulateMlbMatch, simulateNflMatch, simulateNbaMatch } from '../utils/monteCarlo.js';
 
 let workerInstance = null;
 let currentTaskId = 0;
@@ -101,6 +101,13 @@ function runBatchSyncFallback(items) {
           params.lead, params.spread, params.total, params.wind,
           params.iterations || 10000,
           params.isCollege || (sport === 'ncaaf')
+        );
+      } else if (sport === 'nba') {
+        results[id] = simulateNbaMatch(
+          params.lead || params.projectedLead || 0,
+          params.spread || 0,
+          params.total || 224.5,
+          params.iterations || 10000
         );
       }
     } catch (e) {

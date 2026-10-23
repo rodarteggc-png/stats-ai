@@ -47,7 +47,10 @@ const SPORT_PRIORS = {
   mlb_ml: 56.8,          // Tasa base ML favorito
   mlb_f5: 54.2,          // Tasa base F5 favorito
   nfl_ats: 51.5,         // Tasa base ATS (ni favorito ni underdog)
-  nfl_totals: 50.0       // Over/Under sin sesgo direccional
+  nfl_totals: 50.0,      // Over/Under sin sesgo direccional
+  nba_ats: 50.8,         // Tasa base ATS NBA
+  nba_totals: 50.0,      // Over/Under NBA
+  nba_ml: 67.5           // Tasa base ML favorito NBA
 };
 
 export function bayesianCalibrate(rawProb, sampleSize = 50, sport = 'mlb_ml') {
@@ -428,5 +431,83 @@ export function simulateNflMatch(
     keyNumberNotice: keyHitRate > 18 
       ? `📌 ${isCol ? 'Colegial FBS' : 'NFL'} - Densidad en Números Clave: ${keyHitRate}% de probabilidad en 3 o 7 pts.` 
       : null
+  };
+}
+
+/**
+ * 4. SIMULACIÓN MONTE CARLO PARA NBA (10,000 Iteraciones)
+ * Basado en posesiones, dispersión de margen (σ = 11.2 pts) y dispersión de totales (σ = 17.5 pts).
+ */
+export function simulateNbaMatch(
+  projectedLead = 0,
+  vegasSpread = 0,
+  vegasTotal = 224.5,
+  iterations = 10000
+) {
+  const isObj = typeof iterations === 'object' && iterations !== null;
+  const numIterations = isObj
+    ? (iterations.iterations || 10000)
+    : ((typeof iterations === 'number' && iterations > 0) ? iterations : 10000);
+  const lead = isObj && iterations.projectedLead !== undefined
+    ? parseFloat(iterations.projectedLead)
+    : (parseFloat(projectedLead) || 0);
+  const spread = parseFloat(vegasSpread) || 0;
+  const total = parseFloat(vegasTotal) || 224.5;
+
+  let homeCovers = 0;
+  let awayCovers = 0;
+  let homeWins = 0;
+  let overHits = 0;
+  let homeBlowoutLoss = 0;
+  let awayBlowoutLoss = 0;
+
+  const sigmaMargin = 11.2;
+  const sigmaTotal = 17.5;
+  const blowoutThresh = 15.0;
+
+  for (let i = 0; i < numIterations; i++) {
+    const simMargin = randomNormal(lead, sigmaMargin);
+    const simTotal = Math.max(140, randomNormal(total, sigmaTotal));
+
+    const atsMargin = simMargin + spread;
+    if (atsMargin > 0) homeCovers++;
+    else awayCovers++;
+
+    if (simMargin > 0) homeWins++;
+    if (simTotal > total) overHits++;
+
+    if (atsMargin < -blowoutThresh) homeBlowoutLoss++;
+    if (atsMargin > blowoutThresh) awayBlowoutLoss++;
+  }
+
+  const hCoverProb = Number(((homeCovers / numIterations) * 100).toFixed(1));
+  const aCoverProb = Number(((awayCovers / numIterations) * 100).toFixed(1));
+  const hWinProb = Number(((homeWins / numIterations) * 100).toFixed(1));
+  const oProb = Number(((overHits / numIterations) * 100).toFixed(1));
+  const uProb = Number((100 - oProb).toFixed(1));
+
+  const relevantBlowouts = hCoverProb >= aCoverProb ? homeBlowoutLoss : awayBlowoutLoss;
+  const upsetRate = Number(((relevantBlowouts / numIterations) * 100).toFixed(1));
+
+  const maxCover = Math.max(hCoverProb, aCoverProb);
+  const stabilityScore = Number(Math.min(92, Math.max(50, Math.round(maxCover * 1.15))).toFixed(0));
+
+  let riskLevel = 'Bajo';
+  if (upsetRate > 28 || stabilityScore < 60) riskLevel = 'Alto';
+  else if (upsetRate > 20 || stabilityScore < 68) riskLevel = 'Medio';
+
+  return {
+    iterations: numIterations,
+    homeCoverProb: hCoverProb,
+    awayCoverProb: aCoverProb,
+    homeWinProb: hWinProb,
+    awayWinProb: Number((100 - hWinProb).toFixed(1)),
+    overProb: oProb,
+    underProb: uProb,
+    calibratedHomeCover: bayesianCalibrate(hCoverProb, 50, 'nba_ats'),
+    calibratedAwayCover: bayesianCalibrate(aCoverProb, 50, 'nba_ats'),
+    upsetRate,
+    stabilityScore,
+    riskLevel
   };
 }

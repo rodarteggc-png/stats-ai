@@ -3,7 +3,8 @@ import { toPng } from "html-to-image";
 import { calculateMatchProbabilities, getFairOddsDecimal, calculatePropProbabilities } from "./utils/poisson";
 import { calculateMlbProbabilities, isExtremeAltitudePark, calculateMlbTotalProbabilities } from "./utils/sabermetrics";
 import { calculateNflProbabilities, calculateSpreadCoverProbability } from "./utils/gridiron";
-import { simulateSoccerMatch, simulateMlbMatch, simulateNflMatch } from "./utils/monteCarlo";
+import { calculateNbaProbabilities, getNbaTeamBaseline } from "./utils/hoops";
+import { simulateSoccerMatch, simulateMlbMatch, simulateNflMatch, simulateNbaMatch } from "./utils/monteCarlo";
 import { evaluateEnsembleConsensus } from "./utils/ensemble";
 import { calculateKellyStake } from "./utils/kelly";
 import { generateDailyMlbProps } from "./utils/mlbProps";
@@ -515,6 +516,10 @@ export default function App() {
           const total = m.vegas?.overUnder !== undefined ? m.vegas.overUnder : (isCol ? 52.5 : 44.5);
           const wind = m.weather?.windMph || 0;
           return { id: mKey, sport: isCol ? 'ncaaf' : 'nfl', params: { lead: 0, spread, total, wind, iterations: 10000, isCollege: isCol } };
+        } else if (activeSport === 'nba') {
+          const spread = m.spread !== undefined && m.spread !== null ? m.spread : (m.odds?.spread !== undefined ? m.odds.spread : 0);
+          const total = m.total !== undefined && m.total !== null ? m.total : (m.odds?.overUnder !== undefined ? m.odds.overUnder : 224.5);
+          return { id: mKey, sport: 'nba', params: { lead: 0, spread, total, iterations: 10000 } };
         }
         return null;
       }).filter(Boolean);
@@ -1316,6 +1321,86 @@ export default function App() {
               meta: `Línea Vegas: ${vegasTotal} pts | Proy: ${totalsEval.effectiveTotal} pts (Edge +${totalsEval.edge}%)`
             });
           }
+        } else if (activeSport === 'nba') {
+          const probs = matchData.probabilities || calculateNbaProbabilities(matchData);
+          if (probs) {
+            const spread = matchData.spread !== null && matchData.spread !== undefined ? matchData.spread : (matchData.odds?.spread !== undefined ? matchData.odds.spread : null);
+            const total = matchData.total !== null && matchData.total !== undefined ? matchData.total : (matchData.odds?.overUnder !== undefined ? matchData.odds.overUnder : null);
+            const mcNba = mcResultsMap[mKey] || simulateNbaMatch(probs.projectedSpread, spread || 0, total || 224.5, 10000);
+
+            // 1. Spreads de NBA
+            if (probs.homeCoverProb >= 56.0 && spread !== null) {
+              const ev = Number((probs.homeCoverProb - 52.4).toFixed(1));
+              const spreadFmt = spread > 0 ? `+${spread}` : `${spread}`;
+              opportunities.push({
+                match: matchData,
+                probs,
+                mcStats: { stability: mcNba.stabilityScore, risk: mcNba.riskLevel },
+                tier: probs.homeCoverProb >= 65 ? 1 : 2,
+                type: '🏀 VENTAJA SPREAD (NBA)',
+                pick: `${matchData.home.name} ${spreadFmt} (Cubre Línea)`,
+                reason: `Modelo Dean Oliver proyecta margen de ${probs.projectedSpread > 0 ? '+' : ''}${probs.projectedSpread} pts con ritmo de ${probs.projectedPace} posesiones. Ventaja contra el spread de Las Vegas.`,
+                prob: `${probs.homeCoverProb}%`,
+                odds: matchData.odds?.spreadOdds ? matchData.odds.spreadOdds.toString() : '1.91',
+                edgeVal: Math.max(4.0, ev),
+                color: '#38bdf8',
+                meta: `Spread: ${spreadFmt} | Proy: ${probs.projectedSpread} pts (Edge +${ev}%)`
+              });
+            } else if (probs.awayCoverProb >= 56.0 && spread !== null) {
+              const ev = Number((probs.awayCoverProb - 52.4).toFixed(1));
+              const spreadVal = -spread;
+              const spreadFmt = spreadVal > 0 ? `+${spreadVal}` : `${spreadVal}`;
+              opportunities.push({
+                match: matchData,
+                probs,
+                mcStats: { stability: mcNba.stabilityScore, risk: mcNba.riskLevel },
+                tier: probs.awayCoverProb >= 65 ? 1 : 2,
+                type: '🏀 VENTAJA SPREAD (NBA)',
+                pick: `${matchData.away.name} ${spreadFmt} (Cubre Línea)`,
+                reason: `Modelo Dean Oliver proyecta ventaja para ${matchData.away.name} cubriendo línea de ${spreadFmt} (Pace: ${probs.projectedPace}).`,
+                prob: `${probs.awayCoverProb}%`,
+                odds: matchData.odds?.spreadOdds ? matchData.odds.spreadOdds.toString() : '1.91',
+                edgeVal: Math.max(4.0, ev),
+                color: '#38bdf8',
+                meta: `Spread: ${spreadFmt} | Proy: ${probs.projectedSpread} pts (Edge +${ev}%)`
+              });
+            }
+
+            // 2. Totales NBA (Under / Over)
+            if (probs.underProb >= 57.0 && total !== null) {
+              const ev = Number((probs.underProb - 52.4).toFixed(1));
+              opportunities.push({
+                match: matchData,
+                probs,
+                mcStats: { stability: mcNba.stabilityScore, risk: mcNba.riskLevel },
+                tier: probs.underProb >= 65 ? 1 : 2,
+                type: '🏀 TOTALES NBA (UNDER)',
+                pick: `UNDER ${total} Pts`,
+                reason: `Ritmo proyectado de ${probs.projectedPace} posesiones genera expectativa de ${probs.projectedTotal} pts, marcando fuerte valor bajista frente a la línea de ${total} de Las Vegas.`,
+                prob: `${probs.underProb}%`,
+                odds: matchData.odds?.totalOdds ? matchData.odds.totalOdds.toString() : '1.91',
+                edgeVal: Math.max(4.5, ev),
+                color: '#10b981',
+                meta: `Total Vegas: ${total} | Proy: ${probs.projectedTotal} (Edge +${ev}%)`
+              });
+            } else if (probs.overProb >= 57.0 && total !== null) {
+              const ev = Number((probs.overProb - 52.4).toFixed(1));
+              opportunities.push({
+                match: matchData,
+                probs,
+                mcStats: { stability: mcNba.stabilityScore, risk: mcNba.riskLevel },
+                tier: probs.overProb >= 65 ? 1 : 2,
+                type: '🔥 TOTALES NBA (OVER)',
+                pick: `OVER ${total} Pts`,
+                reason: `Ritmo vertiginoso proyectado de ${probs.projectedPace} posesiones genera expectativa de ${probs.projectedTotal} pts frente a la línea de ${total} de Las Vegas.`,
+                prob: `${probs.overProb}%`,
+                odds: matchData.odds?.totalOdds ? matchData.odds.totalOdds.toString() : '1.91',
+                edgeVal: Math.max(4.5, ev),
+                color: '#f59e0b',
+                meta: `Total Vegas: ${total} | Proy: ${probs.projectedTotal} (Edge +${ev}%)`
+              });
+            }
+          }
         }
       }
 
@@ -1347,6 +1432,12 @@ export default function App() {
                 const wind = opp.match.weather?.windMph || 0;
                 const lead = parseFloat(opp.probs?.expectedHomeLead || 0);
                 const mc = simulateNflMatch(lead, spread, total, wind, 10000, isCol);
+                opp.mcStats = { stability: mc.stabilityScore, risk: mc.riskLevel };
+              } else if (activeSport === 'nba') {
+                const spread = opp.match.spread !== undefined && opp.match.spread !== null ? opp.match.spread : (opp.match.odds?.spread !== undefined ? opp.match.odds.spread : 0);
+                const total = opp.match.total !== undefined && opp.match.total !== null ? opp.match.total : (opp.match.odds?.overUnder !== undefined ? opp.match.odds.overUnder : 224.5);
+                const lead = parseFloat(opp.probs?.projectedSpread || 0);
+                const mc = simulateNbaMatch(lead, spread, total, 10000);
                 opp.mcStats = { stability: mc.stabilityScore, risk: mc.riskLevel };
               }
             }
@@ -1690,6 +1781,58 @@ export default function App() {
         Total Proyectado: ${probs.predictedTotal} pts (Línea Vegas: ${vegasTotal}) | Viento: ${windMph} mph (${matchData.weather?.notice || 'Clima estándar'})
         Evaluación de Totales: ${probs.totalsEvaluation?.pick} (Prob: ${probs.totalsEvaluation?.isUnder ? probs.totalsEvaluation?.underProb : probs.totalsEvaluation?.overProb}%, Edge: ${probs.totalsEvaluation?.edge}%)
         `;
+      } else if (activeSport === 'nba') {
+        backgroundColor = "#0b1329";
+        accentColor = "#f59e0b";
+        const probs = calculateNbaProbabilities(matchData);
+        mathProbs = { type: 'nba', probs };
+
+        const homeSpread = matchData.spread !== undefined && matchData.spread !== null ? matchData.spread : (matchData.odds?.spread !== undefined ? matchData.odds.spread : 0);
+        const awaySpread = -homeSpread;
+        const homeSpreadFmt = homeSpread > 0 ? `+${homeSpread}` : `${homeSpread}`;
+        const awaySpreadFmt = awaySpread > 0 ? `+${awaySpread}` : `${awaySpread}`;
+        const vegasTotal = matchData.total !== undefined && matchData.total !== null ? matchData.total : (matchData.odds?.overUnder !== undefined ? matchData.odds.overUnder : Math.round(probs.projectedTotal));
+
+        const homeCover = probs.homeCoverProb;
+        const awayCover = probs.awayCoverProb;
+        const underProb = probs.underProb;
+        const overProb = probs.overProb;
+
+        if (underProb >= 58.0) {
+          recommendedPick = `UNDER ${vegasTotal} Pts`;
+          simProbVal = underProb;
+          simOdds = "1.91";
+          simPickType = '🏀 TOTALES NBA (UNDER)';
+          simEdgeVal = Math.max(4.0, underProb - 52.4);
+        } else if (overProb >= 58.0) {
+          recommendedPick = `OVER ${vegasTotal} Pts`;
+          simProbVal = overProb;
+          simOdds = "1.91";
+          simPickType = '🔥 TOTALES NBA (OVER)';
+          simEdgeVal = Math.max(4.0, overProb - 52.4);
+        } else if (homeCover >= awayCover) {
+          recommendedPick = `${matchData.home.name} ${homeSpreadFmt} (Cubre Línea NBA)`;
+          simProbVal = homeCover;
+          simOdds = "1.91";
+          simPickType = '🏀 VENTAJA SPREAD (NBA)';
+          simEdgeVal = Math.max(3.5, homeCover - 52.4);
+        } else {
+          recommendedPick = `${matchData.away.name} ${awaySpreadFmt} (Cubre Línea NBA)`;
+          simProbVal = awayCover;
+          simOdds = "1.91";
+          simPickType = '🏀 VENTAJA SPREAD (NBA)';
+          simEdgeVal = Math.max(3.5, awayCover - 52.4);
+        }
+
+        llmPrompt += `
+        Ritmo Proyectado (Pace): ${probs.projectedPace} posesiones
+        Puntos Esperados: Local (${probs.homeExpectedScore}) vs Visita (${probs.awayExpectedScore})
+        Total Proyectado: ${probs.projectedTotal} pts (Línea de Vegas: ${vegasTotal})
+        Margen Proyectado: ${probs.projectedSpread > 0 ? '+' : ''}${probs.projectedSpread} pts
+        Prob. Victoria Directa: Local (${probs.homeWinProb}%) vs Visita (${probs.awayWinProb}%)
+        Prob. Cobertura de Spread: Local ${homeSpreadFmt} (${homeCover}%) vs Visita ${awaySpreadFmt} (${awayCover}%)
+        Totales: Over ${vegasTotal} (${overProb}%) vs Under ${vegasTotal} (${underProb}%)
+        `;
       }
 
       const historicalContext = getContextForPrompt(matchData.home.name, matchData.away.name);
@@ -1735,6 +1878,12 @@ export default function App() {
           const wind = matchData.weather?.windMph || 0;
           const lead = parseFloat(mathProbs.probs?.expectedHomeLead || 0);
           const mc = simulateNflMatch(lead, spread, total, wind, 10000, isCol);
+          simMcStats = { stability: mc.stabilityScore, risk: mc.riskLevel };
+        } else if (activeSport === 'nba') {
+          const spread = matchData.spread !== undefined && matchData.spread !== null ? matchData.spread : (matchData.odds?.spread !== undefined ? matchData.odds.spread : 0);
+          const total = matchData.total !== undefined && matchData.total !== null ? matchData.total : (matchData.odds?.overUnder !== undefined ? matchData.odds.overUnder : 224.5);
+          const lead = parseFloat(mathProbs.probs?.projectedSpread || 0);
+          const mc = simulateNbaMatch(lead, spread, total, 10000);
           simMcStats = { stability: mc.stabilityScore, risk: mc.riskLevel };
         }
       } catch (e) {}
@@ -2008,6 +2157,12 @@ export default function App() {
             >
               <span>🏈</span> <span className="hidden sm:inline">Fútbol Americano </span>(NFL / NCAAF)
             </button>
+            <button
+              onClick={() => setActiveSport("nba")}
+              className={`sport-segment-btn flex-1 ${activeSport === "nba" ? "active" : ""}`}
+            >
+              <span>🏀</span> Baloncesto <span className="hidden sm:inline">(NBA)</span>
+            </button>
           </div>
         </div>
 
@@ -2131,7 +2286,7 @@ export default function App() {
             <div style={{ background: "linear-gradient(to right, #0f172a, #1e1b4b)", padding: 30, borderRadius: 16, border: "1px solid #312e81", textAlign: "center" }}>
               <div style={{ fontSize: 32, marginBottom: 10 }}>📡</div>
               <h2 style={{ margin: "0 0 10px 0", color: "#a5b4fc" }}>
-                Radar de Oportunidades en Vivo ({activeSport === 'nfl' ? (footballLeague === 'ncaaf' ? 'NCAAF COLEGIAL FBS' : 'NFL') : activeSport.toUpperCase()})
+                Radar de Oportunidades en Vivo ({activeSport === 'nfl' ? (footballLeague === 'ncaaf' ? 'NCAAF COLEGIAL FBS' : 'NFL') : activeSport === 'nba' ? 'BALONCESTO NBA' : activeSport.toUpperCase()})
               </h2>
               <p style={{ color: "#94a3b8", fontSize: 14, maxWidth: 580, margin: "0 auto 20px auto" }}>
                 Revisión de partidos en tiempo real integrando <b>Big Data</b>, <b>Líneas de Vegas</b> y <b>Memoria de Aprendizaje IA</b> sobre fallos previos.
@@ -3371,7 +3526,7 @@ export default function App() {
                   value={query} 
                   onChange={e => setQuery(e.target.value)} 
                   onKeyDown={e => e.key === "Enter" && !loading && analyze()}
-                  placeholder={`Buscar partido real, ej: ${activeSport === 'futbol' ? 'América vs Cruz Azul...' : activeSport === 'mlb' ? 'Yankees vs Dodgers...' : 'Chiefs vs Ravens...'}`} 
+                  placeholder={`Buscar partido real, ej: ${activeSport === 'futbol' ? 'América vs Cruz Azul...' : activeSport === 'mlb' ? 'Yankees vs Dodgers...' : activeSport === 'nba' ? 'Lakers vs Celtics...' : 'Chiefs vs Ravens...'}`} 
                   disabled={loading}
                   className="engine-input-box bg-slate-800 border border-slate-700"
                 />
@@ -3513,6 +3668,36 @@ export default function App() {
                         </div>
                       )}
 
+                      {/* NBA UI */}
+                      {analysisResult.mathProbs.type === 'nba' && (
+                        <div>
+                          <div className="mobile-stack" style={{ display: "flex", gap: 12, marginBottom: 15 }}>
+                            <div style={{ flex: 1, background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "14px", textAlign: "center" }}>
+                              <div style={{ fontSize: 11, fontWeight: 800, color: "#94a3b8" }}>SPREAD ESPERADO</div>
+                              <div style={{ fontSize: 22, fontWeight: 900, color: analysisResult.style.accent, marginTop: 4 }}>
+                                {analysisResult.mathProbs.probs.projectedSpread > 0 ? `+${analysisResult.mathProbs.probs.projectedSpread}` : analysisResult.mathProbs.probs.projectedSpread} pts
+                              </div>
+                            </div>
+                            <div style={{ flex: 1, background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "14px", textAlign: "center" }}>
+                              <div style={{ fontSize: 11, fontWeight: 800, color: "#94a3b8" }}>TOTAL PROYECTADO</div>
+                              <div style={{ fontSize: 22, fontWeight: 900, color: "#10b981", marginTop: 4 }}>
+                                {analysisResult.mathProbs.probs.projectedTotal} pts
+                              </div>
+                            </div>
+                            <div style={{ flex: 1, background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "14px", textAlign: "center" }}>
+                              <div style={{ fontSize: 11, fontWeight: 800, color: "#94a3b8" }}>RITMO (PACE)</div>
+                              <div style={{ fontSize: 22, fontWeight: 900, color: "#38bdf8", marginTop: 4 }}>
+                                {analysisResult.mathProbs.probs.projectedPace} pos
+                              </div>
+                            </div>
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                            <ProbBox label="WIN LOCAL" prob={analysisResult.mathProbs.probs.homeWinProb} color={analysisResult.style.accent} />
+                            <ProbBox label="WIN VISITA" prob={analysisResult.mathProbs.probs.awayWinProb} color="#ec4899" />
+                          </div>
+                        </div>
+                      )}
+
                       {/* GESTIÓN DE CAPITAL (CRITERIO DE KELLY) */}
                       {(() => {
                         let topProb = 50;
@@ -3520,6 +3705,8 @@ export default function App() {
                           topProb = Math.max(parseFloat(analysisResult.mathProbs.probs.homeWin), parseFloat(analysisResult.mathProbs.probs.awayWin), parseFloat(analysisResult.mathProbs.probs.draw));
                         } else if (analysisResult.mathProbs.type === 'mlb') {
                           topProb = Math.max(parseFloat(analysisResult.mathProbs.probs.homeWin), parseFloat(analysisResult.mathProbs.probs.awayWin));
+                        } else if (analysisResult.mathProbs.type === 'nba') {
+                          topProb = Math.max(parseFloat(analysisResult.mathProbs.probs.homeWinProb), parseFloat(analysisResult.mathProbs.probs.awayWinProb));
                         } else {
                           topProb = Math.max(parseFloat(analysisResult.mathProbs.probs.homeWin), parseFloat(analysisResult.mathProbs.probs.awayWin));
                         }
@@ -3595,7 +3782,7 @@ export default function App() {
                   🧠 Auditoría Automática con Fuentes Oficiales
                 </h3>
                 <p style={{ margin: 0, fontSize: 13, color: "#94a3b8" }}>
-                  Consulta los marcadores finales reales en {activeSport === 'mlb' ? 'MLB Stats API' : activeSport === 'futbol' ? 'ESPN Soccer' : 'ESPN NFL'} para resolver automáticamente los picks pendientes y auditar fallos con IA.
+                  Consulta los marcadores finales reales en {activeSport === 'mlb' ? 'MLB Stats API' : activeSport === 'futbol' ? 'ESPN Soccer' : activeSport === 'nba' ? 'ESPN NBA' : 'ESPN NFL'} para resolver automáticamente los picks pendientes y auditar fallos con IA.
                 </p>
               </div>
 
@@ -3614,7 +3801,7 @@ export default function App() {
                   display: "flex", alignItems: "center", gap: 8,
                   boxShadow: "0 4px 15px rgba(16, 185, 129, 0.3)"
                 }}>
-                {autoVerifying ? "🔄 Consultando Resultados Oficiales..." : `🔄 Auto-Verificar con APIs Oficiales (${activeSport === 'mlb' ? 'MLB Stats API' : activeSport === 'futbol' ? 'ESPN Soccer' : 'ESPN NFL'})`}
+                {autoVerifying ? "🔄 Consultando Resultados Oficiales..." : `🔄 Auto-Verificar con APIs Oficiales (${activeSport === 'mlb' ? 'MLB Stats API' : activeSport === 'futbol' ? 'ESPN Soccer' : activeSport === 'nba' ? 'ESPN NBA' : 'ESPN NFL'})`}
               </button>
             </div>
 

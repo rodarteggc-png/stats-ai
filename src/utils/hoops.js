@@ -41,7 +41,7 @@ const LEAGUE_AVERAGE_PACE = 99.2;
 const LEAGUE_AVERAGE_EFFICIENCY = 114.5;
 const HOME_COURT_ADVANTAGE_PTS = 2.4;
 
-function getTeamBaseline(teamName = '') {
+export function getNbaTeamBaseline(teamName = '') {
   const norm = teamName.toLowerCase().trim();
   for (const [key, val] of Object.entries(NBA_TEAM_METRICS)) {
     if (norm.includes(key) || key.includes(norm)) {
@@ -50,6 +50,7 @@ function getTeamBaseline(teamName = '') {
   }
   return { pace: LEAGUE_AVERAGE_PACE, ortg: LEAGUE_AVERAGE_EFFICIENCY, drtg: LEAGUE_AVERAGE_EFFICIENCY };
 }
+const getTeamBaseline = getNbaTeamBaseline;
 
 // Función de aproximación a la distribución normal acumulada (CDF)
 function normalCdf(x, mean, stdDev) {
