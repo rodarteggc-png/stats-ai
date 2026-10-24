@@ -30,6 +30,9 @@ import { getMatchXgProjection } from '../src/services/fotmobService.js';
 import { detectAndAlertSteamMoves } from '../src/services/steamDetector.js';
 import { fetchNbaSchedule } from '../src/services/nbaService.js';
 import { calculateNbaProbabilities } from '../src/utils/hoops.js';
+import { enrichMatchWithInjuries } from '../src/services/sleeperService.js';
+import { getRefereeProfile } from '../src/services/refereeService.js';
+import { analyzeLineMovement } from '../src/services/lineMovementService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2828,6 +2831,26 @@ export async function runAlertEngine(options = {}) {
     })
   );
 
+  // 3. Enriquecimiento de Bajas y Lesiones Oficiales (Sleeper API) para NFL y NBA
+  await Promise.allSettled(
+    [...nflMatches, ...nbaMatches].map(async m => {
+      try {
+        const sportKey = (m.sport || '').toLowerCase().includes('nfl') ? 'nfl' : 'nba';
+        await enrichMatchWithInjuries(m, sportKey);
+      } catch (e) {}
+    })
+  );
+
+  // 4. Inteligencia de Colegiados y Árbitros para Fútbol
+  soccerMatches.forEach(m => {
+    try {
+      const refName = m.referee || m.market?.referee;
+      if (refName) {
+        m.refereeInfo = getRefereeProfile(refName, m.league);
+      }
+    } catch (e) {}
+  });
+
   // Enriquecimiento en tiempo real con cuotas institucionales de Pinnacle / Bet365
   let enrichedNfl = nflMatches;
   let enrichedMlb = mlbMatches;
@@ -2848,13 +2871,23 @@ export async function runAlertEngine(options = {}) {
     console.warn('Aviso enriqueciendo cuotas sharp:', err.message);
   }
 
-  // 3. Detección de Dinero Profesional / Steam Moves en Pinnacle en tiempo real
+  // Detección de Dinero Profesional / Steam Moves en Pinnacle en tiempo real
+  const allMatchesWithOdds = [...enrichedSoccer, ...enrichedMlb, ...enrichedNfl, ...enrichedNcaaf, ...nbaMatches];
   try {
-    const allMatchesWithOdds = [...enrichedSoccer, ...enrichedMlb, ...enrichedNfl, ...enrichedNcaaf, ...nbaMatches];
     await detectAndAlertSteamMoves(allMatchesWithOdds, isVipOnly);
   } catch (err) {
     console.warn('Aviso detectando steam moves:', err.message);
   }
+
+  // 5. Análisis de Desplazamiento de Línea (Apertura vs Cierre / Steam Moves)
+  allMatchesWithOdds.forEach(m => {
+    try {
+      const oddsData = m.rawOdds || m.vegas || m.market;
+      if (oddsData) {
+        m.lineMovement = analyzeLineMovement(oddsData);
+      }
+    } catch (e) {}
+  });
 
   const { rawOpportunities, approvedOpps, topSlate } = buildOpportunitiesAndTopSlate({
     soccerMatches: enrichedSoccer,
@@ -3046,6 +3079,18 @@ export async function runAlertEngine(options = {}) {
       ? [`🧩 *Sinergia Bivariada:* \`${pick.correlationNote}\``, ``]
       : [];
 
+    const injuryBlock = pick.match?.injuryIntelligence?.summary
+      ? [`🏥 *Reporte de Bajas Oficiales (Sleeper):*`, `  _${pick.match.injuryIntelligence.summary}_`, ``]
+      : [];
+
+    const refereeBlock = pick.match?.refereeInfo
+      ? [`⚖️ *Colegiado Designado:* \`${pick.match.refereeInfo.name} (${pick.match.refereeInfo.avgYellows} tarj/juego - Severidad ${pick.match.refereeInfo.strictness})\``, `  _${pick.match.refereeInfo.tendencyNote}_`, ``]
+      : [];
+
+    const lineMoveBlock = pick.match?.lineMovement?.hasMovement
+      ? [`📈 *Microestructura de Mercado (Desplazamiento):*`, ...pick.match.lineMovement.movements.map(m => `  ${m.badgeText}`), ``]
+      : [];
+
     let selectionLabel;
     if (isTopJoya) {
       selectionLabel = `💎 *SELECCIÓN ESTELAR CONFIRMADA:*`;
@@ -3074,6 +3119,9 @@ export async function runAlertEngine(options = {}) {
       `📈 *Ventaja Cuantitativa:* *${pick.edgeStr}*`,
       ``,
       ...rlmBlock,
+      ...injuryBlock,
+      ...refereeBlock,
+      ...lineMoveBlock,
       ...corrBlock,
       `🧠 *Veredicto del Tribunal de Consenso:*`,
       consensusLines

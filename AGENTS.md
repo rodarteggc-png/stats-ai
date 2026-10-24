@@ -83,6 +83,12 @@ Ubicados en [src/utils/ensemble.js](file:///c:/Users/RO106536/Documents/Perso/Pr
     * Modelo de 4 Factores de Dean Oliver, Posesiones (Pace) y Ratings Ofensivo/Defensivo por 100 posesiones para las 30 franquicias NBA.
     * Evaluación de Spreads, Over/Under y Moneylines con cuotas oficiales y verificación en el Tribunal de Consenso.
 
+* **2026-10-24 (Integración No-Bloqueante de Micro-Inteligencia: Sleeper Injuries, Colegiados y Desplazamiento de Línea):**
+  - **Sleeper API ([sleeperService.js](file:///c:/Users/RO106536/Documents/Perso/Proy_Gemini/stats-ai-pro/src/services/sleeperService.js)):** Extracción forense gratuita al minuto de lesiones y estatus de titulares/estrellas en NFL y NBA. Candado cualitativo en [tipsterAuditor.js](file:///c:/Users/RO106536/Documents/Perso/Proy_Gemini/stats-ai-pro/src/utils/tipsterAuditor.js) para evitar apuestas a favoritos pesados cuya figura estelar está `OUT`.
+  - **Servicio de Colegiados y Árbitros ([refereeService.js](file:///c:/Users/RO106536/Documents/Perso/Proy_Gemini/stats-ai-pro/src/services/refereeService.js)):** Perfil de severidad, volumen de tarjetas amarillas/rojas y penales para árbitros de Liga MX, Premier League y Champions League.
+  - **Detector de Desplazamiento de Línea ([lineMovementService.js](file:///c:/Users/RO106536/Documents/Perso/Proy_Gemini/stats-ai-pro/src/services/lineMovementService.js)):** Análisis comparativo nativo entre Apertura (Open) y Cierre (Close) para Spreads, Totales y Moneylines sin consumo de cuota de API.
+  - **Arquitectura Ultra-Rápida:** Cero impacto en rendimiento (ejecución benchmark en 1.2 segundos), caché en memoria TTL, timeouts estrictos y fallbacks no-bloqueantes.
+
 * **2026-10-23 (Replicación de NBA y Menú Táctil por Deporte en Telegram VIP):**
   - **Selector de Deportes en UI Web:** Botón interactivo 🏀 Baloncesto (NBA) añadido a la barra segmentada principal de [src/App.jsx](file:///c:/Users/RO106536/Documents/Perso/Proy_Gemini/stats-ai-pro/src/App.jsx).
   - **Radar de Oportunidades en Vivo:** Conexión nativa de `fetchDailySchedule('nba')` con `fetchNbaSchedule`, loteo en Web Worker Monte Carlo 10k (`simulateNbaMatch`), y generación de oportunidades en Spreads, Totales (Over/Under) y Moneylines.

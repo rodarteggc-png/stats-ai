@@ -303,6 +303,35 @@ export function auditCandidateAsTipsterPro(candidate = {}) {
     }
   }
 
+  // f) VETO POR BAJA DE ESTRELLA O QUARTERBACK TITULAR (Sleeper Intelligence)
+  if (match.injuryIntelligence?.hasStarImpact) {
+    const pickText = (pick || '').toLowerCase();
+    const homeName = (match.home?.name || '').toLowerCase();
+    const awayName = (match.away?.name || '').toLowerCase();
+    const isBackingHome = homeName && pickText.includes(homeName);
+    const isBackingAway = awayName && pickText.includes(awayName);
+
+    if (isBackingHome && match.injuryIntelligence.home?.starAbsences?.length > 0 && odds <= 1.62) {
+      const starsOut = match.injuryIntelligence.home.starAbsences.map(p => p.name).join(', ');
+      return {
+        isApproved: false,
+        grade: 'VETO_CUALITATIVO',
+        badgeTitle: '⛔ VETO TIPSTER PRO (BAJA CRÍTICA DE ESTRELLA)',
+        reason: `Ausencia confirmada de figura estelar en ${match.home.name} (${starsOut}). Cuota de ${odds} no compensa el impacto de la baja.`,
+        tipsterSeal: '❌ Rechazado por Baja de Jugador Franquicia'
+      };
+    } else if (isBackingAway && match.injuryIntelligence.away?.starAbsences?.length > 0 && odds <= 1.62) {
+      const starsOut = match.injuryIntelligence.away.starAbsences.map(p => p.name).join(', ');
+      return {
+        isApproved: false,
+        grade: 'VETO_CUALITATIVO',
+        badgeTitle: '⛔ VETO TIPSTER PRO (BAJA CRÍTICA DE ESTRELLA)',
+        reason: `Ausencia confirmada de figura estelar en ${match.away.name} (${starsOut}). Cuota de ${odds} no compensa el impacto de la baja.`,
+        tipsterSeal: '❌ Rechazado por Baja de Jugador Franquicia'
+      };
+    }
+  }
+
   // ================= CRITERIO DE GRADUACIÓN DE CONVICCIÓN =================
   let qualityPoints = 0;
   const reasons = [];
@@ -322,6 +351,16 @@ export function auditCandidateAsTipsterPro(candidate = {}) {
   }
   if (probNum >= 68.0) {
     qualityPoints += 2;
+  }
+  if (match.lineMovement?.isSharpSteam) {
+    qualityPoints += 2;
+    reasons.push('Presión institucional confirmada (Steam Move)');
+  }
+  if (match.refereeInfo) {
+    reasons.push(`Colegiado: ${match.refereeInfo.name} (${match.refereeInfo.strictness})`);
+  }
+  if (match.injuryIntelligence?.summary) {
+    reasons.push(`Bajas auditadas: ${match.injuryIntelligence.summary}`);
   }
 
   let grade = 'A';
