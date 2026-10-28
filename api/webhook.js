@@ -37,7 +37,7 @@ export default async function handler(req, res) {
       status: 'active',
       bot: '@stat_io_pro_bot',
       webhook: 'ready',
-      options: ['/vip', '/cuota', '/corte', 'sport_futbol', 'sport_nba', 'sport_nfl', 'sport_mlb', 'sport_all']
+      options: ['/vip', '/cheatsheet', '/cuota', '/corte', 'sport_futbol', 'sport_nba', 'sport_nfl', 'sport_mlb', 'sport_all']
     });
   }
 
