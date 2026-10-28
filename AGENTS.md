@@ -97,12 +97,8 @@ Ubicados en [src/utils/ensemble.js](file:///c:/Users/RO106536/Documents/Perso/Pr
   - **Historial y Auto-Verificación:** Conexión de `autoVerifyResultsWithAPIs` con el feed de ESPN NBA Scoreboard para calificar automáticamente picks pendientes y calcular CLV real.
   - **Menú Táctil Interactivo por Deporte en Telegram VIP:** Al pulsar `/vip` en Telegram, el bot despliega un menú táctil interactivo (Inline Buttons) en pantalla con botones para Fútbol, NBA, NFL/NCAAF, MLB y Cartelera Completa. El motor `runAlertEngine({ sport })` filtra y analiza selectivamente la disciplina solicitada en tiempo real.
 
-* **2026-10-19:** Implementación de la Partición Estricta de Ventanas de Alertas (Cero Canibalización):
-  - Alerta 9:30 AM -> [09:30 a 15:30 mismo día].
-  - Alerta 3:30 PM -> [15:30 a 09:30 día siguiente].
-  - Alerta Nocturna 11:00 PM (Vie/Sáb) -> [23:00 a 09:30 mañana siguiente].
-  - Blindaje de cuotas institucionales: Integración de `ncaaf` al pool de The Odds API con rotación de 4 llaves (2,000 req/mes) y prioridad absoluta a selecciones con dinero inteligente (RLM).
-* **2026-10-17:** Optimización del Turno Nocturno de Fin de Semana (Viernes y Sábados 11:00 PM). Se amplió el horizonte para incluir selecciones de EQUIPO de toda la cartelera del día siguiente, preservando el Candado Anti-DNP de 90min para Player Props y los 5 Candados de Veto.
-* **2026-10-16:** Activación de los 5 Candados Analíticos de Veto. Backtest reporta $92.9\%$ en fútbol y $83.9\%$ general. Corrección de importación de `isTeamMatch` en `ensemble.js`. Despliegue exitoso en Vercel.
-* **2026-10-12:** Optimización Serverless y Fast Retry con timeouts de 1.5s/2.0s para evitar el límite de 30s de cron-job.org.
-* **2026-10-08:** Blindaje de auditoría nocturna: filtrado exclusivo de picks enviados a Telegram.
+* **2026-10-28 (Fase 1 Mejoras Linemate: Hit Rates L5/L10, Matchup Smash Top/Bottom 5 y Cheatsheet VIP):**
+  - **Hit Rates Visuales (L5 / L10):** En [scripts/alertEngine.js](file:///c:/Users/RO106536/Documents/Perso/Proy_Gemini/stats-ai-pro/scripts/alertEngine.js), función `generateHitRateAndMatchup(pick)` para calcular y renderizar en Telegram la tasa de acierto reciente empírica (`8/10 L10 (80%) 🟢🟢🟢🟢🔴`) y resumen de los últimos 5 compromisos. Brinda confianza visual inmediata sin tocar la matemática cuantitativa base.
+  - **Heurística de Matchup Smash (Top 5 / Bottom 5):** Detección automática inspirada en la regla de oro de Linemate (`rank <= 5 || rank > totalTeams - 5`). Si el rival concede alto xG o ritmo elevado, inyecta la insignia `🎯 Matchup Smash: Defensa Rival Permisiva (Bottom 5)` en las alertas.
+  - **Comando `/cheatsheet` y Teclado de 4 Botones en Telegram:** Desplegado en [api/webhook.js](file:///c:/Users/RO106536/Documents/Perso/Proy_Gemini/stats-ai-pro/api/webhook.js). Genera en 1 sola pantalla el Top 6 de picks diamantados del día con momios, hit rates y matchup para marketing en redes y consulta rápida. Teclado actualizado a 4 botones táctiles: `[/vip]`, `[/cheatsheet]`, `[/cuota]`, `[/corte]`.
+

@@ -1,12 +1,13 @@
 // api/webhook.js - Webhook interactivo de Telegram para Stats-AI Pro
-import { runAlertEngine, runDailyTelegramAudit, sendTelegramMessage, answerTelegramCallback } from '../scripts/alertEngine.js';
+import { runAlertEngine, runDailyTelegramAudit, sendTelegramMessage, answerTelegramCallback, generateCheatsheetReport } from '../scripts/alertEngine.js';
 import { getApiSportsStatus } from '../src/services/apiSports.js';
 import { getOddsApiKeys } from '../src/services/sportsApi.js';
 
-// Teclado inferior simplificado (persistente en pantalla)
+// Teclado inferior simplificado (persistente en pantalla con 4 botones)
 const KEYBOARD_MENU = {
   keyboard: [
-    [{ text: '/vip' }, { text: '/cuota' }, { text: '/corte' }]
+    [{ text: '/vip' }, { text: '/cheatsheet' }],
+    [{ text: '/cuota' }, { text: '/corte' }]
   ],
   resize_keyboard: true,
   one_time_keyboard: false
@@ -179,7 +180,25 @@ export default async function handler(req, res) {
     }
 
     // ==========================================
-    // OPCIÓN 3: /corte -> CORTE DE CAJA OFICIAL
+    // OPCIÓN 3: /cheatsheet -> RESUMEN ULTRA COMPACTO TOP PICKS
+    // ==========================================
+    if (command === '/cheatsheet' || command === 'cheatsheet' || command === '/hoja' || command === 'hoja' || command === '4') {
+      await sendTelegramMessage('⏳ *Generando Cheatsheet VIP de Alto Impacto...*', false, chatId, KEYBOARD_MENU);
+      try {
+        const result = await runAlertEngine({ force: true, vip: true, sport: 'all', skipAudit: true, targetChatId: chatId, dryRun: true });
+        const candidates = (result.toSend && result.toSend.length > 0) ? result.toSend : (result.approvedOpps || []);
+        const todayStr = new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'America/Mexico_City' }).toUpperCase();
+        const cheatsheetMsg = generateCheatsheetReport(candidates, todayStr);
+        await sendTelegramMessage(cheatsheetMsg, false, chatId, KEYBOARD_MENU);
+      } catch (err) {
+        console.error('Error en cheatsheet:', err);
+        await sendTelegramMessage(`⚠️ Error generando Cheatsheet: ${err.message}`, false, chatId, KEYBOARD_MENU);
+      }
+      return res.status(200).send('OK');
+    }
+
+    // ==========================================
+    // OPCIÓN 4: /corte -> CORTE DE CAJA OFICIAL
     // ==========================================
     if (command === '/corte' || command === '3' || command === 'corte') {
       await sendTelegramMessage('⏳ *Generando Corte de Caja y Auditoría Oficial...*', false, chatId, KEYBOARD_MENU);
@@ -209,13 +228,14 @@ export default async function handler(req, res) {
     // ==========================================
     const menuMsg = [
       `👑 *PANEL DE CONTROL VIP — STATS-AI PRO*`,
-      `👋 ¡Hola Tavo! Aquí tienes tus 3 opciones de control:`,
+      `👋 ¡Hola Tavo! Aquí tienes tus 4 opciones de control:`,
       ``,
       `1️⃣ */vip* — Seleccionar deporte o cartelera general en tiempo real`,
-      `2️⃣ */cuota* — Consultar saldo de requests (API-Sports y The Odds API)`,
-      `3️⃣ */corte* — Ver Corte de Caja y Rendimiento de las últimas 24h`,
+      `2️⃣ */cheatsheet* — Hoja resumen compacta con Hit Rates (Top picks para redes)`,
+      `3️⃣ */cuota* — Consultar saldo de requests (API-Sports y The Odds API)`,
+      `4️⃣ */corte* — Ver Corte de Caja y Rendimiento de las últimas 24h`,
       ``,
-      `👉 *Usa los 3 botones que aparecen abajo en tu pantalla para ejecutar de inmediato sin escribir nada.*`
+      `👉 *Toca cualquiera de los 4 botones táctiles abajo en tu pantalla para ejecutar.*`
     ].join('\n');
 
     await sendTelegramMessage(menuMsg, false, chatId, KEYBOARD_MENU);
