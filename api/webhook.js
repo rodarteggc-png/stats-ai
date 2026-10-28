@@ -2,12 +2,14 @@
 import { runAlertEngine, runDailyTelegramAudit, sendTelegramMessage, answerTelegramCallback, generateCheatsheetReport } from '../scripts/alertEngine.js';
 import { getApiSportsStatus } from '../src/services/apiSports.js';
 import { getOddsApiKeys } from '../src/services/sportsApi.js';
+import { parseParlayInput, auditParlayLegs, formatParlayAuditReport } from '../src/utils/parlayAuditor.js';
 
-// Teclado inferior simplificado (persistente en pantalla con 4 botones)
+// Teclado inferior simplificado (persistente en pantalla con 5 botones organizados)
 const KEYBOARD_MENU = {
   keyboard: [
     [{ text: '/vip' }, { text: '/cheatsheet' }],
-    [{ text: '/cuota' }, { text: '/corte' }]
+    [{ text: '/parlay' }, { text: '/corte' }],
+    [{ text: '/cuota' }]
   ],
   resize_keyboard: true,
   one_time_keyboard: false
@@ -37,7 +39,7 @@ export default async function handler(req, res) {
       status: 'active',
       bot: '@stat_io_pro_bot',
       webhook: 'ready',
-      options: ['/vip', '/cheatsheet', '/cuota', '/corte', 'sport_futbol', 'sport_nba', 'sport_nfl', 'sport_mlb', 'sport_all']
+      options: ['/vip', '/cheatsheet', '/parlay', '/cuota', '/corte', 'sport_futbol', 'sport_nba', 'sport_nfl', 'sport_mlb', 'sport_all']
     });
   }
 
@@ -74,6 +76,70 @@ export default async function handler(req, res) {
     // Si viene de un botón táctil en pantalla (callback), responder inmediatamente para retirar el reloj de arena
     if (isCallback) {
       await answerTelegramCallback(callback.id);
+    }
+
+    // ==========================================
+    // DETECCIÓN DE FOTO / CAPTURA DE BOLETO O PARLAY
+    // ==========================================
+    if (message?.photo && message.photo.length > 0) {
+      const photo = message.photo[message.photo.length - 1]; // Mayor resolución
+      const botToken = process.env.TELEGRAM_BOT_TOKEN;
+
+      if (process.env.GEMINI_API_KEY && botToken) {
+        await sendTelegramMessage('🔍 *Analizando imagen de tu boleto con Visión Artificial...*', false, chatId, KEYBOARD_MENU);
+        try {
+          // Obtener ruta del archivo desde Telegram
+          const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${photo.file_id}`);
+          const fileData = await fileRes.json();
+          if (fileData.ok && fileData.result?.file_path) {
+            const fileUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
+            const imgBuffer = await (await fetch(fileUrl)).arrayBuffer();
+            const base64Img = Buffer.from(imgBuffer).toString('base64');
+
+            // Llamada a Gemini 1.5 Flash Vision
+            const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+            const geminiRes = await fetch(geminiUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{
+                  parts: [
+                    { text: "Eres un analista experto en apuestas deportivas. Analiza este boleto o ticket de apuesta. Extrae cada selección en una lista separada por comas con el formato: 'Partido Selección @ Cuota'. Solo responde con la lista en texto plano, sin explicaciones adicionales ni bloques de código. Si no puedes ver cuotas, solo lista los equipos y la selección." },
+                    { inline_data: { mime_type: "image/jpeg", data: base64Img } }
+                  ]
+                }]
+              })
+            });
+            const geminiData = await geminiRes.json();
+            const extractedText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            if (extractedText) {
+              const legs = parseParlayInput(extractedText);
+              const audit = auditParlayLegs(legs);
+              const report = formatParlayAuditReport(audit, extractedText);
+              await sendTelegramMessage(report, false, chatId, KEYBOARD_MENU);
+              return res.status(200).send('OK');
+            }
+          }
+        } catch (err) {
+          console.error('Error procesando imagen con Gemini:', err);
+        }
+      }
+
+      // Si no hay GEMINI_API_KEY o falló el OCR: respuesta explicativa y amigable
+      const photoGuideMsg = [
+        `📸 *¡Recibí la captura de tu boleto!*`,
+        ``,
+        `Para leer automáticamente el texto de imágenes mediante Visión Artificial, se requiere configurar \`GEMINI_API_KEY\` (Google AI Studio) en Vercel.`,
+        ``,
+        `💡 *¡Pero puedes auditar tu combinada AHORA MISMO por texto!*`,
+        `Escribe o toca el botón *[/parlay]* seguido de tus selecciones:`,
+        ``,
+        `👉 \`/parlay Selección 1 @ Cuota, Selección 2 @ Cuota, ...\``,
+        `_Ejemplo:_ \`/parlay Chelsea ML @ 1.64, Inter Over 2.5 @ 1.95, Celtics ML @ 1.80\``
+      ].join('\n');
+
+      await sendTelegramMessage(photoGuideMsg, false, chatId, KEYBOARD_MENU);
+      return res.status(200).send('OK');
     }
 
     // ==========================================
@@ -198,6 +264,42 @@ export default async function handler(req, res) {
     }
 
     // ==========================================
+    // OPCIÓN: /parlay -> AUDITORÍA FORENSE DE COMBINADAS
+    // ==========================================
+    if (command.startsWith('/parlay') || command === '/parlay' || command.startsWith('parlay') || command === 'parlay' || command === 'combinada' || command.startsWith('/combinada')) {
+      const cleanArgs = rawText
+        .replace(/^\/parlay\s*/i, '')
+        .replace(/^parlay\s*/i, '')
+        .replace(/^\/combinada\s*/i, '')
+        .replace(/^combinada\s*/i, '')
+        .trim();
+
+      if (!cleanArgs) {
+        const guideMsg = [
+          `🎰 *AUDITOR DE PARLAYS Y COMBINADAS — STATS-AI PRO*`,
+          `Audita cualquier boleto pata por pata con los 5 Candados de Veto y calcula el valor real (+EV).`,
+          ``,
+          `👉 *¿Cómo usarlo?*`,
+          `Escribe \`/parlay\` seguido de tus selecciones y cuotas (separadas por comas o renglones):`,
+          ``,
+          `*Ejemplo:*`,
+          `\`/parlay Chelsea ML @ 1.64, Inter Over 2.5 @ 1.95, Celtics ML @ 1.80\``,
+          ``,
+          `📸 _También puedes enviar la foto o captura de tu ticket directamente aquí._`
+        ].join('\n');
+
+        await sendTelegramMessage(guideMsg, false, chatId, KEYBOARD_MENU);
+        return res.status(200).send('OK');
+      }
+
+      const legs = parseParlayInput(cleanArgs);
+      const audit = auditParlayLegs(legs);
+      const report = formatParlayAuditReport(audit, cleanArgs);
+      await sendTelegramMessage(report, false, chatId, KEYBOARD_MENU);
+      return res.status(200).send('OK');
+    }
+
+    // ==========================================
     // OPCIÓN 4: /corte -> CORTE DE CAJA OFICIAL
     // ==========================================
     if (command === '/corte' || command === '3' || command === 'corte') {
@@ -228,14 +330,15 @@ export default async function handler(req, res) {
     // ==========================================
     const menuMsg = [
       `👑 *PANEL DE CONTROL VIP — STATS-AI PRO*`,
-      `👋 ¡Hola Tavo! Aquí tienes tus 4 opciones de control:`,
+      `👋 ¡Hola Tavo! Aquí tienes tus opciones de control:`,
       ``,
       `1️⃣ */vip* — Seleccionar deporte o cartelera general en tiempo real`,
       `2️⃣ */cheatsheet* — Hoja resumen compacta con Hit Rates (Top picks para redes)`,
-      `3️⃣ */cuota* — Consultar saldo de requests (API-Sports y The Odds API)`,
+      `3️⃣ */parlay* — Auditar tu boleto/combinada con los 5 Candados de Veto`,
       `4️⃣ */corte* — Ver Corte de Caja y Rendimiento de las últimas 24h`,
+      `5️⃣ */cuota* — Consultar saldo de requests (API-Sports y The Odds API)`,
       ``,
-      `👉 *Toca cualquiera de los 4 botones táctiles abajo en tu pantalla para ejecutar.*`
+      `👉 *Toca cualquiera de los botones táctiles abajo en tu pantalla o manda foto de tu boleto.*`
     ].join('\n');
 
     await sendTelegramMessage(menuMsg, false, chatId, KEYBOARD_MENU);
