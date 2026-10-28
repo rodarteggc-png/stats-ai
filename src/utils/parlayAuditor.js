@@ -233,3 +233,4 @@ export function formatParlayAuditReport(audit, originalInput = '') {
 
   return [...header, ...legsFormatted, ...recommendationBlock, ...footer].join('\n');
 }
+
