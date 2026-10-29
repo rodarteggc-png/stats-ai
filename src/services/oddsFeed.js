@@ -4,6 +4,7 @@
 
 import { getOddsApiKeys } from './sportsApi.js';
 import { fetchApiSportsPinnacleOdds } from './apiSports.js';
+import { fetchWithRetry } from './httpClient.js';
 
 // Mapeo oficial de deportes Tier 1 a llaves de The Odds API
 export const SPORT_KEY_MAP = {
@@ -48,7 +49,7 @@ export async function fetchPinnacleOdds(sport = 'nfl') {
       const apiKey = keys[i];
       try {
         const url = `https://api.the-odds-api.com/v4/sports/${sportKey}/odds/?apiKey=${apiKey}&regions=eu,us&markets=h2h,spreads,totals&bookmakers=pinnacle,bet365`;
-        const res = await fetch(url);
+        const res = await fetchWithRetry(url, {}, { retries: 1, timeoutMs: 6000 });
 
         if (res.status === 429 || res.status === 401) {
           continue;
@@ -62,11 +63,14 @@ export async function fetchPinnacleOdds(sport = 'nfl') {
           localMemoryCache.set(sportKey, { data: parsedMatches, timestamp: now });
           return parsedMatches;
         }
-      } catch (err) {}
+      } catch (err) {
+        console.warn(`[oddsFeed] Llave ${i + 1} falló para ${sportKey}: ${err.message}`);
+      }
     }
   }
 
-  // 4. Respaldo de Alta Capacidad: API-Sports (100 requests/día gratis)
+  // 4. Respaldo de Alta Capacidad: API-Sports (solo fútbol; no mezclar eventos de otro deporte)
+  if (!sportKey.startsWith('soccer_')) return null;
   try {
     const apiSportsMatches = await fetchApiSportsPinnacleOdds();
     if (apiSportsMatches && apiSportsMatches.length > 0) {

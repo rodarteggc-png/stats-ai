@@ -33,6 +33,13 @@ import { calculateNbaProbabilities } from '../src/utils/hoops.js';
 import { enrichMatchWithInjuries } from '../src/services/sleeperService.js';
 import { getRefereeProfile } from '../src/services/refereeService.js';
 import { analyzeLineMovement } from '../src/services/lineMovementService.js';
+import { calculateKellyStake } from '../src/utils/kelly.js';
+import { removeVig, noVigFromSingleSide, expectedValuePct, edgePp, deriveDoubleChanceMarket, isModelOutlier, getConfidenceTier } from '../src/utils/marketMath.js';
+
+// Umbral mínimo de Valor Esperado real (p·cuota − 1) para publicar una selección
+const MIN_EV_PCT = 2.0;
+// Brecha máxima tolerada entre el modelo y la probabilidad sin vig del mercado sharp
+const MAX_MODEL_MARKET_GAP_PP = 12;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -183,6 +190,10 @@ export function recordPickToLedger(pick, effectiveStake = 1.0) {
         closingOdds: null,
         clvPct: null,
         prob: parseFloat(pick.prob) || 60.0,
+        rawProb: pick.rawProb ? parseFloat(pick.rawProb) : null,
+        evPct: Number.isFinite(pick.evPct) ? Number(pick.evPct.toFixed(2)) : null,
+        confidenceTier: pick.confidence?.tier || null,
+        oddsSource: pick.oddsSource || 'market',
         stakeUnits: parseFloat(effectiveStake) || 1.0,
         consensus: `${pick.consensus?.votesPassed || 3}/3`,
         sharpBook: pick.sharpBookmaker || null,
@@ -195,10 +206,42 @@ export function recordPickToLedger(pick, effectiveStake = 1.0) {
       };
       fs.appendFileSync(ledgerFile, JSON.stringify(entry) + '\n', 'utf-8');
       console.log(`📝 Pick [${pick.id}] asentado en data/pick_ledger.jsonl`);
+      mirrorLedgerEntryToTelegram(entry);
     }
   } catch (err) {
     console.error('Error registrando pick en pick_ledger.jsonl:', err.message);
+    // En Vercel el disco es de solo lectura: el espejo en Telegram es la copia inmutable de auditoría
+    if (err.code === 'EROFS' || err.code === 'EACCES' || err.code === 'ENOENT') {
+      mirrorLedgerEntryToTelegram({
+        id: pick.id,
+        timestamp: new Date().toISOString(),
+        game: pick.game,
+        gameDate: pick.gameDate,
+        pick: pick.pick,
+        placedOdds: parseFloat(pick.odds) || null,
+        prob: parseFloat(pick.prob) || null,
+        rawProb: pick.rawProb ? parseFloat(pick.rawProb) : null,
+        evPct: Number.isFinite(pick.evPct) ? Number(pick.evPct.toFixed(2)) : null,
+        stakeUnits: parseFloat(effectiveStake) || 1.0,
+        status: 'PENDING'
+      });
+    }
   }
+}
+
+/**
+ * Copia append-only del ledger en un canal privado de Telegram (TELEGRAM_LEDGER_CHAT_ID).
+ * Cada mensaje queda sellado con fecha por Telegram y no puede reescribirse retroactivamente sin rastro.
+ */
+function mirrorLedgerEntryToTelegram(entry) {
+  const ledgerChat = process.env.TELEGRAM_LEDGER_CHAT_ID;
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (!ledgerChat || !botToken) return;
+  fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: ledgerChat, text: `LEDGER ${JSON.stringify(entry)}`, disable_notification: true })
+  }).catch(err => console.warn('Aviso espejo ledger:', err.message));
 }
 
 /**
@@ -345,10 +388,34 @@ export async function saveCloudLedger(cache) {
   if (!botToken) return;
 
   try {
-    const jsonStr = JSON.stringify(clean);
-    const compressed = zlib.deflateRawSync(Buffer.from(jsonStr, 'utf-8')).toString('base64');
+    // Límite físico: 95 comandos × 250 chars. Un stream Deflate truncado es irrecuperable y
+    // provocaría reenvío masivo de alertas, así que se recortan entradas cerradas hasta que quepa.
+    const MAX_B64 = 95 * 250;
+    let payload = clean;
+    let compressed = zlib.deflateRawSync(Buffer.from(JSON.stringify(payload), 'utf-8')).toString('base64');
+    if (compressed.length > MAX_B64) {
+      const ids = Object.keys(payload)
+        .filter(k => k !== '_meta')
+        .sort((a, b) => {
+          const closedA = payload[a].audited && payload[a].reportedInTelegram ? 0 : 1;
+          const closedB = payload[b].audited && payload[b].reportedInTelegram ? 0 : 1;
+          if (closedA !== closedB) return closedA - closedB;
+          return (payload[a].timestamp || 0) - (payload[b].timestamp || 0);
+        });
+      payload = { ...payload };
+      while (compressed.length > MAX_B64 && ids.length > 0) {
+        delete payload[ids.shift()];
+        compressed = zlib.deflateRawSync(Buffer.from(JSON.stringify(payload), 'utf-8')).toString('base64');
+      }
+      console.warn(`[Cloud Ledger] Compactado a ${Object.keys(payload).length - 1} entradas para no exceder la capacidad.`);
+    }
+    if (compressed.length > MAX_B64) {
+      console.error('[Cloud Ledger] Imposible compactar; se aborta el guardado para no corromper la nube.');
+      return;
+    }
+
     const commands = [];
-    for (let i = 0; i < compressed.length && commands.length < 95; i += 250) {
+    for (let i = 0; i < compressed.length; i += 250) {
       commands.push({
         command: `s_${commands.length}`,
         description: compressed.slice(i, i + 250)
@@ -535,6 +602,15 @@ export async function sendTelegramMessage(text, dryRun = false, targetChatId = n
   }
 
   const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+  const post = async (payload) => {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return res.json();
+  };
+
   try {
     const payload = {
       chat_id: chatId,
@@ -545,17 +621,26 @@ export async function sendTelegramMessage(text, dryRun = false, targetChatId = n
     if (replyMarkup) {
       payload.reply_markup = replyMarkup;
     }
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    const data = await res.json();
-    if (!data.ok) {
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const data = await post(payload);
+      if (data.ok) return true;
+
+      // Flood control: Telegram indica cuántos segundos esperar
+      if (data.error_code === 429 && attempt < 2) {
+        const wait = Math.min(10, data.parameters?.retry_after || 1);
+        await new Promise(r => setTimeout(r, wait * 1000));
+        continue;
+      }
+      // Nombres con _ * [ rompen el Markdown y la alerta se perdería: reenviar como texto plano
+      if (data.error_code === 400 && /parse entities/i.test(data.description || '') && payload.parse_mode) {
+        delete payload.parse_mode;
+        continue;
+      }
       console.error(`Error enviando a Telegram (Chat: ${chatId}):`, data.description);
       return false;
     }
-    return true;
+    return false;
   } catch (err) {
     console.error('Fallo en la petición a Telegram:', err.message);
     return false;
@@ -873,6 +958,85 @@ export function gradeOfficialPick(pick, match) {
 }
 
 /**
+ * Determina de dónde sale la cuota publicada y la reemplaza por el precio real del libro cuando existe.
+ * oddsSource: 'market' (precio real) | 'derived' (derivado de un mercado real) | 'assumed' (línea real, precio estándar -110)
+ *             | 'proxy' (precio de otro mercado) | 'model' (cuota inventada por el modelo → nunca se publica)
+ */
+function resolveOddsProvenance(opp) {
+  if (opp.oddsSource) return;
+  if (isPlayerIndividualProp(opp)) {
+    opp.oddsSource = 'market';
+    return;
+  }
+
+  const m = opp.match || {};
+  const id = String(opp.id || '');
+  const sport = (opp.sport || '').toLowerCase();
+  const pickLower = (opp.pick || '').toLowerCase();
+  const homeLower = (m.home?.name || '').toLowerCase();
+  const awayLower = (m.away?.name || '').toLowerCase();
+  const isHomeSide = homeLower && pickLower.includes(homeLower) && !(awayLower && pickLower.startsWith(awayLower));
+  const isTotal = /^(over|under|menos de|más de)/i.test(opp.pick || '') || /-(tot|under|over)-/.test(id);
+  const isOver = /^(over|más de)/i.test(opp.pick || '');
+  const real = (v) => {
+    const n = parseFloat(v);
+    return n > 1.01 ? n : null;
+  };
+  const applyTwoWay = (lineIsReal, price) => {
+    if (!lineIsReal) {
+      opp.oddsSource = 'model';
+    } else if (price) {
+      opp.odds = price.toFixed(2);
+      opp.oddsSource = 'market';
+    } else {
+      opp.oddsSource = 'assumed';
+    }
+  };
+
+  if (sport === 'mlb') {
+    if (id.startsWith('mlb-f5-')) {
+      // La cuota de partido completo no es el precio del mercado de 5 innings
+      opp.oddsSource = 'proxy';
+    } else if (id.startsWith('mlb-rl-')) {
+      const price = real(isHomeSide ? m.market?.homeSpreadOdds : m.market?.awaySpreadOdds);
+      opp.oddsSource = price && price === real(opp.odds) ? 'market' : 'model';
+    } else if (isTotal) {
+      const lineIsReal = m.market?.vegasOverUnder !== undefined || m.vegas?.overUnder !== undefined;
+      opp.oddsSource = lineIsReal && real(isOver ? m.market?.overOdds : m.market?.underOdds) ? 'market' : 'model';
+    } else {
+      opp.oddsSource = m.market?.hasRealOdds ? 'market' : 'model';
+    }
+    return;
+  }
+
+  if (sport === 'nfl' || sport === 'ncaaf') {
+    if (isTotal) {
+      const price = real(isOver ? (m.vegas?.overOdds || m.market?.overOdds) : (m.vegas?.underOdds || m.market?.underOdds));
+      applyTwoWay(m.hasRealTotal, price);
+    } else {
+      const price = real(isHomeSide
+        ? (m.vegas?.spreadHomeOdds || m.market?.homeSpreadOdds)
+        : (m.vegas?.spreadAwayOdds || m.market?.awaySpreadOdds));
+      applyTwoWay(m.hasRealSpread, price);
+    }
+    return;
+  }
+
+  if (sport === 'baloncesto' || sport === 'nba') {
+    if (id.startsWith('nba-ml-')) {
+      opp.oddsSource = real(opp.odds) && m.market?.hasRealOdds ? 'market' : 'model';
+    } else if (isTotal) {
+      applyTwoWay(m.total !== null && m.total !== undefined, real(isOver ? m.vegas?.overOdds : m.vegas?.underOdds));
+    } else {
+      applyTwoWay(m.spread !== null && m.spread !== undefined, real(isHomeSide ? m.vegas?.spreadHomeOdds : m.vegas?.spreadAwayOdds));
+    }
+    return;
+  }
+
+  opp.oddsSource = m.market?.hasRealOdds ? 'market' : 'model';
+}
+
+/**
  * Núcleo compartido que evalúa oportunidades en Fútbol, MLB y NFL y selecciona el Top Slate con Consenso 3v1
  */
 export function buildOpportunitiesAndTopSlate({
@@ -932,12 +1096,21 @@ export function buildOpportunitiesAndTopSlate({
     const homeEV = calHWin - vegasImpliedHome;
     const awayEV = calAWin - vegasImpliedAway;
 
+    // Doble Oportunidad: no existe feed directo; se deriva del 1X2 real del libro sharp con su mismo margen
+    const drawOddsDec = parseFloat(m.market?.drawOdds);
+    const getDcMarket = (side) => (hasRealOdds && drawOddsDec > 1)
+      ? deriveDoubleChanceMarket(homeOddsDec, drawOddsDec, awayOddsDec, side)
+      : null;
+    const oneXTwoNoVig = (hasRealOdds && drawOddsDec > 1) ? removeVig([homeOddsDec, drawOddsDec, awayOddsDec]) : null;
+    const oneXTwoSource = hasRealOdds ? 'market' : 'model';
+
     // 1. Smart Money / Steam Move (Únicamente en cuotas competitivas <= 2.55)
     if (m.market?.isSteamMove && parseFloat(m.market.current || 3.0) <= 2.55) {
       const teamFavored = m.market.steamTeam || m.home.name;
       const isSteamHome = isTeamMatch(teamFavored, m.home.name);
       const dcProb = isSteamHome ? probs.doubleChance.dc1X : probs.doubleChance.dcX2;
-      const dcOdds = isSteamHome ? probs.doubleChance.odds1X : probs.doubleChance.oddsX2;
+      const steamDcMarket = getDcMarket(isSteamHome ? '1X' : 'X2');
+      const dcOdds = steamDcMarket ? steamDcMarket.odds.toFixed(2) : (isSteamHome ? probs.doubleChance.odds1X : probs.doubleChance.oddsX2);
       const dropPct = m.market.steamDropPct || '5.0';
 
       if (parseFloat(dcProb) >= 68) {
@@ -951,6 +1124,8 @@ export function buildOpportunitiesAndTopSlate({
           pick: `${teamFavored} o Empate (${isSteamHome ? '1X' : 'X2'})`,
           prob: `${dcProb}%`,
           odds: dcOdds,
+          oddsSource: steamDcMarket ? 'derived' : 'model',
+          marketNoVigProb: steamDcMarket?.marketProbPct,
           edgeVal: Math.min(14.0, parseFloat(dropPct) * 1.3),
           edgeStr: `Caída institucional: ${m.market.open} -> ${m.market.current} (-${dropPct}%)`,
           argument: m.market.steamDetails || `Fuerte flujo de dinero profesional en ${teamFavored}. Protegido con Doble Oportunidad (${dcProb}%).`,
@@ -973,6 +1148,8 @@ export function buildOpportunitiesAndTopSlate({
         pick: `Victoria ${m.home.name} (1X2)`,
         prob: `${calHWin.toFixed(0)}%`,
         odds: homeOddsDec.toFixed(2),
+        oddsSource: oneXTwoSource,
+        marketNoVigProb: oneXTwoNoVig ? oneXTwoNoVig.probs[0] * 100 : undefined,
         edgeVal: homeEV,
         edgeStr: `+${homeEV.toFixed(1)}% EV vs Vegas`,
         argument: `Favorito local respaldado por Monte Carlo (${calHWin.toFixed(0)}%) en cuota segura (${homeOddsDec.toFixed(2)} <= 2.05) y ventaja de xG (${m.home.xG} vs ${m.away.xG}).`,
@@ -991,6 +1168,8 @@ export function buildOpportunitiesAndTopSlate({
         pick: `Victoria ${m.away.name} (1X2)`,
         prob: `${calAWin.toFixed(0)}%`,
         odds: awayOddsDec.toFixed(2),
+        oddsSource: oneXTwoSource,
+        marketNoVigProb: oneXTwoNoVig ? oneXTwoNoVig.probs[2] * 100 : undefined,
         edgeVal: awayEV,
         edgeStr: `+${awayEV.toFixed(1)}% EV vs Vegas`,
         argument: `Favorito visitante con ${calAWin.toFixed(0)}% real en cuota protegida (${awayOddsDec.toFixed(2)} <= 2.05) y ventaja de +${awayEV.toFixed(1)}% sobre Las Vegas.`,
@@ -1016,6 +1195,8 @@ export function buildOpportunitiesAndTopSlate({
         pick: `Victoria ${m.home.name} (1X2)`,
         prob: `${calHWin.toFixed(0)}%`,
         odds: homeOddsDec.toFixed(2),
+        oddsSource: oneXTwoSource,
+        marketNoVigProb: oneXTwoNoVig ? oneXTwoNoVig.probs[0] * 100 : undefined,
         edgeVal: realHomeMathEdge,
         edgeStr: `Edge: +${realHomeMathEdge.toFixed(1)}% | Cuota: ${homeOddsDec.toFixed(2)}`,
         argument: `Dominio táctico neto con ${m.home.xG} xG frente a ${m.away.xG} rival, Elo superior (${m.home.elo} vs ${m.away.elo}) y ventaja matemática real de +${realHomeMathEdge.toFixed(1)}%.`,
@@ -1036,7 +1217,8 @@ export function buildOpportunitiesAndTopSlate({
       if (baseTeamOdds <= 2.65) {
         const chosenTeam = isHome ? m.home.name : m.away.name;
         const dcProb = isHome ? probs.doubleChance.dc1X : probs.doubleChance.dcX2;
-        const dcOdds = isHome ? probs.doubleChance.odds1X : probs.doubleChance.oddsX2;
+        const dcMarket = getDcMarket(isHome ? '1X' : 'X2');
+        const dcOdds = dcMarket ? dcMarket.odds.toFixed(2) : (isHome ? probs.doubleChance.odds1X : probs.doubleChance.oddsX2);
 
         const dcOddsNum = parseFloat(dcOdds) || 1.40;
         const dcImplied = (1 / dcOddsNum) * 100;
@@ -1053,7 +1235,9 @@ export function buildOpportunitiesAndTopSlate({
             pick: `${chosenTeam} o Empate (${isHome ? '1X' : 'X2'})`,
             prob: `${dcProb}%`,
             odds: dcOdds,
-            edgeVal: Math.max(4.5, dcEdge),
+            oddsSource: dcMarket ? 'derived' : 'model',
+            marketNoVigProb: dcMarket?.marketProbPct,
+            edgeVal: dcEdge,
             edgeStr: `Cobro Blindado: ${dcProb}% (Cubre Empate)`,
             argument: baseTeamOdds > 2.05
               ? `Candado Anti-Underdog activo: En lugar de arriesgar Moneyline (${baseTeamOdds.toFixed(2)}), se protege a ${chosenTeam} con Doble Oportunidad (${dcProb}% de éxito).`
@@ -1073,9 +1257,10 @@ export function buildOpportunitiesAndTopSlate({
     const combinedSoT = homeSoT + awaySoT;
 
     if (hXgNum >= 1.25 && aXgNum >= 1.15 && calBtts >= 61.0 && combinedSoT >= 2.1 && mc.bttsRisk !== 'Alto') {
-      const bttsOdds = m.market?.bttsOdds || getFairOddsDecimal(Math.min(62.5, calBtts * 0.90));
+      const hasRealBttsOdds = parseFloat(m.market?.bttsOdds) > 1;
+      const bttsOdds = hasRealBttsOdds ? m.market.bttsOdds : getFairOddsDecimal(Math.min(62.5, calBtts * 0.90));
       const bttsImplied = (1 / parseFloat(bttsOdds)) * 100;
-      const bttsEdge = Math.max(5.5, calBtts - bttsImplied);
+      const bttsEdge = calBtts - bttsImplied;
 
       rawOpportunities.push({
         id: `btts-${m.id}`,
@@ -1087,6 +1272,7 @@ export function buildOpportunitiesAndTopSlate({
         pick: 'Ambos Equipos Anotan: Sí (BTTS)',
         prob: `${calBtts.toFixed(0)}%`,
         odds: bttsOdds,
+        oddsSource: hasRealBttsOdds ? 'market' : 'model',
         edgeVal: bttsEdge,
         edgeStr: `BTTS Sí: ${calBtts.toFixed(0)}% | xG: ${m.home.xG} + ${m.away.xG}`,
         argument: `Duelo abierto con ataque bilateral constante (${m.home.xG} xG local y ${m.away.xG} xG visitante) y alto volumen de remates al arco. Cobra sin importar quién gane o si empatan con goles.`,
@@ -1099,8 +1285,14 @@ export function buildOpportunitiesAndTopSlate({
     // 5. EVALUACIÓN DE TOTALES (OVER / UNDER 2.5 GOLES) EN FÚTBOL TIER 1
     const calOver = parseFloat(probs.over25 || 50);
     const calUnder = parseFloat(probs.under25 || 50);
-    const overOddsDec = parseFloat(m.market?.overOdds) || 1.90;
-    const underOddsDec = parseFloat(m.market?.underOdds) || 1.90;
+    // Solo se usan cuotas reales si la línea del libro es exactamente 2.5 (2.25/2.75/3.0 son otro mercado)
+    const isLine25 = parseFloat(m.vegas?.overUnder) === 2.5;
+    const realOver = isLine25 ? parseFloat(m.vegas?.overOdds || m.market?.overOdds) : NaN;
+    const realUnder = isLine25 ? parseFloat(m.vegas?.underOdds || m.market?.underOdds) : NaN;
+    const overOddsDec = realOver > 1 ? realOver : 1.90;
+    const underOddsDec = realUnder > 1 ? realUnder : 1.90;
+    const totalsOddsSource = (realOver > 1 && realUnder > 1) ? 'market' : 'model';
+    const totalsNoVig = totalsOddsSource === 'market' ? removeVig([overOddsDec, underOddsDec]) : null;
 
     // A) UNDER 2.5 Goles: Ritmo defensivo / bajo xG combinado (<= 2.25) con probabilidad >= 60%
     if (calUnder >= 60.0 && (hXgNum + aXgNum) <= 2.25 && underOddsDec >= 1.60 && underOddsDec <= 2.20 && mc.riskLevel !== 'Alto') {
@@ -1117,7 +1309,9 @@ export function buildOpportunitiesAndTopSlate({
           pick: 'UNDER 2.5 Goles',
           prob: `${calUnder.toFixed(0)}%`,
           odds: underOddsDec.toFixed(2),
-          edgeVal: Math.max(underEdge, 4.0),
+          oddsSource: totalsOddsSource,
+          marketNoVigProb: totalsNoVig ? totalsNoVig.probs[1] * 100 : undefined,
+          edgeVal: underEdge,
           edgeStr: `Under 2.5: ${calUnder.toFixed(0)}% | Edge: +${underEdge.toFixed(1)}%`,
           argument: `Duelo de bajo ritmo y defensas cerradas (xG combinado de ${(hXgNum + aXgNum).toFixed(2)} goles). Simulación Monte Carlo y Poisson proyectan partido táctico con menos de 3 anotaciones.`,
           mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel, iterations: 10000 },
@@ -1140,7 +1334,9 @@ export function buildOpportunitiesAndTopSlate({
           pick: 'OVER 2.5 Goles',
           prob: `${calOver.toFixed(0)}%`,
           odds: overOddsDec.toFixed(2),
-          edgeVal: Math.max(overEdge, 4.0),
+          oddsSource: totalsOddsSource,
+          marketNoVigProb: totalsNoVig ? totalsNoVig.probs[0] * 100 : undefined,
+          edgeVal: overEdge,
           edgeStr: `Over 2.5: ${calOver.toFixed(0)}% | Edge: +${overEdge.toFixed(1)}%`,
           argument: `Generación ofensiva bilateral masiva (${(hXgNum + aXgNum).toFixed(2)} xG combinados). Proyección matemática supera la cuota de Las Vegas con +${overEdge.toFixed(1)}% de ventaja.`,
           mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel, iterations: 10000 },
@@ -1157,7 +1353,9 @@ export function buildOpportunitiesAndTopSlate({
 
     // A) Favorito Local -1.5 (Gana por 2 o más goles)
     if (homeOddsDec <= 1.48 && probHomeMinus15 >= 50.0 && mc.riskLevel !== 'Alto') {
-      const spreadOddsDec = parseFloat(m.vegas?.spreadHomeOdds || m.market?.homeSpreadOdds) || parseFloat(getFairOddsDecimal(probHomeMinus15 * 0.94));
+      // La cuota del libro solo corresponde a -1.5 si la línea publicada es exactamente -1.5 para el local
+      const realHomeAh = parseFloat(m.vegas?.spread) === -1.5 ? parseFloat(m.vegas?.spreadHomeOdds || m.market?.homeSpreadOdds) : NaN;
+      const spreadOddsDec = realHomeAh > 1 ? realHomeAh : parseFloat(getFairOddsDecimal(probHomeMinus15 * 0.94));
       const impliedSpread = (1 / spreadOddsDec) * 100;
       const spreadEdge = probHomeMinus15 - impliedSpread;
       if (spreadOddsDec >= 1.60 && spreadOddsDec <= 2.35 && spreadEdge >= 2.5) {
@@ -1171,7 +1369,8 @@ export function buildOpportunitiesAndTopSlate({
           pick: `${m.home.name} -1.5 (Gana por 2+ goles)`,
           prob: `${probHomeMinus15.toFixed(0)}%`,
           odds: spreadOddsDec.toFixed(2),
-          edgeVal: Math.max(spreadEdge, 3.5),
+          oddsSource: realHomeAh > 1 ? 'market' : 'model',
+          edgeVal: spreadEdge,
           edgeStr: `Cover -1.5: ${probHomeMinus15.toFixed(0)}% | Edge: +${spreadEdge.toFixed(1)}%`,
           argument: `Favorito pesado con cuota 1X2 impagable (${homeOddsDec.toFixed(2)}). Se monetiza con Hándicap Asiático (-1.5) respaldado por Poisson (${probHomeMinus15.toFixed(0)}% de margen por 2 o más goles) y superioridad de xG (${m.home.xG} vs ${m.away.xG}).`,
           mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel, iterations: 10000 },
@@ -1180,8 +1379,9 @@ export function buildOpportunitiesAndTopSlate({
         });
       }
     } else if (awayOddsDec <= 1.48 && probAwayMinus15 >= 50.0 && mc.riskLevel !== 'Alto') {
-      // B) Favorito Visitante -1.5 (Gana por 2 o más goles)
-      const awaySpreadOddsDec = parseFloat(m.vegas?.spreadAwayOdds || m.market?.awaySpreadOdds) || parseFloat(getFairOddsDecimal(probAwayMinus15 * 0.94));
+      // B) Favorito Visitante -1.5: la línea del local debe ser +1.5 (si no, la cuota es de otro hándicap)
+      const realAwayAh = parseFloat(m.vegas?.spread) === 1.5 ? parseFloat(m.vegas?.spreadAwayOdds || m.market?.awaySpreadOdds) : NaN;
+      const awaySpreadOddsDec = realAwayAh > 1 ? realAwayAh : parseFloat(getFairOddsDecimal(probAwayMinus15 * 0.94));
       const impliedAwaySpread = (1 / awaySpreadOddsDec) * 100;
       const awaySpreadEdge = probAwayMinus15 - impliedAwaySpread;
       if (awaySpreadOddsDec >= 1.60 && awaySpreadOddsDec <= 2.35 && awaySpreadEdge >= 2.5) {
@@ -1195,7 +1395,8 @@ export function buildOpportunitiesAndTopSlate({
           pick: `${m.away.name} -1.5 (Gana por 2+ goles)`,
           prob: `${probAwayMinus15.toFixed(0)}%`,
           odds: awaySpreadOddsDec.toFixed(2),
-          edgeVal: Math.max(awaySpreadEdge, 3.5),
+          oddsSource: realAwayAh > 1 ? 'market' : 'model',
+          edgeVal: awaySpreadEdge,
           edgeStr: `Cover -1.5: ${probAwayMinus15.toFixed(0)}% | Edge: +${awaySpreadEdge.toFixed(1)}%`,
           argument: `Favorito visitante dominante monetizado con Hándicap Asiático (-1.5) respaldado por Poisson (${probAwayMinus15.toFixed(0)}% por 2 o más goles) y ventaja de xG (${m.away.xG} vs ${m.home.xG}).`,
           mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel, iterations: 10000 },
@@ -1888,11 +2089,27 @@ export function buildOpportunitiesAndTopSlate({
       opp.sharpBookmaker = opp.match.market?.sharpBookmaker || opp.match.sharpBook;
       opp.isPinnacle = Boolean(opp.match.market?.isPinnacle);
     }
+    resolveOddsProvenance(opp);
+
     // Calibración Bayesiana de Platt por deporte para corregir sesgos de cola
     const rawP = parseFloat(opp.prob) || 60;
     const calibrated = applyPlattCalibration(rawP, opp.sport);
     opp.rawProb = opp.prob;
     opp.prob = `${calibrated}%`;
+
+    // El edge debe medirse con la probabilidad CALIBRADA contra la cuota real (sin pisos artificiales)
+    const honestEdge = edgePp(calibrated, opp.odds);
+    opp.evPct = expectedValuePct(calibrated, opp.odds);
+    opp.edgeContext = opp.edgeStr;
+    if (Number.isFinite(honestEdge)) {
+      opp.edgeVal = Number(honestEdge.toFixed(2));
+      opp.edgeStr = `Edge ${honestEdge >= 0 ? '+' : ''}${honestEdge.toFixed(1)} pp | EV ${opp.evPct >= 0 ? '+' : ''}${opp.evPct.toFixed(1)}%`;
+    }
+
+    const marketNoVig = Number.isFinite(opp.marketNoVigProb)
+      ? opp.marketNoVigProb
+      : (opp.oddsSource === 'market' || opp.oddsSource === 'assumed' ? noVigFromSingleSide(opp.odds) * 100 : NaN);
+    opp.marketOutlier = !isPlayerIndividualProp(opp) && isModelOutlier(calibrated, marketNoVig, MAX_MODEL_MARKET_GAP_PP);
 
     opp.consensus = evaluateEnsembleConsensus({
       sport: opp.sport,
@@ -1906,6 +2123,13 @@ export function buildOpportunitiesAndTopSlate({
       odds: opp.odds
     });
 
+    opp.confidence = getConfidenceTier({
+      probPct: calibrated,
+      odds: opp.odds,
+      votesPassed: opp.consensus?.votesPassed || 0,
+      oddsSource: opp.oddsSource
+    });
+
     // Auditoría Cualitativa & Big Data de Tipster Pro (Fatiga, Clima, Motivación)
     opp.tipsterAudit = auditCandidateAsTipsterPro(opp);
   });
@@ -1915,6 +2139,12 @@ export function buildOpportunitiesAndTopSlate({
   // Veto preventivo si hay trampa institucional detectada por RLM.
   // Para Spreads/Totales se exige prob >= 55.5% y para 1X2/ML/BTTS prob >= 60.0%
   const approvedOpps = rawOpportunities.filter(opp => {
+    // Integridad de precio: nunca publicar cuotas inventadas por el modelo o de otro mercado
+    if (opp.oddsSource === 'model' || opp.oddsSource === 'proxy') return false;
+    if (!(opp.evPct >= MIN_EV_PCT)) return false;
+    if (opp.marketOutlier) return false;
+    if (opp.match?.isPostponed) return false;
+
     if (!opp.consensus || opp.consensus.votesPassed < 2) return false;
     if (opp.consensus.rlmInfo?.isTrapForPick || opp.consensus.rlmInfo?.isVetoedByMarket) return false;
 
@@ -2323,7 +2553,7 @@ export async function runDailyTelegramAudit(options = {}) {
     r.status === 'fulfilled' && Array.isArray(r.value) ? r.value : []
   );
 
-  const allCompletedMatches = [
+  const allFetchedMatches = [
     ...soccerYest,
     ...soccerToday,
     ...mlbYest,
@@ -2332,7 +2562,21 @@ export async function runDailyTelegramAudit(options = {}) {
     ...ncaafWeek,
     ...nbaYest,
     ...nbaToday
-  ].filter(m => m && m.isCompleted);
+  ].filter(Boolean);
+  const allCompletedMatches = allFetchedMatches.filter(m => m.isCompleted);
+  const allPostponedMatches = allFetchedMatches.filter(m => m.isPostponed);
+
+  // Un pick solo pertenece a un partido si coincide el ID exacto o los equipos Y la fecha (±18h)
+  const belongsTo = (entry, m) => {
+    if (entry.id && m.id && (entry.id === m.id || entry.id.endsWith(`-${m.id}`) || entry.id.includes(`-${m.id}-`))) return true;
+    const eHome = entry.homeName || (entry.game ? entry.game.split(' vs ')[0] : '');
+    const eAway = entry.awayName || (entry.game ? entry.game.split(' vs ')[1] : '');
+    if (!eHome || !eAway || !isTeamMatch(eHome, m.home?.name) || !isTeamMatch(eAway, m.away?.name)) return false;
+    const eTs = new Date(entry.gameDate).getTime();
+    const mTs = new Date(m.gameDate || m.date).getTime();
+    if (!Number.isFinite(eTs) || !Number.isFinite(mTs)) return false;
+    return Math.abs(eTs - mTs) <= 18 * 60 * 60 * 1000;
+  };
 
   const ledgerEntries = Object.keys(providedCache)
     .filter(k => k !== '_meta' && providedCache[k] && typeof providedCache[k] === 'object')
@@ -2348,12 +2592,29 @@ export async function runDailyTelegramAudit(options = {}) {
     const isPickProp = isPlayerIndividualProp(entry);
 
     // Buscar si el partido ya finalizó oficialmente
-    const matchedGame = allCompletedMatches.find(m => {
-      if (entry.id && entry.id.includes(m.id)) return true;
-      const eHome = entry.homeName || (entry.game ? entry.game.split(' vs ')[0] : '');
-      const eAway = entry.awayName || (entry.game ? entry.game.split(' vs ')[1] : '');
-      return eHome && eAway && isTeamMatch(eHome, m.home?.name) && isTeamMatch(eAway, m.away?.name);
-    });
+    const matchedGame = allCompletedMatches.find(m => belongsTo(entry, m));
+
+    // Partido pospuesto/cancelado: la apuesta se anula (stake devuelto) en lugar de quedar pendiente para siempre
+    if (!matchedGame && (!entry.status || entry.status === 'pending') && !entry.audited) {
+      const postponed = allPostponedMatches.find(m => belongsTo(entry, m));
+      if (postponed) {
+        const voided = {
+          ...entry,
+          status: 'void',
+          netUnits: 0,
+          scoreDisplay: 'Partido pospuesto/cancelado (Anulada)',
+          resultDetails: `Estado oficial: ${postponed.statusName || 'Pospuesto'}`,
+          audited: true,
+          auditedAt: Date.now()
+        };
+        providedCache[entry.id] = voided;
+        ledgerModified = true;
+        updatePickLedgerResult(voided);
+        allAuditedRecent.push(voided);
+        if (!entry.reportedInTelegram || forceResend) newlyGraded.push(voided);
+        continue;
+      }
+    }
 
     if (matchedGame) {
       let graded = null;
@@ -2713,14 +2974,21 @@ async function enrichMatchesWithSharpOdds(matches = [], sportKey = 'nfl') {
     if (!sharpEvents || sharpEvents.length === 0) return matches;
 
     let enrichedCount = 0;
+    const namesMatch = (a, b) => a.length >= 3 && b.length >= 3 && (a === b || a.includes(b) || b.includes(a));
     const enriched = matches.map(m => {
-      const hNorm = (m.home?.name || '').toLowerCase().trim();
-      const aNorm = (m.away?.name || '').toLowerCase().trim();
+      const hNorm = (m.home?.baseName || m.home?.name || '').toLowerCase().trim();
+      const aNorm = (m.away?.baseName || m.away?.name || '').toLowerCase().trim();
+      const gameTs = m.gameDate ? new Date(m.gameDate).getTime() : NaN;
 
       const matchedSharp = sharpEvents.find(s => {
         const sh = (s.homeTeam || '').toLowerCase().trim();
         const sa = (s.awayTeam || '').toLowerCase().trim();
-        return (sh.includes(hNorm) || hNorm.includes(sh)) && (sa.includes(aNorm) || aNorm.includes(sa));
+        if (!namesMatch(sh, hNorm) || !namesMatch(sa, aNorm)) return false;
+        // Mismo cruce en fechas distintas (series MLB, ida/vuelta): exigir proximidad de horario
+        if (s.commenceTime && Number.isFinite(gameTs)) {
+          return Math.abs(new Date(s.commenceTime).getTime() - gameTs) <= 12 * 60 * 60 * 1000;
+        }
+        return true;
       });
 
       if (!matchedSharp) return m;
@@ -2757,6 +3025,8 @@ async function enrichMatchesWithSharpOdds(matches = [], sportKey = 'nfl') {
         ...m,
         market,
         vegas,
+        hasRealSpread: Boolean(m.hasRealSpread || (matchedSharp.spread?.homePoint !== null && matchedSharp.spread?.homePoint !== undefined)),
+        hasRealTotal: Boolean(m.hasRealTotal || (matchedSharp.totals?.line !== null && matchedSharp.totals?.line !== undefined)),
         sharpValidated: true,
         sharpBook: matchedSharp.bookmaker
       };
@@ -2851,6 +3121,19 @@ export async function runAlertEngine(options = {}) {
   const sentCache = await loadCloudLedger();
   if (!sentCache._meta) sentCache._meta = {};
 
+  // Candado anti-concurrencia: evita que dos ejecuciones del cron (o reintentos por timeout)
+  // lean el mismo ledger y publiquen alertas duplicadas en el canal público.
+  const usesLock = !isForce && !isDryRun && !isVipOnly;
+  if (usesLock) {
+    const lock = sentCache._meta.scanLock;
+    if (lock && lock.expiresAt > Date.now()) {
+      console.warn(`⏸️ Escaneo omitido: otra ejecución mantiene el candado hasta ${new Date(lock.expiresAt).toISOString()}.`);
+      return { sentCount: 0, skipped: 'locked', totalOpportunities: 0, auditSent: false, auditSummary: null };
+    }
+    sentCache._meta.scanLock = { expiresAt: Date.now() + 90 * 1000, startedAt: new Date().toISOString() };
+    await saveCloudLedger(sentCache);
+  }
+
   // Determinar si es ventana de auditoría/corte en CDMX (6:00 AM a 4:30 PM / 16h) para enviar el Corte de Caja una vez al día
   // cubriendo la totalidad de las tandas previas (mañana y tarde)
   const isAuditWindow = cdmxHour >= 6 && cdmxHour <= 16;
@@ -2901,7 +3184,7 @@ export async function runAlertEngine(options = {}) {
   );
 
   const filterUpcoming = (m) => {
-    if (!m || m.isCompleted) return false;
+    if (!m || m.isCompleted || m.isPostponed) return false;
     if (options.maxHoursAhead !== undefined) {
       return isMatchWithinHorizon(m.gameDate, options.maxHoursAhead);
     }
@@ -3048,6 +3331,7 @@ export async function runAlertEngine(options = {}) {
         gameDate: uPick.gameDate,
         pick: uPick.pick,
         prob: uPick.prob,
+        rawProb: uPick.rawProb,
         odds: uPick.odds,
         stakeUnits: (() => {
           const isUProp = (uPick.type || '').toUpperCase().includes('PROP') || (uPick.id && String(uPick.id).startsWith('prop-'));
@@ -3086,7 +3370,8 @@ export async function runAlertEngine(options = {}) {
   }
 
   if (toSend.length === 0) {
-    if (!isDryRun && (auditResult.auditSent || autoSavedUnanimousCount > 0)) {
+    if (usesLock) sentCache._meta.scanLock = null;
+    if (!isDryRun && (usesLock || auditResult.auditSent || autoSavedUnanimousCount > 0)) {
       await saveCloudLedger(sentCache);
     }
     console.log('✅ Mercado analizado. Las mejores selecciones de la jornada ya fueron notificadas hoy. Cero spam.');
@@ -3167,6 +3452,20 @@ export async function runAlertEngine(options = {}) {
       effectiveStake = Math.min(propCap, effectiveStake);
     }
 
+    // Techo duro: nunca arriesgar más que Kelly fraccional × multiplicador del Tier de confianza
+    const votes = pick.consensus?.votesPassed || 2;
+    const kelly = calculateKellyStake(pick.prob, pick.odds, votes === 3 ? 0.10 : 0.05, isPickProp ? (isPickElite ? 1.5 : 1.0) : 2.0);
+    const tierMultiplier = pick.confidence?.kellyMultiplier ?? 0.5;
+    const kellyCap = Number((kelly.rawUnits * tierMultiplier).toFixed(1));
+    if (kellyCap <= 0) {
+      console.warn(`⛔ ${pick.pick} descartado en despacho: Kelly sin ventaja con cuota ${pick.odds}.`);
+      continue;
+    }
+    if (effectiveStake > kellyCap) {
+      effectiveStake = kellyCap;
+      stakeLabel = `${kellyCap.toFixed(1)} Unidades (Kelly ${votes === 3 ? '1/10' : '1/20'} × ${pick.confidence?.label || 'Tier'})`;
+    }
+
     const consensusLines = pick.consensus ? [
       `🗳️ *Consenso Algorítmico:* \`${pick.consensus.badgeText}\``,
       ...pick.consensus.breakdown.map(b => `  ${b.icon} *${b.name}:* _${b.reason}_`),
@@ -3232,6 +3531,7 @@ export async function runAlertEngine(options = {}) {
       ``,
       ...(pick.tipsterAudit ? [pick.tipsterAudit.badgeTitle, `  _${pick.tipsterAudit.reason}_`, ``] : []),
       `📊 *Probabilidad Calibrada:* \`${pick.prob}\``,
+      `🏷️ *Nivel de Confianza:* \`${pick.confidence?.label || 'N/D'}\``,
       stabilityLine,
       `💰 *Cuota de Mercado:* \`${pick.odds}\`${pick.sharpBookmaker ? ` (${pick.sharpBookmaker}${pick.isPinnacle ? ' Sharp' : ''})` : ''}`,
       `📈 *Ventaja Cuantitativa:* *${pick.edgeStr}*`,
@@ -3270,6 +3570,7 @@ export async function runAlertEngine(options = {}) {
         gameDate: pick.gameDate,
         pick: pick.pick,
         prob: pick.prob,
+        rawProb: pick.rawProb,
         odds: pick.odds,
         stakeUnits: effectiveStake,
         homeName: pick.match?.home?.name,
@@ -3283,10 +3584,20 @@ export async function runAlertEngine(options = {}) {
         reportedInTelegram: sentCache[pick.id]?.reportedInTelegram || false,
         timestamp: Date.now()
       };
+      // Persistir inmediatamente: si la función serverless expira a mitad del lote, el siguiente
+      // turno no volverá a publicar esta selección.
+      if (!isDryRun) {
+        try {
+          await saveCloudLedger(sentCache);
+        } catch (e) {
+          console.warn('Aviso persistiendo despacho:', e.message);
+        }
+      }
     }
   }
 
-  if (!isDryRun && (sentCount > 0 || auditResult.auditSent || autoSavedUnanimousCount > 0)) {
+  if (usesLock) sentCache._meta.scanLock = null;
+  if (!isDryRun && (usesLock || sentCount > 0 || auditResult.auditSent || autoSavedUnanimousCount > 0)) {
     await saveCloudLedger(sentCache);
   }
 

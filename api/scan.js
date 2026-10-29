@@ -1,7 +1,9 @@
 // api/scan.js - Vercel Serverless Function
 import { runAlertEngine } from '../scripts/alertEngine.js';
+import { requireCronAuth } from './_lib/security.js';
 
 export default async function handler(req, res) {
+  if (!requireCronAuth(req, res)) return;
   try {
     const hasToken = Boolean(process.env.TELEGRAM_BOT_TOKEN);
     const hasChatId = Boolean(process.env.TELEGRAM_CHAT_ID);
@@ -39,7 +41,7 @@ export default async function handler(req, res) {
     console.error('Error en api/scan:', error);
     return res.status(500).json({
       success: false,
-      error: error.message
+      error: 'Fallo interno en el escaneo.'
     });
   }
 }

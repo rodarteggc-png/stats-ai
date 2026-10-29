@@ -395,6 +395,7 @@ export function extractEspnSharpMarket(oddsObj, homeName = "Local", awayName = "
 
 // ================= CACHÉ PERSISTENTE (3 HORAS) Y POOL DE LLAVES =================
 const ODDS_CACHE_TTL_MS = 3 * 60 * 60 * 1000; // 3 Horas exactas
+
 const BUILTIN_ODDS_API_KEYS = [
   '0adaba07b5df146cce420b554c5a56f4',
   'f4be189edb927a1635acef59d40362c7',
@@ -419,15 +420,7 @@ export function getOddsApiKeys() {
 
   rawList.push(...BUILTIN_ODDS_API_KEYS);
 
-  const uniqueKeys = [...new Set(rawList.map(k => k.trim()).filter(k => k.length > 5))];
-
-  if (typeof window !== 'undefined' && window.localStorage && uniqueKeys.length > 0) {
-    try {
-      localStorage.setItem('fstats_odds_api_key', uniqueKeys.join('\n'));
-    } catch (e) {}
-  }
-
-  return uniqueKeys;
+  return [...new Set(rawList.map(k => k.trim()).filter(k => k.length > 5))];
 }
 
 function getCachedOdds(sportKey) {
@@ -472,7 +465,7 @@ export async function checkOddsApiUsage(providedRawKeys = null) {
   let keys = [];
   if (providedRawKeys) {
     const providedList = providedRawKeys.split(/[\n,;]+/).map(k => k.trim()).filter(k => k.length > 5);
-    keys = [...new Set([...providedList, ...BUILTIN_ODDS_API_KEYS])];
+    keys = [...new Set(providedList)];
   } else {
     keys = getOddsApiKeys();
   }
@@ -963,7 +956,10 @@ async function fetchRealMlbSchedule(dateRange) {
           sport: 'mlb',
           league: 'Major League Baseball (MLB)',
           gameDate: g.gameDate,
-          isCompleted: g.status?.abstractGameState === 'Final' || g.status?.detailedState === 'Final',
+          statusName: g.status?.detailedState || '',
+          isPostponed: /Postponed|Cancelled|Canceled|Suspended/i.test(g.status?.detailedState || ''),
+          isCompleted: !/Postponed|Cancelled|Canceled|Suspended/i.test(g.status?.detailedState || '') &&
+            (g.status?.abstractGameState === 'Final' || g.status?.detailedState === 'Final'),
           homeScore: homeTeam.score !== undefined ? parseInt(homeTeam.score, 10) : null,
           awayScore: awayTeam.score !== undefined ? parseInt(awayTeam.score, 10) : null,
           f5HomeScore,
@@ -1026,8 +1022,8 @@ async function fetchRealMlbSchedule(dateRange) {
                 awayOdds: espnSharp.awayOdds || fairA,
                 homeSpreadPoint: espnSharp.spreadHomeClose ?? 1.5,
                 awaySpreadPoint: espnSharp.spreadAwayClose ?? 1.5,
-                homeSpreadOdds: espnSharp.homeSpreadOdds || "1.68",
-                awaySpreadOdds: espnSharp.awaySpreadOdds || "1.68",
+                homeSpreadOdds: espnSharp.homeSpreadOdds || null,
+                awaySpreadOdds: espnSharp.awaySpreadOdds || null,
                 bookmaker: espnSharp.provider || "DraftKings",
                 hasRealOdds: true
               };
@@ -1096,11 +1092,11 @@ async function fetchRealMlbSchedule(dateRange) {
           const aSpread = spreads.outcomes.find(o => o.name === match.away_team);
           if (hSpread) {
             game.market.homeSpreadPoint = hSpread.point;
-            game.market.homeSpreadOdds = hSpread.price ? hSpread.price.toString() : "1.65";
+            game.market.homeSpreadOdds = hSpread.price ? hSpread.price.toString() : null;
           }
           if (aSpread) {
             game.market.awaySpreadPoint = aSpread.point;
-            game.market.awaySpreadOdds = aSpread.price ? aSpread.price.toString() : "1.65";
+            game.market.awaySpreadOdds = aSpread.price ? aSpread.price.toString() : null;
           }
         }
       }
@@ -1422,14 +1418,31 @@ async function fetchRealSoccerSchedule(dateRange) {
       const homeLeader = comp.leaders?.[0]?.leaders?.[0]?.athlete?.displayName || home.leaders?.[0]?.leaders?.[0]?.athlete?.displayName || "Delantero Principal";
       const awayLeader = comp.leaders?.[1]?.leaders?.[0]?.athlete?.displayName || away.leaders?.[0]?.leaders?.[0]?.athlete?.displayName || "Extremo Titular";
 
+      const statusName = ev.status?.type?.name || '';
+      const wentToExtraTime = /AET|PEN|EXTRA|SHOOTOUT/i.test(statusName);
+      // Mercados 1X2/Totales/BTTS se liquidan a 90': sumar solo los dos primeros tiempos
+      const regulationScore = (comp) => {
+        const ls = Array.isArray(comp?.linescores) ? comp.linescores : [];
+        if (ls.length < 2) return null;
+        return ls.slice(0, 2).reduce((acc, l) => acc + (parseInt(l.value ?? l.displayValue, 10) || 0), 0);
+      };
+      const fullHome = home.score !== undefined ? parseInt(home.score, 10) : null;
+      const fullAway = away.score !== undefined ? parseInt(away.score, 10) : null;
+      const regHome = wentToExtraTime ? regulationScore(home) : fullHome;
+      const regAway = wentToExtraTime ? regulationScore(away) : fullAway;
+
       games.push({
         id: `soccer-${ev.id}`,
         sport: 'futbol',
         league: leagueName,
         gameDate: ev.date,
-        isCompleted: ev.status?.type?.completed === true,
-        homeScore: home.score !== undefined ? parseInt(home.score, 10) : null,
-        awayScore: away.score !== undefined ? parseInt(away.score, 10) : null,
+        statusName,
+        isPostponed: /POSTPONED|CANCELED|CANCELLED|SUSPENDED|ABANDONED/i.test(statusName),
+        wentToExtraTime,
+        // Si hubo prórroga y ESPN no trae el desglose por tiempos, no se califica automáticamente
+        isCompleted: ev.status?.type?.completed === true && regHome !== null && regAway !== null,
+        homeScore: regHome,
+        awayScore: regAway,
         home: {
           name: home.team?.displayName || "Local",
           recentForm: homeForm.split('').join(' '),
@@ -2038,6 +2051,9 @@ export async function fetchNflWeekSchedule(weekNumber = null) {
       id: `nfl-${ev.id}`,
       gameDate: ev.date,
       gameStatus,
+      isPostponed: /POSTPONED|CANCELED|CANCELLED|SUSPENDED/i.test(gameStatus),
+      hasRealSpread: odds?.spread !== undefined,
+      hasRealTotal: odds?.overUnder !== undefined && odds?.overUnder !== null,
       isCompleted,
       homeScore,
       awayScore,
@@ -2326,6 +2342,9 @@ export async function fetchNcaafWeekSchedule(options = {}) {
       awayRank,
       gameDate: ev.date,
       gameStatus,
+      isPostponed: /POSTPONED|CANCELED|CANCELLED|SUSPENDED/i.test(gameStatus),
+      hasRealSpread: odds?.spread !== undefined,
+      hasRealTotal: odds?.overUnder !== undefined && odds?.overUnder !== null,
       isCompleted,
       homeScore,
       awayScore,
@@ -2413,7 +2432,8 @@ export async function fetchNcaafWeekSchedule(options = {}) {
             if (hSpread && hSpread.point !== undefined) {
               game.vegas.spread = parseFloat(hSpread.point);
               game.market.vegasSpread = game.vegas.spread;
-              game.market.homeSpreadOdds = hSpread.price?.toString() || '1.91';
+              game.market.homeSpreadOdds = hSpread.price?.toString() || null;
+              game.hasRealSpread = true;
             }
           }
           if (totalsM && totalsM.outcomes) {
@@ -2421,6 +2441,7 @@ export async function fetchNcaafWeekSchedule(options = {}) {
             if (overOut && overOut.point !== undefined) {
               game.vegas.overUnder = parseFloat(overOut.point);
               game.market.vegasOverUnder = game.vegas.overUnder;
+              game.hasRealTotal = true;
             }
           }
         }

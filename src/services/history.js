@@ -3,13 +3,12 @@
 import defaultLessons from '../data/lessons.json' with { type: 'json' };
 import defaultEloData from '../data/dynamicElo.json' with { type: 'json' };
 import { hydratePlattCoefficients, recalibrateFromAudit } from '../utils/calibration.js';
+import { callGemini } from './geminiClient.js';
 
 const STORAGE_KEY = 'fstats_memory';
 const LESSONS_KEY = 'fstats_team_lessons';
 const DYNAMIC_ELO_KEY = 'fstats_dynamic_elo';
 
-const _k = [65,81,46,65,98,56,82,78,54,73,103,87,102,101,116,101,118,120,45,77,121,115,103,97,53,111,100,100,112,84,56,45,78,53,80,111,108,90,99,83,48,80,79,99,103,100,90,78,110,112,104,121,103];
-const GEMINI_API_KEY = _k.map(c => String.fromCharCode(c + (typeof window !== 'undefined' && window.innerWidth > -1 ? 0 : 1))).join('');
 const MODEL = "gemini-3.6-flash";
 
 export function seedInitialMemory() {
@@ -653,19 +652,13 @@ export function clearAllHistory() {
 }
 
 export async function getGeminiEmbedding(text) {
-  if (!text) return null;
+  if (!text || typeof window === 'undefined') return null;
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${GEMINI_API_KEY}`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "models/text-embedding-004",
-        content: { parts: [{ text }] }
-      })
+    const { ok, data } = await callGemini('text-embedding-004', 'embedContent', {
+      model: "models/text-embedding-004",
+      content: { parts: [{ text }] }
     });
-    if (!res.ok) return null;
-    const data = await res.json();
+    if (!ok) return null;
     return data.embedding?.values || null;
   } catch (e) {
     return null;
@@ -805,18 +798,12 @@ export async function diagnoseFailureWithAI(predictionId, actualResult = '') {
     `(donde X es un número entero entre 4 y 15, que representará el porcentaje de penalización al equipo infractor).`
   ].join("\n");
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.2 }
-    })
+  const { ok, data } = await callGemini(MODEL, 'generateContent', {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0.2 }
   });
 
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message || "Error al conectar con Gemini para el diagnóstico");
+  if (!ok) throw new Error(data.error?.message || data.error || "Error al conectar con Gemini para el diagnóstico");
 
   const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || "Diagnóstico no disponible";
 

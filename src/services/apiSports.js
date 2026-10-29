@@ -3,6 +3,8 @@
 // Provee cuotas de Pinnacle y Bet365, alineaciones confirmadas y estadísticas de jugadores.
 // Cuota: 100 requests / día (reseteo diario a las 00:00 UTC).
 
+import { fetchWithRetry } from './httpClient.js';
+
 const DEFAULT_APISPORTS_KEY = '7184f1016b68c388a5c1e102b0f6eaef';
 const CACHE_TTL_MS = 3 * 60 * 60 * 1000; // 3 Horas de caché (consumo mínimo: ~2 a 4 req/día)
 
@@ -21,10 +23,13 @@ export function getApiSportsKey() {
  */
 export async function getApiSportsStatus() {
   const apiKey = getApiSportsKey();
+  if (!apiKey) {
+    return { success: false, error: 'APISPORTS_KEY no configurada', requestsUsedToday: null, dailyLimit: 100, remainingToday: null };
+  }
   try {
-    const res = await fetch('https://v3.football.api-sports.io/status', {
+    const res = await fetchWithRetry('https://v3.football.api-sports.io/status', {
       headers: { 'x-apisports-key': apiKey }
-    });
+    }, { retries: 1, timeoutMs: 5000 });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     return {
@@ -68,6 +73,7 @@ export async function fetchApiSportsPinnacleOdds(dateStr = null) {
   }
 
   const apiKey = getApiSportsKey();
+  if (!apiKey) return [];
   const headers = { 'x-apisports-key': apiKey };
 
   try {
@@ -75,8 +81,8 @@ export async function fetchApiSportsPinnacleOdds(dateStr = null) {
 
     // Descarga paralela: fixtures del día + cuotas de Pinnacle (bookmaker 4)
     const [fixturesRes, oddsPinnacleRes] = await Promise.all([
-      fetch(`https://v3.football.api-sports.io/fixtures?date=${targetDate}`, { headers }).then(r => (r.ok ? r.json() : { response: [] })),
-      fetch(`https://v3.football.api-sports.io/odds?date=${targetDate}&bookmaker=4`, { headers }).then(r => (r.ok ? r.json() : { response: [] }))
+      fetchWithRetry(`https://v3.football.api-sports.io/fixtures?date=${targetDate}`, { headers }, { retries: 1, timeoutMs: 8000 }).then(r => (r.ok ? r.json() : { response: [] })),
+      fetchWithRetry(`https://v3.football.api-sports.io/odds?date=${targetDate}&bookmaker=4`, { headers }, { retries: 1, timeoutMs: 8000 }).then(r => (r.ok ? r.json() : { response: [] }))
     ]);
 
     const fixtureMap = new Map();

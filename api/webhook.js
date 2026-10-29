@@ -3,10 +3,8 @@ import { runAlertEngine, runDailyTelegramAudit, sendTelegramMessage, answerTeleg
 import { getApiSportsStatus } from '../src/services/apiSports.js';
 import { getOddsApiKeys } from '../src/services/sportsApi.js';
 import { parseParlayInput, auditParlayLegs, formatParlayAuditReport } from '../src/utils/parlayAuditor.js';
-
-// Llave de respaldo Gemini para visión artificial de boletos
-const _GEMINI_KEY = [65,81,46,65,98,56,82,78,54,73,103,87,102,101,116,101,118,120,45,77,121,115,103,97,53,111,100,100,112,84,56,45,78,53,80,111,108,90,99,83,48,80,79,99,103,100,90,78,110,112,104,121,103];
-const DEFAULT_GEMINI_KEY = _GEMINI_KEY.map(c => String.fromCharCode(c)).join('');
+import { isValidTelegramWebhook } from './_lib/security.js';
+import { fetchWithRetry } from '../src/services/httpClient.js';
 
 // Teclado inferior simplificado (persistente en pantalla con 5 botones organizados)
 const KEYBOARD_MENU = {
@@ -39,12 +37,12 @@ const INLINE_SPORT_MENU = {
 export default async function handler(req, res) {
   // Telegram envía las actualizaciones vía método POST
   if (req.method !== 'POST') {
-    return res.status(200).json({
-      status: 'active',
-      bot: '@stat_io_pro_bot',
-      webhook: 'ready',
-      options: ['/vip', '/cheatsheet', '/parlay', '/cuota', '/corte', 'sport_futbol', 'sport_nba', 'sport_nfl', 'sport_mlb', 'sport_all']
-    });
+    return res.status(200).json({ status: 'active' });
+  }
+
+  // Rechaza updates falsificados: solo Telegram conoce el secret_token registrado con setWebhook
+  if (!isValidTelegramWebhook(req)) {
+    return res.status(401).send('Unauthorized');
   }
 
   try {
@@ -61,12 +59,10 @@ export default async function handler(req, res) {
     const rawText = isCallback ? (callback.data || '') : (message?.text || '').trim();
     const command = rawText.toLowerCase();
 
-    const VIP_CHAT_ID = process.env.TELEGRAM_VIP_CHAT_ID
-      ? Number(process.env.TELEGRAM_VIP_CHAT_ID)
-      : 1258878024;
+    const VIP_CHAT_ID = Number(process.env.TELEGRAM_VIP_CHAT_ID);
 
-    // 🔒 Candado de seguridad exclusivo: solo responde a Tavo Rodarte
-    if (senderId !== VIP_CHAT_ID) {
+    // 🔒 Candado de seguridad exclusivo: solo responde al administrador VIP configurado
+    if (!VIP_CHAT_ID || senderId !== VIP_CHAT_ID) {
       console.warn(`[Webhook] Intento no autorizado desde ID ${senderId} (${(isCallback ? callback.from : message?.from)?.first_name || 'Desconocido'})`);
       if (isCallback) await answerTelegramCallback(callback.id, 'Acceso restringido');
       await sendTelegramMessage(
@@ -88,24 +84,24 @@ export default async function handler(req, res) {
     if (message?.photo && message.photo.length > 0) {
       const photo = message.photo[message.photo.length - 1]; // Mayor resolución
       const botToken = process.env.TELEGRAM_BOT_TOKEN;
-      const geminiKey = process.env.GEMINI_API_KEY || DEFAULT_GEMINI_KEY;
+      const geminiKey = process.env.GEMINI_API_KEY;
 
       if (geminiKey && botToken) {
         await sendTelegramMessage('🔍 *Analizando imagen de tu boleto con Visión Artificial (Gemini 3.5)...*', false, chatId, KEYBOARD_MENU);
         try {
           // Obtener ruta del archivo desde Telegram
-          const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${photo.file_id}`);
+          const fileRes = await fetchWithRetry(`https://api.telegram.org/bot${botToken}/getFile?file_id=${encodeURIComponent(photo.file_id)}`, {}, { retries: 1, timeoutMs: 5000 });
           const fileData = await fileRes.json();
           if (fileData.ok && fileData.result?.file_path) {
             const fileUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-            const imgBuffer = await (await fetch(fileUrl)).arrayBuffer();
+            const imgBuffer = await (await fetchWithRetry(fileUrl, {}, { retries: 1, timeoutMs: 8000 })).arrayBuffer();
             const base64Img = Buffer.from(imgBuffer).toString('base64');
 
-            // Llamada a Gemini 3.5 Flash Vision
-            const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${geminiKey}`;
-            const geminiRes = await fetch(geminiUrl, {
+            // Llamada a Gemini 3.5 Flash Vision (llave en header, nunca en la URL/logs)
+            const geminiUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent';
+            const geminiRes = await fetchWithRetry(geminiUrl, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiKey },
               body: JSON.stringify({
                 contents: [{
                   parts: [
@@ -114,7 +110,7 @@ export default async function handler(req, res) {
                   ]
                 }]
               })
-            });
+            }, { retries: 1, timeoutMs: 25000 });
             const geminiData = await geminiRes.json();
             const extractedText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '';
             if (extractedText) {

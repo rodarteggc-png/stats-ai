@@ -29,9 +29,7 @@ import {
   clearAllHistory
 } from "./services/history";
 import { runBatchMonteCarlo } from "./services/simulationBridge";
-// Obfuscated to bypass GitHub Secret Scanning and Rollup constant evaluation
-const _k = [65,81,46,65,98,56,82,78,54,73,103,87,102,101,116,101,118,120,45,77,121,115,103,97,53,111,100,100,112,84,56,45,78,53,80,111,108,90,99,83,48,80,79,99,103,100,90,78,110,112,104,121,103];
-const GEMINI_API_KEY = _k.map(c => String.fromCharCode(c + (typeof window !== 'undefined' && window.innerWidth > -1 ? 0 : 1))).join('');
+import { callGemini } from "./services/geminiClient";
 const MODEL = "gemini-3.6-flash"; 
 
 function buildSystemPrompt() {
@@ -1839,20 +1837,14 @@ export default function App() {
       llmPrompt += `\n${historicalContext}\n\nRedacta el Análisis Profundo del Pick oficial en 3 bloques siguiendo las instrucciones.`;
 
       setStep("🤖 Generando Radiografía Cuantitativa & Análisis Profundo con Gemini...");
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-      const llmRes = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: buildSystemPrompt() }] },
-          contents: [{ role: "user", parts: [{ text: llmPrompt }] }],
-          generationConfig: { temperature: 0.4 }
-        })
+      const { ok: llmOk, data: llmData } = await callGemini(MODEL, "generateContent", {
+        systemInstruction: { parts: [{ text: buildSystemPrompt() }] },
+        contents: [{ role: "user", parts: [{ text: llmPrompt }] }],
+        generationConfig: { temperature: 0.4 }
       });
 
-      const llmData = await llmRes.json();
-      if (!llmRes.ok) throw new Error(llmData.error?.message || "Error en Gemini API");
-      const llmText = llmData.candidates[0].content.parts[0].text;
+      if (!llmOk) throw new Error(llmData.error?.message || llmData.error || "Error en Gemini API");
+      const llmText = llmData.candidates?.[0]?.content?.parts?.[0]?.text || "";
       
       const tweets = llmText.split('---').map(t => t.trim()).filter(t => t.length > 0);
 

@@ -9,7 +9,7 @@ export default async function handler(req, res) {
         const keys = getOddsApiKeys();
         const results = await Promise.all(
           keys.map(async (key, idx) => {
-            const masked = key.slice(0, 6) + '...' + key.slice(-4);
+            const masked = `****${key.slice(-4)}`;
             try {
               const response = await fetch(`https://api.the-odds-api.com/v4/sports/?apiKey=${key}`);
               const remaining = response.headers.get('x-requests-remaining');
@@ -61,8 +61,6 @@ export default async function handler(req, res) {
       timestamp: new Date().toISOString(),
       apiSports: {
         provider: 'API-SPORTS (api-sports.io)',
-        account: apiSportsStatus.account,
-        email: apiSportsStatus.email,
         plan: apiSportsStatus.plan,
         active: apiSportsStatus.active,
         dailyLimit: apiSportsStatus.dailyLimit,

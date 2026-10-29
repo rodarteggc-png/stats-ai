@@ -82,7 +82,8 @@ export function recalibrateFromAudit(auditedPicks, sport) {
 
     for (let i = 0; i < valid.length; i++) {
       const p = valid[i];
-      const rawProbVal = parseFloat(p.prob) || (p.probs?.homeWin ? parseFloat(p.probs.homeWin) : 60);
+      // Platt se ajusta sobre la salida CRUDA del modelo; usar la ya calibrada compone el sesgo en cada ciclo
+      const rawProbVal = parseFloat(p.rawProb) || parseFloat(p.prob) || (p.probs?.homeWin ? parseFloat(p.probs.homeWin) : 60);
       const rawP = Math.max(0.01, Math.min(0.99, rawProbVal / 100));
       const logit = Math.log(rawP / (1 - rawP));
 

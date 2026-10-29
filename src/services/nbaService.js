@@ -35,52 +35,61 @@ export async function fetchNbaSchedule(range = 'hoy') {
       const marketSpread = oddsObj.spread !== undefined ? parseFloat(oddsObj.spread) : null;
       const marketTotal = oddsObj.overUnder !== undefined ? parseFloat(oddsObj.overUnder) : null;
 
-      const homeMl = oddsObj.homeTeamOdds?.moneyLine || 1.90;
-      const awayMl = oddsObj.awayTeamOdds?.moneyLine || 1.90;
+      const homeMl = oddsObj.homeTeamOdds?.moneyLine ?? null;
+      const awayMl = oddsObj.awayTeamOdds?.moneyLine ?? null;
 
-      // Convertir momio americano a decimal si viene negativo/positivo
+      // Convertir momio americano a decimal; null si el libro no publicó precio
       function toDecimalOdds(am) {
         const n = parseFloat(am);
-        if (isNaN(n) || n === 0) return 1.90;
+        if (isNaN(n) || n === 0) return null;
         if (n > 0) return Number((1 + (n / 100)).toFixed(2));
         return Number((1 + (100 / Math.abs(n))).toFixed(2));
       }
+      const homeMlDec = toDecimalOdds(homeMl);
+      const awayMlDec = toDecimalOdds(awayMl);
+      const statusName = evt.status?.type?.name || '';
+      const homeScore = homeComp.score !== undefined && homeComp.score !== '' ? parseInt(homeComp.score, 10) : null;
+      const awayScore = awayComp.score !== undefined && awayComp.score !== '' ? parseInt(awayComp.score, 10) : null;
 
       const matchObj = {
         id: `nba-${evt.id}`,
         sport: 'Baloncesto',
         league: 'NBA',
         game: `${homeName} vs ${awayName}`,
-        home: { name: homeName, score: homeComp.score ? parseInt(homeComp.score, 10) : null },
-        away: { name: awayName, score: awayComp.score ? parseInt(awayComp.score, 10) : null },
+        home: { name: homeName, score: homeScore },
+        away: { name: awayName, score: awayScore },
+        homeScore,
+        awayScore,
         date: evt.date,
         gameDate: evt.date,
         isCompleted: evt.status?.type?.completed || false,
+        statusName,
+        isPostponed: /POSTPONED|CANCELED|CANCELLED|SUSPENDED/i.test(statusName),
         spread: marketSpread,
         total: marketTotal,
         vegas: {
           spread: marketSpread,
           overUnder: marketTotal,
-          spreadHomeOdds: '1.91',
-          spreadAwayOdds: '1.91',
-          overOdds: '1.91',
-          underOdds: '1.91'
+          spreadHomeOdds: null,
+          spreadAwayOdds: null,
+          overOdds: null,
+          underOdds: null
         },
         market: {
-          homeOdds: toDecimalOdds(homeMl).toString(),
-          awayOdds: toDecimalOdds(awayMl).toString(),
+          homeOdds: homeMlDec ? homeMlDec.toString() : null,
+          awayOdds: awayMlDec ? awayMlDec.toString() : null,
           spread: marketSpread,
           overUnder: marketTotal,
-          hasRealOdds: true,
+          hasRealOdds: Boolean(homeMlDec && awayMlDec),
           details: `NBA Spread ${marketSpread !== null ? (marketSpread > 0 ? `+${marketSpread}` : marketSpread) : '0'} | Total ${marketTotal || 224.5}`
         },
         odds: {
           spread: marketSpread,
           overUnder: marketTotal,
-          homeMl: toDecimalOdds(homeMl),
-          awayMl: toDecimalOdds(awayMl),
-          spreadOdds: 1.91,
-          totalOdds: 1.91
+          homeMl: homeMlDec,
+          awayMl: awayMlDec,
+          spreadOdds: null,
+          totalOdds: null
         }
       };
 
