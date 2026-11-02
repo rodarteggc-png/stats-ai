@@ -2,7 +2,7 @@
 // ADAPTADOR CUANTITATIVO DE CUOTAS SHARP EN TIEMPO REAL (THE ODDS API / PINNACLE & BET365)
 // Gestiona el pool de llaves gratuitas con rotación automática, caché de 3 horas y detección de RLM institucional.
 
-import { getOddsApiKeys } from './sportsApi.js';
+import { getOddsApiKeys, inMemoryExhaustedKeys } from './sportsApi.js';
 import { fetchApiSportsPinnacleOdds } from './apiSports.js';
 import { fetchWithRetry } from './httpClient.js';
 
@@ -47,11 +47,13 @@ export async function fetchPinnacleOdds(sport = 'nfl') {
   if (keys && keys.length > 0) {
     for (let i = 0; i < keys.length; i++) {
       const apiKey = keys[i];
+      if (inMemoryExhaustedKeys.has(apiKey)) continue;
       try {
         const url = `https://api.the-odds-api.com/v4/sports/${sportKey}/odds/?apiKey=${apiKey}&regions=eu,us&markets=h2h,spreads,totals&bookmakers=pinnacle,bet365`;
         const res = await fetchWithRetry(url, {}, { retries: 1, timeoutMs: 6000 });
 
         if (res.status === 429 || res.status === 401) {
+          inMemoryExhaustedKeys.add(apiKey);
           continue;
         }
 

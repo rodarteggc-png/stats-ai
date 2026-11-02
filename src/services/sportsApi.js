@@ -397,11 +397,13 @@ export function extractEspnSharpMarket(oddsObj, homeName = "Local", awayName = "
 const ODDS_CACHE_TTL_MS = 3 * 60 * 60 * 1000; // 3 Horas exactas
 
 const BUILTIN_ODDS_API_KEYS = [
-  '0adaba07b5df146cce420b554c5a56f4',
   'f4be189edb927a1635acef59d40362c7',
   '808792fe357f689d26d811f76898eb30',
-  '2cf22cbdc223414dccab14aac31334ba'
+  '2cf22cbdc223414dccab14aac31334ba',
+  '0adaba07b5df146cce420b554c5a56f4'
 ];
+
+export const inMemoryExhaustedKeys = new Set();
 
 export function getOddsApiKeys() {
   const rawList = [];
@@ -535,6 +537,7 @@ async function fetchTheOdds(sportKey) {
   // 2. PROBAR CADA LLAVE DEL POOL CON FAST RETRY (Intento 1: 1.5s -> Intento 2: 2.0s)
   for (let i = 0; i < keys.length; i++) {
     const apiKey = keys[i];
+    if (inMemoryExhaustedKeys.has(apiKey)) continue;
     const timeouts = [1500, 2000]; // Fast Retry: 1.5s primer intento, 2.0s segundo intento
     let data = null;
 
@@ -549,6 +552,7 @@ async function fetchTheOdds(sportKey) {
         
         // Si la llave está agotada (429) o inválida (401), saltar de inmediato a la siguiente llave
         if (res.status === 429 || res.status === 401) {
+          inMemoryExhaustedKeys.add(apiKey);
           console.warn(`Llave ${i + 1} agotada o inválida (${res.status}). Probando siguiente llave del pool...`);
           break; // Salir de reintentos y pasar a la siguiente llave
         }

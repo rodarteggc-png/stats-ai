@@ -65,7 +65,7 @@ export async function fetchWithRetry(url, options = {}, { retries = 2, timeoutMs
           await sleep(backoff);
           continue;
         }
-        recordFailure(host);
+        if (res.status >= 500) recordFailure(host);
         return res;
       }
 
