@@ -1833,7 +1833,7 @@ export default function App() {
         `;
       }
 
-      const historicalContext = getContextForPrompt(matchData.home.name, matchData.away.name);
+      const historicalContext = getContextForPrompt(matchData.home.name, matchData.away.name, learned);
       llmPrompt += `\n${historicalContext}\n\nRedacta el Análisis Profundo del Pick oficial en 3 bloques siguiendo las instrucciones.`;
 
       setStep("🤖 Generando Radiografía Cuantitativa & Análisis Profundo con Gemini...");

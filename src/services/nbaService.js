@@ -18,7 +18,8 @@ export async function fetchNbaSchedule(range = 'hoy') {
   }
 
   try {
-    const url = 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard';
+    const url = new URL('https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard');
+    if (/^\d{8}(?:-\d{8})?$/.test(range)) url.searchParams.set('dates', range);
     const res = await fetch(url, { headers: { 'User-Agent': 'StatsAIPro/1.0' } });
     if (!res.ok) throw new Error(`ESPN NBA HTTP ${res.status}`);
     const json = await res.json();

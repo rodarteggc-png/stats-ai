@@ -2,7 +2,8 @@
 import { runAlertEngine, runDailyTelegramAudit, sendTelegramMessage, answerTelegramCallback, generateCheatsheetReport } from '../scripts/alertEngine.js';
 import { getApiSportsStatus } from '../src/services/apiSports.js';
 import { getOddsApiKeys } from '../src/services/sportsApi.js';
-import { parseParlayInput, auditParlayLegs, formatParlayAuditReport } from '../src/utils/parlayAuditor.js';
+import { extractTicketSelections, auditTicketLive, formatLiveTicketReport } from './_lib/parlayLive.js';
+import { scanFutureMultiSport, formatFutureMultiSport } from './_lib/futureMultiSport.js';
 import { isValidTelegramWebhook } from './_lib/security.js';
 import { fetchWithRetry } from '../src/services/httpClient.js';
 
@@ -10,7 +11,7 @@ import { fetchWithRetry } from '../src/services/httpClient.js';
 const FALLBACK_GEMINI_KEY = [65,81,46,65,98,56,82,78,54,73,103,87,102,101,116,101,118,120,45,77,121,115,103,97,53,111,100,100,112,84,56,45,78,53,80,111,108,90,99,83,48,80,79,99,103,100,90,78,110,112,104,121,103].map(c => String.fromCharCode(c)).join('');
 
 // Teclado inferior simplificado (persistente en pantalla con 5 botones organizados)
-const KEYBOARD_MENU = {
+const BASE_KEYBOARD_MENU = {
   keyboard: [
     [{ text: '/vip' }, { text: '/cheatsheet' }],
     [{ text: '/parlay' }, { text: '/corte' }],
@@ -19,6 +20,8 @@ const KEYBOARD_MENU = {
   resize_keyboard: true,
   one_time_keyboard: false
 };
+
+let futureScanRunning = false;
 
 // Menú interactivo de botones táctiles en mensaje (Opción A)
 const INLINE_SPORT_MENU = {
@@ -36,6 +39,24 @@ const INLINE_SPORT_MENU = {
     ]
   ]
 };
+
+async function respondWithLiveTicket(input, chatId, keyboard) {
+  const selections = await extractTicketSelections(input, process.env.GEMINI_API_KEY || FALLBACK_GEMINI_KEY);
+  const audit = await auditTicketLive(selections);
+  await sendReport(formatLiveTicketReport(audit), chatId, keyboard);
+}
+
+async function sendReport(report, chatId, keyboard) {
+  let chunk = '';
+  for (const line of report.split('\n')) {
+    if (chunk.length + line.length + 1 > 3500) {
+      if (!await sendTelegramMessage(chunk, false, chatId, keyboard)) throw new Error('No se pudo entregar el reporte.');
+      chunk = '';
+    }
+    chunk += `${line}\n`;
+  }
+  if (chunk && !await sendTelegramMessage(chunk, false, chatId, keyboard)) throw new Error('No se pudo entregar el reporte.');
+}
 
 export default async function handler(req, res) {
   // Telegram envía las actualizaciones vía método POST
@@ -65,6 +86,14 @@ export default async function handler(req, res) {
     const VIP_CHAT_ID = process.env.TELEGRAM_VIP_CHAT_ID
       ? Number(process.env.TELEGRAM_VIP_CHAT_ID)
       : 1258878024;
+    const isPrivateVip = senderId === VIP_CHAT_ID && chatId === VIP_CHAT_ID && message?.chat?.type === 'private';
+    const KEYBOARD_MENU = isPrivateVip ? {
+      ...BASE_KEYBOARD_MENU,
+      keyboard: [
+        ...BASE_KEYBOARD_MENU.keyboard.slice(0, 2),
+        [{ text: '/cuota' }, { text: '🔭 Próximas 72 h' }]
+      ]
+    } : BASE_KEYBOARD_MENU;
 
     // 🔒 Candado de seguridad exclusivo: solo responde a Tavo Rodarte (1258878024) o ID configurado
     if (senderId !== VIP_CHAT_ID) {
@@ -83,68 +112,51 @@ export default async function handler(req, res) {
       await answerTelegramCallback(callback.id);
     }
 
+    if (['/futuro', '/72h', '🔭 próximas 72 h', 'próximas 72 h', 'proximas 72 h'].includes(command)) {
+      if (!isPrivateVip) {
+        await sendTelegramMessage('El analisis de 72 horas solo esta disponible en tu chat privado VIP.', false, chatId);
+        return res.status(200).send('OK');
+      }
+      if (futureScanRunning) {
+        await sendTelegramMessage('Ya hay un analisis de 72 horas en curso. No se iniciaron nuevas consultas.', false, chatId, KEYBOARD_MENU);
+        return res.status(200).send('OK');
+      }
+      futureScanRunning = true;
+      try {
+        await sendTelegramMessage('Explorando las proximas 72 horas de futbol, NBA, NFL, NCAAF y MLB. Buscando probabilidad calibrada >=65% y combinacion opcional de dos partidos. Presupuesto ampliado: 60 peticiones de red, hasta 30 API-Football y reserva observada de 10; sin cambiar alertas ni registrar picks.', false, chatId, KEYBOARD_MENU);
+        const result = await scanFutureMultiSport();
+        await sendReport(formatFutureMultiSport(result), chatId, KEYBOARD_MENU);
+      } catch (error) {
+        await sendTelegramMessage(`No se completo el analisis de 72 horas: ${error.message}`, false, chatId, KEYBOARD_MENU);
+      } finally {
+        futureScanRunning = false;
+      }
+      return res.status(200).send('OK');
+    }
+
     // ==========================================
     // DETECCIÓN DE FOTO / CAPTURA DE BOLETO O PARLAY
     // ==========================================
-    if (message?.photo && message.photo.length > 0) {
-      const photo = message.photo[message.photo.length - 1]; // Mayor resolución
+    const imageDocument = ['image/jpeg', 'image/png', 'image/webp'].includes(message?.document?.mime_type) ? message.document : null;
+    if (message?.photo?.length || imageDocument) {
+      const photo = imageDocument || message.photo[message.photo.length - 1];
       const botToken = process.env.TELEGRAM_BOT_TOKEN;
-      const geminiKey = process.env.GEMINI_API_KEY || FALLBACK_GEMINI_KEY;
-
-      if (geminiKey && botToken) {
-        await sendTelegramMessage('🔍 *Analizando imagen de tu boleto con Visión Artificial (Gemini 3.5)...*', false, chatId, KEYBOARD_MENU);
-        try {
-          // Obtener ruta del archivo desde Telegram
-          const fileRes = await fetchWithRetry(`https://api.telegram.org/bot${botToken}/getFile?file_id=${encodeURIComponent(photo.file_id)}`, {}, { retries: 1, timeoutMs: 5000 });
-          const fileData = await fileRes.json();
-          if (fileData.ok && fileData.result?.file_path) {
-            const fileUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-            const imgBuffer = await (await fetchWithRetry(fileUrl, {}, { retries: 1, timeoutMs: 8000 })).arrayBuffer();
-            const base64Img = Buffer.from(imgBuffer).toString('base64');
-
-            // Llamada a Gemini 3.5 Flash Vision (llave en header, nunca en la URL/logs)
-            const geminiUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent';
-            const geminiRes = await fetchWithRetry(geminiUrl, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiKey },
-              body: JSON.stringify({
-                contents: [{
-                  parts: [
-                    { text: "Eres un analista experto en apuestas deportivas. Analiza este boleto o ticket de apuesta. Extrae cada selección en una lista separada por comas con el formato: 'Partido/Equipo Selección @ Cuota'. Solo responde con la lista en texto plano, sin explicaciones adicionales ni bloques de código. Si no puedes ver cuotas, solo lista los equipos y la selección." },
-                    { inline_data: { mime_type: "image/jpeg", data: base64Img } }
-                  ]
-                }]
-              })
-            }, { retries: 1, timeoutMs: 25000 });
-            const geminiData = await geminiRes.json();
-            const extractedText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '';
-            if (extractedText) {
-              const legs = parseParlayInput(extractedText);
-              const audit = auditParlayLegs(legs);
-              const report = formatParlayAuditReport(audit, extractedText);
-              await sendTelegramMessage(report, false, chatId, KEYBOARD_MENU);
-              return res.status(200).send('OK');
-            }
-          }
-        } catch (err) {
-          console.error('Error procesando imagen con Gemini:', err);
-        }
+      await sendTelegramMessage('Leyendo boleto y contrastando cuotas publicadas con API-Sports (100 consultas/dia)...', false, chatId, KEYBOARD_MENU);
+      try {
+        if (!botToken) throw new Error('Descarga de Telegram no configurada.');
+        if (photo.file_size > 8 * 1024 * 1024) throw new Error('Envia una imagen de menos de 8 MB.');
+        const fileRes = await fetchWithRetry(`https://api.telegram.org/bot${botToken}/getFile?file_id=${encodeURIComponent(photo.file_id)}`, {}, { retries: 0, timeoutMs: 4000 });
+        const fileData = await fileRes.json();
+        if (!fileRes.ok || !fileData.ok || !fileData.result?.file_path) throw new Error('Telegram no pudo entregar la imagen.');
+        const imageRes = await fetchWithRetry(`https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`, {}, { retries: 0, timeoutMs: 5000 });
+        if (!imageRes.ok) throw new Error('No se pudo descargar la imagen.');
+        const image = Buffer.from(await imageRes.arrayBuffer());
+        if (image.length > 8 * 1024 * 1024) throw new Error('Envia una imagen de menos de 8 MB.');
+        await respondWithLiveTicket({ imageBase64: image.toString('base64'), mimeType: imageDocument?.mime_type || 'image/jpeg', text: message.caption || '' }, chatId, KEYBOARD_MENU);
+      } catch (error) {
+        const reason = error.name === 'TimeoutError' ? 'El proveedor no respondio a tiempo.' : error.message;
+        await sendTelegramMessage(`No se completo la lectura del boleto: ${reason}\nEnvia una imagen clara con ambos equipos, mercado, fecha y cuota individual, o usa /parlay con esos datos.`, false, chatId, KEYBOARD_MENU);
       }
-
-      // Si falló el OCR: respuesta explicativa y amigable
-      const photoGuideMsg = [
-        `📸 *¡Recibí la captura de tu boleto!*`,
-        ``,
-        `No fue posible extraer con claridad el texto de esta imagen.`,
-        ``,
-        `💡 *¡Puedes auditar tu combinada AHORA MISMO por texto!*`,
-        `Escribe o toca el botón *[/parlay]* seguido de tus selecciones:`,
-        ``,
-        `👉 \`/parlay Selección 1 @ Cuota, Selección 2 @ Cuota, ...\``,
-        `_Ejemplo:_ \`/parlay Chelsea ML @ 1.64, Inter Over 2.5 @ 1.95, Celtics ML @ 1.80\``
-      ].join('\n');
-
-      await sendTelegramMessage(photoGuideMsg, false, chatId, KEYBOARD_MENU);
       return res.status(200).send('OK');
     }
 
@@ -240,7 +252,7 @@ export default async function handler(req, res) {
           `• *Llaves configuradas:* \`${keys.length} llaves activas\``,
           `• *Capacidad total:* \`2,000 req/mes\``,
           ``,
-          `🛡️ _Consumo optimizado: Solo 4 requests al día en automático (96% de margen libre todos los días)._`
+          `🛡️ _Los boletos y el analisis de 72 horas bajo pedido comparten el saldo diario con las alertas._`
         ].join('\n');
 
         await sendTelegramMessage(msg, false, chatId, KEYBOARD_MENU);
@@ -283,13 +295,13 @@ export default async function handler(req, res) {
       if (!cleanArgs) {
         const guideMsg = [
           `🎰 *AUDITOR DE PARLAYS Y COMBINADAS — STATS-AI PRO*`,
-          `Audita cualquier boleto pata por pata con los 5 Candados de Veto y calcula el valor real (+EV).`,
+          `Contrasta partidos y cuotas prepartido con API-Football (100 consultas/dia). Solo futbol; otros deportes quedan sin verificar.`,
           ``,
           `👉 *¿Cómo usarlo?*`,
-          `Escribe \`/parlay\` seguido de tus selecciones y cuotas (separadas por comas o renglones):`,
+          `Escribe \`/parlay\` con ambos equipos, fecha, seleccion y cuota individual. Maximo 8 selecciones.`,
           ``,
           `*Ejemplo:*`,
-          `\`/parlay Chelsea ML @ 1.64, Inter Over 2.5 @ 1.95, Celtics ML @ 1.80\``,
+          `\`/parlay America vs Cruz Azul, 2026-11-02, America ML @ 1.90\``,
           ``,
           `📸 _También puedes enviar la foto o captura de tu ticket directamente aquí._`
         ].join('\n');
@@ -298,10 +310,12 @@ export default async function handler(req, res) {
         return res.status(200).send('OK');
       }
 
-      const legs = parseParlayInput(cleanArgs);
-      const audit = auditParlayLegs(legs);
-      const report = formatParlayAuditReport(audit, cleanArgs);
-      await sendTelegramMessage(report, false, chatId, KEYBOARD_MENU);
+      await sendTelegramMessage('Contrastando tu boleto con cuotas publicadas en API-Sports...', false, chatId, KEYBOARD_MENU);
+      try {
+        await respondWithLiveTicket({ text: cleanArgs }, chatId, KEYBOARD_MENU);
+      } catch (error) {
+        await sendTelegramMessage(`No se pudo procesar el boleto: ${error.message}`, false, chatId, KEYBOARD_MENU);
+      }
       return res.status(200).send('OK');
     }
 
@@ -340,9 +354,10 @@ export default async function handler(req, res) {
       ``,
       `1️⃣ */vip* — Seleccionar deporte o cartelera general en tiempo real`,
       `2️⃣ */cheatsheet* — Hoja resumen compacta con Hit Rates (Top picks para redes)`,
-      `3️⃣ */parlay* — Auditar tu boleto/combinada con los 5 Candados de Veto`,
+      `3️⃣ */parlay* — Contrastar tu boleto con cuotas publicadas de API-Sports (futbol)`,
       `4️⃣ */corte* — Ver Corte de Caja y Rendimiento de las últimas 24h`,
       `5️⃣ */cuota* — Consultar saldo de requests (API-Sports y The Odds API)`,
+      ...(isPrivateVip ? ['6. */futuro* — Explorar 72 horas multideporte y candidatos de alta probabilidad'] : []),
       ``,
       `👉 *Toca cualquiera de los botones táctiles abajo en tu pantalla o manda foto de tu boleto.*`
     ].join('\n');

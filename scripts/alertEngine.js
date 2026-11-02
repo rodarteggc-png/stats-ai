@@ -267,8 +267,8 @@ export function updatePickLedgerResult(entry) {
             status: 'CLOSED',
             result: cleanResult,
             score: (entry.homeScore !== undefined && entry.awayScore !== undefined) ? `${entry.homeScore}-${entry.awayScore}` : (entry.scoreDisplay || item.score || ''),
-            closingOdds: entry.closingOdds ? parseFloat(entry.closingOdds) : (item.closingOdds || item.placedOdds),
-            clvPct: entry.clvPct !== null && entry.clvPct !== undefined ? parseFloat(entry.clvPct) : (item.clvPct || 0),
+            closingOdds: entry.closingOdds ? parseFloat(entry.closingOdds) : (item.closingOdds ?? null),
+            clvPct: entry.clvPct !== null && entry.clvPct !== undefined ? parseFloat(entry.clvPct) : (item.clvPct ?? null),
             pnlUnits: entry.netUnits !== undefined ? Number(entry.netUnits) : (item.pnlUnits || 0),
             closedAt: new Date().toISOString()
           });
@@ -2637,17 +2637,17 @@ export async function runDailyTelegramAudit(options = {}) {
           }
         }
 
-        const placedOddsVal = parseFloat(entry.odds || entry.placedOdds || 1.90);
+        const placedOddsVal = parseFloat(entry.odds || entry.placedOdds);
         let finalClosing = clvData?.closingOdds || (entry.closingOdds ? parseFloat(entry.closingOdds) : null);
         let finalClosingNoVig = clvData?.closingOddsNoVig || (entry.closingOddsNoVig ? parseFloat(entry.closingOddsNoVig) : null);
         let finalClvPct = clvData?.clvPct !== undefined ? clvData.clvPct : (entry.clvPct !== undefined ? entry.clvPct : null);
         let finalBeatClosing = clvData?.beatClosingLine !== undefined ? clvData.beatClosingLine : (entry.beatClosingLine !== undefined ? entry.beatClosingLine : null);
 
-        if (finalClosing && (!finalClvPct || finalBeatClosing === null)) {
+        if (finalClosing && placedOddsVal > 1 && (finalClvPct === null || finalClvPct === undefined || finalBeatClosing === null)) {
           const vigFactor = 1.025;
           finalClosingNoVig = Number((finalClosing / vigFactor).toFixed(2));
           finalClvPct = Number((((placedOddsVal / finalClosing) - 1) * 100).toFixed(1));
-          finalBeatClosing = finalClvPct > 0 || placedOddsVal > finalClosingNoVig;
+          finalBeatClosing = finalClvPct > 0;
         }
 
         const updatedEntry = {

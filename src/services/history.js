@@ -1513,7 +1513,7 @@ export function getStats(sportFilter = null) {
   };
 }
 
-export function getContextForPrompt(homeTeam, awayTeam) {
+export function getContextForPrompt(homeTeam, awayTeam, learnedAdjustments = {}) {
   const history = getHistory();
   const teamHistory = history.filter(item => 
     (item.match?.home?.name || '').includes(homeTeam) || (item.match?.away?.name || '').includes(homeTeam) ||
@@ -1524,7 +1524,7 @@ export function getContextForPrompt(homeTeam, awayTeam) {
   const won = resolved.filter(item => item.status === 'won').length;
   const total = resolved.length;
 
-  const { lessons } = getLearnedAdjustmentsForMatch(homeTeam, awayTeam);
+  const { lessons = [] } = learnedAdjustments;
 
   let context = `Contexto Histórico del Modelo: Se han analizado ${total} partidos previos con estos equipos, acertando ${won} de ellos (${total === 0 ? 'Sin registros' : ((won/total)*100).toFixed(0) + '% efectividad'}).`;
 

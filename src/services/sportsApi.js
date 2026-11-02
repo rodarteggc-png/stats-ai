@@ -612,20 +612,23 @@ export async function fetchClosingOddsForPick(pick) {
   };
 
   const rawSport = (pick.sport || 'futbol').toLowerCase();
-  let sportApiSport = 'soccer_epl';
+  let sportApiSport = null;
   if (rawSport.includes('mlb') || rawSport.includes('beisbol')) sportApiSport = 'baseball_mlb';
   else if (rawSport.includes('ncaaf') || rawSport.includes('colegial')) sportApiSport = 'americanfootball_ncaaf';
   else if (rawSport.includes('nfl')) sportApiSport = 'americanfootball_nfl';
+  else if (rawSport.includes('nba') || rawSport.includes('baloncesto')) sportApiSport = 'basketball_nba';
   else {
     const l = (pick.league || '').toLowerCase();
     if (l.includes('champions')) sportApiSport = 'soccer_uefa_champs_league';
-    else if (l.includes('la liga') || l.includes('esp')) sportApiSport = 'soccer_spain_la_liga';
-    else if (l.includes('serie a') || l.includes('ita')) sportApiSport = 'soccer_italy_serie_a';
-    else if (l.includes('bundesliga') || l.includes('ger')) sportApiSport = 'soccer_germany_bundesliga';
-    else if (l.includes('ligue 1') || l.includes('fra')) sportApiSport = 'soccer_france_ligue_one';
-    else if (l.includes('mex') || l.includes('liga mx')) sportApiSport = 'soccer_mexico_ligamx';
-    else sportApiSport = 'soccer_epl';
+    else if (l.includes('premier')) sportApiSport = 'soccer_epl';
+    else if (l.includes('laliga') || l.includes('la liga')) sportApiSport = 'soccer_spain_la_liga';
+    else if (l.includes('serie a')) sportApiSport = 'soccer_italy_serie_a';
+    else if (l.includes('bundesliga')) sportApiSport = 'soccer_germany_bundesliga';
+    else if (l.includes('ligue 1')) sportApiSport = 'soccer_france_ligue_one';
+    else if (l.includes('liga mx')) sportApiSport = 'soccer_mexico_ligamx';
   }
+  // Liga sin mapeo exacto: sin cierre verificable en lugar de consultar otra competición.
+  if (!sportApiSport) return null;
 
   // 1. Obtener la data de cuotas más reciente disponible
   const oddsData = await fetchTheOdds(sportApiSport);
@@ -642,66 +645,58 @@ export async function fetchClosingOddsForPick(pick) {
   });
 
   if (!matchedEvent || !matchedEvent.bookmakers) return null;
+  // Tras el inicio el feed solo trae precios en vivo, que no son la cuota de cierre.
+  if (!(Date.parse(matchedEvent.commence_time) > Date.now())) return null;
 
-  // Prioridad 1: Pinnacle, Prioridad 2: Bet365 / Bookmaker más líquido
   const pinny = matchedEvent.bookmakers.find(b => b.key === 'pinnacle') ||
-                matchedEvent.bookmakers.find(b => b.key === 'bet365') ||
-                matchedEvent.bookmakers[0];
+                matchedEvent.bookmakers.find(b => b.key === 'bet365');
 
   if (!pinny || !pinny.markets) return null;
 
   const pickStr = (pick.pick || '').toLowerCase();
+  const isHome = Boolean(hName) && (pickStr.includes(hName) || isTeamMatch(pickStr.split(/ [+-]?\d/)[0], hName));
+  const isAway = Boolean(aName) && (pickStr.includes(aName) || isTeamMatch(pickStr.split(/ [+-]?\d/)[0], aName));
   let closingDecimal = null;
 
-  // Analizar mercado del pick: Spreads, Totals o H2H (Moneyline)
-  if (pickStr.includes('over') || pickStr.includes('under') || pickStr.includes('más de') || pickStr.includes('menos de')) {
-    const totalsMarket = pinny.markets.find(m => m.key === 'totals');
-    if (totalsMarket && totalsMarket.outcomes) {
-      const isOver = pickStr.includes('over') || pickStr.includes('más de');
-      const targetOutcome = totalsMarket.outcomes.find(o => o.name?.toLowerCase() === (isOver ? 'over' : 'under'));
-      if (targetOutcome?.price) closingDecimal = parseFloat(targetOutcome.price);
-    }
-  } else if (pickStr.includes('spread') || pickStr.includes('hándicap') || pickStr.includes('handicap') || pickStr.includes('cubre') || pickStr.includes('runline') || pickStr.includes('+1.5') || pickStr.includes('-1.5')) {
-    const spreadsMarket = pinny.markets.find(m => m.key === 'spreads');
-    if (spreadsMarket && spreadsMarket.outcomes) {
-      const isHome = pickStr.includes(hName) || (pick.homeName && pickStr.includes(pick.homeName.toLowerCase()));
-      const targetTeam = isHome ? matchedEvent.home_team : matchedEvent.away_team;
-      const targetOutcome = spreadsMarket.outcomes.find(o => isTeamMatch(o.name, targetTeam));
-      if (targetOutcome?.price) closingDecimal = parseFloat(targetOutcome.price);
-    }
+  if (/doble|o empate| 1x| x2|ambos|btts|tiros|prop|f5|innings|corners|tarjetas/.test(pickStr)) {
+    return null;
   }
 
-  // Fallback o mercado Moneyline (H2H)
-  if (!closingDecimal) {
-    const h2hMarket = pinny.markets.find(m => m.key === 'h2h');
-    if (h2hMarket && h2hMarket.outcomes) {
-      const isHome = pickStr.includes(hName) || (pick.homeName && pickStr.includes(pick.homeName.toLowerCase()));
-      const isAway = pickStr.includes(aName) || (pick.awayName && pickStr.includes(pick.awayName.toLowerCase()));
-      const isDraw = pickStr.includes('empate') || pickStr.includes('draw');
-
-      if (isDraw) {
-        const drawOutcome = h2hMarket.outcomes.find(o => o.name?.toLowerCase() === 'draw');
-        if (drawOutcome?.price) closingDecimal = parseFloat(drawOutcome.price);
-      } else if (isHome) {
-        const homeOutcome = h2hMarket.outcomes.find(o => isTeamMatch(o.name, matchedEvent.home_team));
-        if (homeOutcome?.price) closingDecimal = parseFloat(homeOutcome.price);
-      } else if (isAway) {
-        const awayOutcome = h2hMarket.outcomes.find(o => isTeamMatch(o.name, matchedEvent.away_team));
-        if (awayOutcome?.price) closingDecimal = parseFloat(awayOutcome.price);
-      }
-    }
+  const totalMatch = pickStr.match(/(?:over|under|más de|menos de)\s*(\d+(?:\.\d+)?)/);
+  const spreadMatch = pickStr.match(/\s([+-]\d+(?:\.\d+)?)/);
+  if (totalMatch) {
+    const isOver = /over|más de/.test(pickStr);
+    const line = Number(totalMatch[1]);
+    const target = pinny.markets.find(m => m.key === 'totals')?.outcomes
+      ?.find(o => o.name?.toLowerCase() === (isOver ? 'over' : 'under') && Number(o.point) === line);
+    closingDecimal = target ? parseFloat(target.price) : null;
+  } else if (spreadMatch) {
+    if (isHome === isAway) return null;
+    const line = Number(spreadMatch[1]);
+    const targetTeam = isHome ? matchedEvent.home_team : matchedEvent.away_team;
+    const target = pinny.markets.find(m => m.key === 'spreads')?.outcomes
+      ?.find(o => isTeamMatch(o.name, targetTeam) && Number(o.point) === line);
+    closingDecimal = target ? parseFloat(target.price) : null;
+  } else {
+    const isDraw = /\bempate\b|\bdraw\b/.test(pickStr);
+    if (isDraw === (isHome || isAway) || (isHome && isAway)) return null;
+    const outcomes = pinny.markets.find(m => m.key === 'h2h')?.outcomes || [];
+    const target = isDraw
+      ? outcomes.find(o => o.name?.toLowerCase() === 'draw')
+      : outcomes.find(o => isTeamMatch(o.name, isHome ? matchedEvent.home_team : matchedEvent.away_team));
+    closingDecimal = target ? parseFloat(target.price) : null;
   }
 
   if (!closingDecimal || isNaN(closingDecimal) || closingDecimal <= 1.0) {
     return null;
   }
 
-  // Cálculo del CLV Vig-Free institucional
-  const placed = parseFloat(pick.odds || pick.placedOdds || 1.90);
+  const placed = parseFloat(pick.odds || pick.placedOdds);
+  if (!(placed > 1)) return null;
   const vigFactor = 1.025; // 2.5% de margen institucional de Pinnacle
   const closingOddsNoVig = Number((closingDecimal / vigFactor).toFixed(2));
   const clvPct = Number((((placed / closingDecimal) - 1) * 100).toFixed(1));
-  const beatClosingLine = clvPct > 0 || placed > closingOddsNoVig;
+  const beatClosingLine = clvPct > 0;
 
   return {
     closingOdds: Number(closingDecimal.toFixed(2)),
