@@ -141,7 +141,7 @@ export default async function handler(req, res) {
     if (message?.photo?.length || imageDocument) {
       const photo = imageDocument || message.photo[message.photo.length - 1];
       const botToken = process.env.TELEGRAM_BOT_TOKEN;
-      await sendTelegramMessage('Leyendo boleto y contrastando cuotas publicadas con API-Sports (100 consultas/dia)...', false, chatId, KEYBOARD_MENU);
+      await sendTelegramMessage('Leyendo boleto y contrastando cuotas prepartido (futbol, NBA, NFL, NCAAF, MLB)...', false, chatId, KEYBOARD_MENU);
       try {
         if (!botToken) throw new Error('Descarga de Telegram no configurada.');
         if (photo.file_size > 8 * 1024 * 1024) throw new Error('Envia una imagen de menos de 8 MB.');
@@ -155,7 +155,7 @@ export default async function handler(req, res) {
         await respondWithLiveTicket({ imageBase64: image.toString('base64'), mimeType: imageDocument?.mime_type || 'image/jpeg', text: message.caption || '' }, chatId, KEYBOARD_MENU);
       } catch (error) {
         const reason = error.name === 'TimeoutError' ? 'El proveedor no respondio a tiempo.' : error.message;
-        await sendTelegramMessage(`No se completo la lectura del boleto: ${reason}\nEnvia una imagen clara con ambos equipos, mercado, fecha y cuota individual, o usa /parlay con esos datos.`, false, chatId, KEYBOARD_MENU);
+        await sendTelegramMessage(`No se completo la lectura del boleto: ${reason}\nVuelve a intentar en un minuto. Si persiste, envia la captura como Archivo (sin comprimir) o usa /parlay con equipos, mercado y cuota.`, false, chatId, KEYBOARD_MENU);
       }
       return res.status(200).send('OK');
     }
@@ -295,7 +295,7 @@ export default async function handler(req, res) {
       if (!cleanArgs) {
         const guideMsg = [
           `🎰 *AUDITOR DE PARLAYS Y COMBINADAS — STATS-AI PRO*`,
-          `Contrasta partidos y cuotas prepartido con API-Football (100 consultas/dia). Solo futbol; otros deportes quedan sin verificar.`,
+          `Contrasta partidos y cuotas prepartido de Pinnacle/Bet365: futbol (API-Football) y NBA, NFL, NCAAF, MLB (The Odds API).`,
           ``,
           `👉 *¿Cómo usarlo?*`,
           `Escribe \`/parlay\` con ambos equipos, fecha, seleccion y cuota individual. Maximo 8 selecciones.`,
@@ -354,7 +354,7 @@ export default async function handler(req, res) {
       ``,
       `1️⃣ */vip* — Seleccionar deporte o cartelera general en tiempo real`,
       `2️⃣ */cheatsheet* — Hoja resumen compacta con Hit Rates (Top picks para redes)`,
-      `3️⃣ */parlay* — Contrastar tu boleto con cuotas publicadas de API-Sports (futbol)`,
+      `3️⃣ */parlay* — Contrastar tu boleto con cuotas prepartido (futbol, NBA, NFL, NCAAF, MLB)`,
       `4️⃣ */corte* — Ver Corte de Caja y Rendimiento de las últimas 24h`,
       `5️⃣ */cuota* — Consultar saldo de requests (API-Sports y The Odds API)`,
       ...(isPrivateVip ? ['6. */futuro* — Explorar 72 horas multideporte y candidatos de alta probabilidad'] : []),

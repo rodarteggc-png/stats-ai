@@ -149,13 +149,75 @@ test('el boleto no acepta otro rival, deportes sin cobertura o mercados diferent
   let oddsCalls = 0;
   const audit = await auditTicketLive([
     { ...ticketLeg, awayTeam: 'Monterrey' },
-    { ...ticketLeg, sport: 'nba' },
+    { ...ticketLeg, sport: 'tennis' },
     { ...ticketLeg, market: 'unknown' }
   ], { apiKey: 'test-unmatched', fetchImpl: ticketFetch(() => { oddsCalls++; return []; }) });
   assert.equal(oddsCalls, 0);
   assert.ok(audit.results.every(result => !result.verified));
-  assert.match(audit.results[0].reason, /enfrentamiento/);
+  assert.match(audit.results[0].reason, /No se encontro ese partido/);
   assert.match(audit.results[1].reason, /sin cobertura/);
+});
+
+test('un boleto ilegible no se reporta como deporte sin cobertura y sugiere enviarlo como archivo', async () => {
+  const audit = await auditTicketLive([{ homeTeam: null, awayTeam: null, eventText: null, selectionText: null, sport: 'unknown', market: 'unknown', selection: 'unknown', line: null, ticketOdds: '1.56', date: null }],
+    { apiKey: 'test-unreadable', fetchImpl: async () => { throw new Error('No debe consultar proveedores.'); } });
+  assert.match(audit.results[0].reason, /No se leyeron los equipos/);
+  const report = formatLiveTicketReport(audit);
+  assert.match(report, /Partido no legible/);
+  assert.match(report, /como Archivo/);
+  assert.doesNotMatch(report, /\? vs \?|sin cobertura/);
+});
+
+test('el boleto con un solo equipo y deporte no identificado se cruza con futbol y orienta la seleccion', async () => {
+  const odds = [{ fixture: { id: 501 }, bookmakers: [{ id: 4, name: 'Pinnacle', bets: [{ name: 'Match Winner', values: [
+    { value: 'Home', odd: '2.40' }, { value: 'Draw', odd: '3.20' }, { value: 'Away', odd: '2.90' }
+  ] }] }] }];
+  const audit = await auditTicketLive([{ homeTeam: null, awayTeam: null, eventText: null, selectionText: 'Cruz Azul', sport: 'unknown', market: 'match_winner', selection: 'unknown', line: null, ticketOdds: '2.85', date: '2026-11-02' }],
+    { apiKey: 'test-single-team', fetchImpl: ticketFetch(() => odds) });
+  assert.equal(audit.results[0].verified, true);
+  assert.equal(audit.results[0].resolvedSelection, 'away');
+  assert.equal(audit.results[0].quote.odds, 2.9);
+});
+
+test('NBA y NFL se verifican con The Odds API usando linea exacta y formato visitante @ local', async () => {
+  const kickoff = new Date(Date.now() + 3 * 3600000).toISOString();
+  const updated = new Date().toISOString();
+  const calls = [];
+  const fetchImpl = async input => {
+    const url = new URL(input);
+    calls.push(url.pathname);
+    if (url.pathname.includes('basketball_nba')) return Response.json([{ home_team: 'Boston Celtics', away_team: 'Washington Wizards', commence_time: kickoff, bookmakers: [{ key: 'pinnacle', title: 'Pinnacle', last_update: updated, markets: [
+      { key: 'spreads', last_update: updated, outcomes: [{ name: 'Boston Celtics', point: -4.5, price: 1.95 }, { name: 'Washington Wizards', point: 4.5, price: 1.87 }] }
+    ] }] }]);
+    return Response.json([{ home_team: 'Las Vegas Raiders', away_team: 'Kansas City Chiefs', commence_time: kickoff, bookmakers: [{ key: 'pinnacle', title: 'Pinnacle', last_update: updated, markets: [
+      { key: 'h2h', last_update: updated, outcomes: [{ name: 'Kansas City Chiefs', price: 1.52 }, { name: 'Las Vegas Raiders', price: 2.6 }] }
+    ] }] }]);
+  };
+  const audit = await auditTicketLive([
+    { eventText: 'WAS Wizards @ BOS Celtics', selectionText: 'Boston Celtics -4.5', homeTeam: null, awayTeam: null, sport: 'nba', market: 'spread', selection: 'unknown', line: -4.5, ticketOdds: '1.91', date: null },
+    { eventText: 'KC Chiefs @ LV Raiders', selectionText: 'Kansas City Chiefs', homeTeam: null, awayTeam: null, sport: 'nfl', market: 'match_winner', selection: 'unknown', line: null, ticketOdds: '1.56', date: null },
+    { eventText: 'WAS Wizards @ BOS Celtics', selectionText: 'Boston Celtics -5.5', homeTeam: null, awayTeam: null, sport: 'nba', market: 'spread', selection: 'unknown', line: -5.5, ticketOdds: '1.91', date: null }
+  ], { apiKey: 'test-us', oddsKeys: ['test-us-key-1'], fetchImpl });
+  assert.equal(audit.results[0].verified, true);
+  assert.equal(audit.results[0].quote.odds, 1.95);
+  assert.equal(audit.results[1].verified, true);
+  assert.equal(audit.results[1].resolvedSelection, 'away');
+  assert.equal(audit.results[1].quote.odds, 1.52);
+  assert.equal(audit.results[2].verified, false);
+  assert.equal(audit.usage.oddsApiRequests, 2);
+  assert.equal(calls.filter(path => path.includes('basketball_nba')).length, 1);
+});
+
+test('la lectura reintenta con el modelo de respaldo cuando Gemini responde 503', async () => {
+  const models = [];
+  const legs = await extractTicketSelections({ text: 'KC Chiefs @ LV Raiders, Chiefs ML 1.56' }, 'test-key', async url => {
+    models.push(String(url).match(/models\/([^:]+)/)[1]);
+    if (models.length === 1) return new Response('{}', { status: 503 });
+    return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ tooMany: false, selections: [{ eventText: 'KC Chiefs @ LV Raiders', selectionText: 'Chiefs', homeTeam: null, awayTeam: null, sport: 'nfl', market: 'match_winner', selection: 'unknown', line: null, ticketOdds: '1.56', date: null }] }) }] } }] });
+  });
+  assert.deepEqual(models, ['gemini-2.0-flash', 'gemini-1.5-flash']);
+  assert.equal(legs[0].homeTeam, 'LV Raiders');
+  assert.equal(legs[0].awayTeam, 'KC Chiefs');
 });
 
 test('el mercado de totales exige linea exacta y permite respaldo Bet365', async () => {

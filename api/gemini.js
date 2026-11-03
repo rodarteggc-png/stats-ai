@@ -1,6 +1,6 @@
 // api/gemini.js - Proxy server-side de Gemini: la llave nunca viaja al navegador.
 const ALLOWED = {
-  generateContent: new Set(['gemini-3.6-flash', 'gemini-3.5-flash']),
+  generateContent: new Set(['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-lite', 'gemini-3.6-flash', 'gemini-3.5-flash']),
   embedContent: new Set(['text-embedding-004'])
 };
 const MAX_BODY_BYTES = 200 * 1024;

@@ -30,7 +30,7 @@ import {
 } from "./services/history";
 import { runBatchMonteCarlo } from "./services/simulationBridge";
 import { callGemini } from "./services/geminiClient";
-const MODEL = "gemini-3.6-flash"; 
+const MODEL = "gemini-2.0-flash"; 
 
 function buildSystemPrompt() {
   return [
