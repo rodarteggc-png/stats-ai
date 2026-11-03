@@ -9,7 +9,7 @@ const STORAGE_KEY = 'fstats_memory';
 const LESSONS_KEY = 'fstats_team_lessons';
 const DYNAMIC_ELO_KEY = 'fstats_dynamic_elo';
 
-const MODEL = "gemini-2.0-flash";
+const MODEL = "gemini-3.8-flash";
 
 export function seedInitialMemory() {
   if (typeof window === 'undefined' || !localStorage) return;

@@ -215,7 +215,7 @@ test('la lectura reintenta con el modelo de respaldo cuando Gemini responde 503'
     if (models.length === 1) return new Response('{}', { status: 503 });
     return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ tooMany: false, selections: [{ eventText: 'KC Chiefs @ LV Raiders', selectionText: 'Chiefs', homeTeam: null, awayTeam: null, sport: 'nfl', market: 'match_winner', selection: 'unknown', line: null, ticketOdds: '1.56', date: null }] }) }] } }] });
   });
-  assert.deepEqual(models, ['gemini-2.0-flash', 'gemini-1.5-flash']);
+  assert.deepEqual(models, ['gemini-3.8-flash', 'gemini-3.5-flash']);
   assert.equal(legs[0].homeTeam, 'LV Raiders');
   assert.equal(legs[0].awayTeam, 'KC Chiefs');
 });

@@ -175,7 +175,7 @@ export async function extractTicketSelections({ imageBase64, mimeType = 'image/j
   let response;
   let lastError = 'Lectura del boleto no disponible.';
   // Plan gratuito: 20 lecturas diarias por modelo; ante 429/503 se pasa al siguiente modelo.
-  for (const model of ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-lite', 'gemini-3.5-flash']) {
+  for (const model of ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.6-flash']) {
     try {
       response = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         method: 'POST',
