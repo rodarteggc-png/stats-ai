@@ -95,13 +95,19 @@ export async function loadFutureModelData(options = {}) {
   const espnDates = `${dateFrom.replaceAll('-', '')}-${dateTo.replaceAll('-', '')}`;
   const keys = options.oddsKeys || getOddsApiKeys();
   async function oddsFor(sport) {
+    const fromIso = new Date(start).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    const toIso = new Date(end).toISOString().replace(/\.\d{3}Z$/, 'Z');
     for (const key of keys.filter(key => !inMemoryExhaustedKeys.has(key)).slice(0, 2)) {
       const url = new URL(`https://api.the-odds-api.com/v4/sports/${sports[sport].odds}/odds/`);
       url.search = new URLSearchParams({ apiKey: key, regions: 'us,eu', markets: 'h2h,spreads,totals', bookmakers: 'pinnacle,bet365',
-        commenceTimeFrom: new Date(start).toISOString().replace('.000', ''), commenceTimeTo: new Date(end).toISOString().replace('.000', '') }).toString();
+        commenceTimeFrom: fromIso, commenceTimeTo: toIso }).toString();
       try {
         const response = await request(url);
         if ([401, 429].includes(response.status)) { inMemoryExhaustedKeys.add(key); continue; }
+        if (response.status === 404) {
+          // Deporte fuera de temporada (ej. MLB en invierno)
+          return [];
+        }
         if (!response.ok) throw new Error(`Cuotas HTTP ${response.status}.`);
         const data = await response.json();
         if (!Array.isArray(data)) throw new Error('Formato de cuotas no valido.');
@@ -128,10 +134,31 @@ export async function loadFutureModelData(options = {}) {
   }
   async function loadAmericanSport(sport) {
     const config = sports[sport];
+    const fetchSchedule = async () => {
+      if (sport === 'mlb') {
+        return json(`https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=${dateFrom}&endDate=${dateTo}&hydrate=probablePitcher,team`);
+      }
+      const url = `https://site.api.espn.com/apis/site/v2/sports/${config.path}/scoreboard?dates=${espnDates}&limit=100${sport === 'ncaaf' ? '&groups=80' : ''}`;
+      try {
+        return await json(url);
+      } catch (err) {
+        if (sport === 'nba' && err.message && err.message.includes('400')) {
+          // ESPN NBA rechaza rangos con guión en scoreboard (HTTP 400). Fallback consultando fecha por fecha:
+          const nbaDays = [];
+          for (let d = new Date(start); d < new Date(end); d.setDate(d.getDate() + 1)) {
+            nbaDays.push(d.toISOString().slice(0, 10).replaceAll('-', ''));
+          }
+          const daysData = await Promise.all(nbaDays.map(dt =>
+            json(`https://site.api.espn.com/apis/site/v2/sports/${config.path}/scoreboard?dates=${dt}&limit=100`).catch(() => ({ events: [] }))
+          ));
+          return { events: daysData.flatMap(d => d.events || []) };
+        }
+        throw err;
+      }
+    };
+
     const [schedule, odds] = await Promise.all([
-      json(sport === 'mlb'
-        ? `https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=${dateFrom}&endDate=${dateTo}&hydrate=probablePitcher,team`
-        : `https://site.api.espn.com/apis/site/v2/sports/${config.path}/scoreboard?dates=${espnDates}&limit=100${sport === 'ncaaf' ? '&groups=80' : ''}`),
+      fetchSchedule(),
       oddsFor(sport)
     ]);
     const fixtures = sport === 'mlb' ? (schedule.dates || []).flatMap(date => date.games || []).map(game => ({
@@ -191,9 +218,20 @@ export async function loadFutureModelData(options = {}) {
     await footballClient.request('/status');
     const fixtures = new Map();
     for (let date = Math.floor(start / 86400000) * 86400000; date < end; date += 86400000) {
-      const response = await footballClient.request('/fixtures', { date: new Date(date).toISOString().slice(0, 10) });
-      for (const fixture of response.data) {
-        if (fixture.fixture?.status?.short === 'NS' && Date.parse(fixture.fixture.date) > start && Date.parse(fixture.fixture.date) < end) fixtures.set(fixture.fixture.id, fixture);
+      const dateStr = new Date(date).toISOString().slice(0, 10);
+      try {
+        const response = await footballClient.request('/fixtures', { date: dateStr });
+        for (const fixture of response.data || []) {
+          if (fixture.fixture?.status?.short === 'NS' && Date.parse(fixture.fixture.date) > start && Date.parse(fixture.fixture.date) < end) {
+            fixtures.set(fixture.fixture.id, fixture);
+          }
+        }
+      } catch (err) {
+        if (err.message && err.message.toLowerCase().includes('free plans do not have access')) {
+          notices.push('Futbol: Plan gratuito de API-Sports limitado a 48h (hoy y mañana); fechas posteriores omitidas.');
+          break;
+        }
+        throw err;
       }
     }
     coverage.futbol = { scheduled: fixtures.size, evaluated: 0, skipped: 0 };

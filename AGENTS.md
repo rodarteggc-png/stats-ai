@@ -120,6 +120,12 @@ Ubicados en [src/utils/ensemble.js](file:///c:/Users/RO106536/Documents/Perso/Pr
   - **Migración a Modelos Flash de Alta Capacidad Gratuita:** Se configuró el proxy serverless [api/gemini.js](api/gemini.js), la extracción de boletos en [api/_lib/parlayLive.js](api/_lib/parlayLive.js) y el simulador en [src/App.jsx](src/App.jsx) para priorizar **`gemini-2.0-flash`** y **`gemini-1.5-flash`**, los cuales cuentan con una cuota gratuita oficial de **1,500 peticiones diarias y 15 peticiones por minuto** sin requerir facturación activa ni costo alguno.
   - **Validación:** 30 pruebas unitarias ejecutadas con éxito (`node --test scripts/userFlows.test.mjs`), build de producción verificado con Vite sin advertencias ni regresiones en los 5 candados cuantitativos.
 
+* **2026-11-04 (Corrección de Resiliencia en Explorador Multideporte 72 Horas):**
+  - **Fútbol (Plan Gratuito API-Sports):** Se protegió `loadSoccer()` con captura del límite de 48h del plan gratuito (`Free plans do not have access to this date`). En lugar de abortar el proceso completo, procesa los partidos permitidos (hoy y mañana) y emite un aviso informativo.
+  - **NBA (ESPN Scoreboard):** Se corrigió la consulta de calendario: ESPN NBA responde `HTTP 400` ante rangos con guión (`YYYYMMDD-YYYYMMDD`). Se implementó un fallback que consulta fecha por fecha y concatena los eventos, obteniendo los juegos programados sin errores.
+  - **The Odds API (Formato ISO y Deporte Fuera de Temporada):** Se normalizó `commenceTimeFrom` y `commenceTimeTo` a formato estándar ISO-8601 sin milisegundos (`.replace(/\.\d{3}Z$/, 'Z')`), y se maneja el código `404` para deportes en receso de temporada (ej. MLB en noviembre) retornando lista vacía en vez de fallar.
+  - **Validación:** 32 pruebas unitarias pasando sin regresiones (`node --test scripts/userFlows.test.mjs`).
+
 * **2026-11-04 (Síntesis de Cartelera con IA Senior Tipster y Reporte Ejecutivo Telegram):**
   - **Dictamen Consolidado del Analista IA:** Se implementó `generateAiExecutiveReport` en `scripts/alertEngine.js`, el cual toma el Top Slate aprobado por los modelos matemáticos y genera un único mensaje ejecutivo profesional, humano y analítico para Telegram, eliminando la saturación de 5 o 6 mensajes individuales con bloques de código.
   - **Estructura del Dictamen:** 
