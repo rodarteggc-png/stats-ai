@@ -7,6 +7,7 @@ import { fetchNbaSchedule } from '../src/services/nbaService.js';
 import { selectHighProbabilityCandidates, buildConservativeCombination, scanFutureMultiSport, formatFutureMultiSport, evaluateFutureModels } from '../api/_lib/futureMultiSport.js';
 import { loadFutureModelData } from '../api/_lib/futureData.js';
 import { fetchClosingOddsForPick } from '../src/services/sportsApi.js';
+import { calculatePickEffectiveStake, generateAiExecutiveReport } from './alertEngine.js';
 
 test('el CLV usa solo mercado y linea exactos antes del inicio, nunca un cero inventado', async () => {
   const originalFetch = globalThis.fetch;
@@ -749,4 +750,89 @@ test('una cuota vieja y un abridor no anunciado quedan fuera del analisis multid
   assert.ok(data.notices.some(notice => notice.includes('Abridor no anunciado')));
   assert.equal(data.usage.apiFootball.requests, 1);
   assert.ok(data.usage.requests <= 60);
+});
+
+test('el cálculo institucional de stake protege banca y respeta techos de Kelly y Player Props', () => {
+  const regularWithRlm = {
+    prob: '65%',
+    odds: 1.85,
+    isProp: false,
+    confidence: { label: 'ALTA', kellyMultiplier: 0.8 },
+    consensus: {
+      votesPassed: 3,
+      recommendedStake: '1.5 Unidades',
+      rlmInfo: { isRlmDetected: true, rlmType: 'FAVORABLE' }
+    },
+    mcStats: { stability: 80 }
+  };
+  const rlmStake = calculatePickEffectiveStake(regularWithRlm);
+  assert.equal(rlmStake.effectiveStake, 1.5);
+
+  const regularNoRlmLowStability = {
+    prob: '58%',
+    odds: 1.95,
+    isProp: false,
+    confidence: { label: 'MEDIA', kellyMultiplier: 0.5 },
+    consensus: {
+      votesPassed: 2,
+      recommendedStake: '1.5 Unidades',
+      rlmInfo: null
+    },
+    mcStats: { stability: 65 }
+  };
+  const protectedStake = calculatePickEffectiveStake(regularNoRlmLowStability);
+  assert.equal(protectedStake.effectiveStake, 0.3);
+  assert.ok(protectedStake.stakeLabel.includes('Kelly'));
+
+  const playerProp = {
+    id: 'prop-player-1',
+    isProp: true,
+    prob: '70%',
+    odds: 1.70,
+    confidence: { label: 'ALTA', kellyMultiplier: 0.8 },
+    consensus: {
+      votesPassed: 3,
+      recommendedStake: '2.5 Unidades'
+    }
+  };
+  const propStake = calculatePickEffectiveStake(playerProp);
+  assert.ok(propStake.effectiveStake <= 1.5);
+});
+
+test('el reporte ejecutivo IA sintetiza picks consolidados con fallback en caso de indisponibilidad', async () => {
+  const originalFetch = globalThis.fetch;
+  const samplePicks = [
+    {
+      sport: 'Fútbol',
+      league: 'UEFA Champions League',
+      game: 'Borussia Dortmund vs Sturm Graz',
+      pick: 'Victoria Borussia Dortmund',
+      odds: '1.38',
+      prob: '76%',
+      isBaseConfianza: true,
+      consensus: { recommendedStake: '2.0 Unidades' }
+    }
+  ];
+
+  // 1. Simulación exitosa con Gemini Flash
+  globalThis.fetch = async () => Response.json({
+    candidates: [{
+      content: {
+        parts: [{ text: '🧠 *DICTAMEN DEL ANALISTA IA — STATS-AI PRO*\nBase de confianza confirmada con Dortmund.' }]
+      }
+    }]
+  });
+
+  try {
+    const report = await generateAiExecutiveReport(samplePicks, 'EDICIÓN MATUTINA', 'Miércoles 4 de Noviembre');
+    assert.ok(report.includes('DICTAMEN DEL ANALISTA IA'));
+    assert.ok(report.includes('Dortmund'));
+
+    // 2. Simulación de fallo en upstream (debe retornar null para activar fallback resiliente)
+    globalThis.fetch = async () => new Response('Internal Server Error', { status: 500 });
+    const fallbackReport = await generateAiExecutiveReport(samplePicks, 'EDICIÓN MATUTINA', 'Miércoles 4 de Noviembre');
+    assert.equal(fallbackReport, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

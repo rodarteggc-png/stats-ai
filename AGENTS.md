@@ -120,6 +120,19 @@ Ubicados en [src/utils/ensemble.js](file:///c:/Users/RO106536/Documents/Perso/Pr
   - **Migración a Modelos Flash de Alta Capacidad Gratuita:** Se configuró el proxy serverless [api/gemini.js](api/gemini.js), la extracción de boletos en [api/_lib/parlayLive.js](api/_lib/parlayLive.js) y el simulador en [src/App.jsx](src/App.jsx) para priorizar **`gemini-2.0-flash`** y **`gemini-1.5-flash`**, los cuales cuentan con una cuota gratuita oficial de **1,500 peticiones diarias y 15 peticiones por minuto** sin requerir facturación activa ni costo alguno.
   - **Validación:** 30 pruebas unitarias ejecutadas con éxito (`node --test scripts/userFlows.test.mjs`), build de producción verificado con Vite sin advertencias ni regresiones en los 5 candados cuantitativos.
 
+* **2026-11-04 (Síntesis de Cartelera con IA Senior Tipster y Reporte Ejecutivo Telegram):**
+  - **Dictamen Consolidado del Analista IA:** Se implementó `generateAiExecutiveReport` en `scripts/alertEngine.js`, el cual toma el Top Slate aprobado por los modelos matemáticos y genera un único mensaje ejecutivo profesional, humano y analítico para Telegram, eliminando la saturación de 5 o 6 mensajes individuales con bloques de código.
+  - **Estructura del Dictamen:** 
+    1. Encabezado institucional con fecha y turno (Matutino / Vespertino / Nocturno).
+    2. Párrafo de introducción en lenguaje natural resumiendo la cartelera, el paso de los 5 candados y las 10,000 simulaciones de Monte Carlo.
+    3. Desglose amigable de cada selección destacando las "Bases de Confianza" (favoritos sólidos como Dortmund o Celtics), Player Props sabermétricos y selecciones con Dinero Inteligente (RLM / Sharp Money).
+    4. Plan de apuesta sugerido: stakes individuales para jugadas directas y recomendación de Parlay/Combinada conservadora combinando la Base de Confianza para buscar momio positivo (+130 / +150) con alta probabilidad implícita.
+  - **Resiliencia & Fallback 100%:** 
+    * Cascada neuronal rápida: `gemini-3.5-flash` → `gemini-3.6-flash` → `gemini-3.8-flash` con `thinkingConfig: { thinkingBudget: 0 }` y `maxOutputTokens: 1500` para generar el reporte en ~6 segundos.
+    * Si la IA o la red no responden (o timeout de 10s), se activa de inmediato el modo de respaldo clásico (encabezado de slate + mensajes detallados por selección), garantizando cero pérdida de alertas.
+    * Cada selección aprobada se registra puntualmente en el Cloud Ledger de Telegram y en el histórico local con su respectiva gestión de banca Kelly calculada por `calculatePickEffectiveStake`.
+  - **Validación:** 32 pruebas unitarias aprobadas en [scripts/userFlows.test.mjs](scripts/userFlows.test.mjs) (32/32 pasando, 0 errores).
+
 * **2026-11-04 (Eliminación de Cuellos de Botella y Desbloqueo de Bases de Confianza):**
   - **Bases de Confianza (Favoritos Sólidos):** Se integró formalmente la regla de negocio para aprobar favoritos pesados (probabilidad calibrada >= 65% y cuotas desde 1.25 a 2.05) como `⭐ BASE DE CONFIANZA (FAVORITO SÓLIDO)` o `⭐ BASE DE CONFIANZA (FAVORITO VISITANTE)`, eliminando el piso artificial de cuota mínima 1.42 y el descarte por margen teórico de EV. Aportan certeza, aciertos constantes y anclas ideales para combinadas/parlays de los suscriptores.
   - **Eliminación de Micro-Candados Asfixiantes:**
