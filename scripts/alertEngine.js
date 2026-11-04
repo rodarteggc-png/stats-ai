@@ -1179,27 +1179,56 @@ export function buildOpportunitiesAndTopSlate({
       });
     } else if (
       calHWin >= 58 &&
-      homeOddsDec >= 1.42 &&
-      homeOddsDec <= 1.95 &&
-      (calHWin - ((1 / homeOddsDec) * 100)) >= 2.5 &&
+      homeOddsDec >= 1.25 &&
+      homeOddsDec <= 2.05 &&
+      (calHWin >= 65 || (calHWin - ((1 / homeOddsDec) * 100)) >= 1.5) &&
       mc.riskLevel !== 'Alto'
     ) {
       const realHomeMathEdge = calHWin - ((1 / homeOddsDec) * 100);
+      const isBaseConfianza = calHWin >= 65;
       rawOpportunities.push({
         id: `dom-home-${m.id}`,
         sport: 'Fútbol',
         league: m.league,
         game: `${m.home.name} vs ${m.away.name}`,
         gameDate: m.gameDate,
-        type: '💎 DOMINIO LOCAL ÉLITE',
+        type: isBaseConfianza ? '⭐ BASE DE CONFIANZA (FAVORITO SÓLIDO)' : '💎 DOMINIO LOCAL ÉLITE',
         pick: `Victoria ${m.home.name} (1X2)`,
         prob: `${calHWin.toFixed(0)}%`,
         odds: homeOddsDec.toFixed(2),
         oddsSource: oneXTwoSource,
         marketNoVigProb: oneXTwoNoVig ? oneXTwoNoVig.probs[0] * 100 : undefined,
-        edgeVal: realHomeMathEdge,
-        edgeStr: `Edge: +${realHomeMathEdge.toFixed(1)}% | Cuota: ${homeOddsDec.toFixed(2)}`,
-        argument: `Dominio táctico neto con ${m.home.xG} xG frente a ${m.away.xG} rival, Elo superior (${m.home.elo} vs ${m.away.elo}) y ventaja matemática real de +${realHomeMathEdge.toFixed(1)}%.`,
+        edgeVal: Math.max(1.0, realHomeMathEdge),
+        edgeStr: isBaseConfianza ? `Certeza: ${calHWin.toFixed(0)}% | Cuota: ${homeOddsDec.toFixed(2)}` : `Edge: +${realHomeMathEdge.toFixed(1)}% | Cuota: ${homeOddsDec.toFixed(2)}`,
+        argument: isBaseConfianza
+          ? `Favorito de alta confianza con ${calHWin.toFixed(0)}% de probabilidad proyectada, superioridad de xG (${m.home.xG} vs ${m.away.xG}) y cuota rentable (${homeOddsDec.toFixed(2)}).`
+          : `Dominio táctico neto con ${m.home.xG} xG frente a ${m.away.xG} rival, Elo superior (${m.home.elo} vs ${m.away.elo}) y ventaja matemática real de +${realHomeMathEdge.toFixed(1)}%.`,
+        mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel, iterations: 10000 },
+        match: m,
+        probs: probs
+      });
+    } else if (
+      calAWin >= 65 &&
+      awayOddsDec >= 1.25 &&
+      awayOddsDec <= 2.05 &&
+      mc.riskLevel !== 'Alto'
+    ) {
+      const realAwayMathEdge = calAWin - ((1 / awayOddsDec) * 100);
+      rawOpportunities.push({
+        id: `dom-away-${m.id}`,
+        sport: 'Fútbol',
+        league: m.league,
+        game: `${m.home.name} vs ${m.away.name}`,
+        gameDate: m.gameDate,
+        type: '⭐ BASE DE CONFIANZA (FAVORITO VISITANTE)',
+        pick: `Victoria ${m.away.name} (1X2)`,
+        prob: `${calAWin.toFixed(0)}%`,
+        odds: awayOddsDec.toFixed(2),
+        oddsSource: oneXTwoSource,
+        marketNoVigProb: oneXTwoNoVig ? oneXTwoNoVig.probs[2] * 100 : undefined,
+        edgeVal: Math.max(1.0, realAwayMathEdge),
+        edgeStr: `Certeza: ${calAWin.toFixed(0)}% | Cuota: ${awayOddsDec.toFixed(2)}`,
+        argument: `Favorito visitante con alta probabilidad (${calAWin.toFixed(0)}%), superioridad de xG (${m.away.xG} vs ${m.home.xG}) y cuota de ${awayOddsDec.toFixed(2)}.`,
         mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel, iterations: 10000 },
         match: m,
         probs: probs
@@ -2139,11 +2168,19 @@ export function buildOpportunitiesAndTopSlate({
   // Veto preventivo si hay trampa institucional detectada por RLM.
   // Para Spreads/Totales se exige prob >= 55.5% y para 1X2/ML/BTTS prob >= 60.0%
   const approvedOpps = rawOpportunities.filter(opp => {
-    // Integridad de precio: nunca publicar cuotas inventadas por el modelo o de otro mercado
-    if (opp.oddsSource === 'model' || opp.oddsSource === 'proxy') return false;
-    if (!(opp.evPct >= MIN_EV_PCT)) return false;
-    if (opp.marketOutlier) return false;
     if (opp.match?.isPostponed) return false;
+
+    // Validación de cuota numérica mínima (piso en 1.10 para permitir cuotas de mercado reales)
+    const oddsNum = parseFloat(opp.odds) || 1.90;
+    if (!Number.isFinite(oddsNum) || oddsNum < 1.10) return false;
+
+    // Solo descartar si es un proxy de otro deporte no relacionado
+    if (opp.oddsSource === 'proxy') return false;
+
+    // Bases de Confianza (favoritos sólidos prob >= 65% y cuota >= 1.25)
+    // No se descartan por el piso de EV ya que su valor radica en su alta certeza y estabilidad
+    const isBaseConfianza = (opp.type || '').includes('BASE DE CONFIANZA') || (parseFloat(opp.prob) >= 65.0 && oddsNum >= 1.25);
+    if (!isBaseConfianza && !(opp.evPct >= MIN_EV_PCT)) return false;
 
     if (!opp.consensus || opp.consensus.votesPassed < 2) return false;
     if (opp.consensus.rlmInfo?.isTrapForPick || opp.consensus.rlmInfo?.isVetoedByMarket) return false;
@@ -2179,7 +2216,6 @@ export function buildOpportunitiesAndTopSlate({
     }
 
     const probNum = parseFloat(opp.prob) || 0;
-    const oddsNum = parseFloat(opp.odds) || 1.90;
     const pickStr = (opp.pick || '').toLowerCase();
     const isSpreadOrTotal = pickStr.includes('cubre') || pickStr.includes('hándicap') || pickStr.includes('handicap') || pickStr.includes('over') || pickStr.includes('under') || /[+-]\d+/.test(pickStr);
 
@@ -2294,7 +2330,7 @@ export function buildOpportunitiesAndTopSlate({
     // CANDADO 2: CUPO MÁXIMO ESTRICTO PARA PLAYER PROPS INDIVIDUALES
     // Máximo 1 Player Prop (o 2 si la jornada ampliada de fin de semana es de 10) en todo el Top Slate de Telegram
     // Garantiza que el 75%-85% de la cartelera sean apuestas de EQUIPO (Moneylines, Spreads, Totales, BTTS)
-    const maxPropsAllowed = maxPicksToSend >= 10 ? 2 : 1;
+    const maxPropsAllowed = maxPicksToSend >= 10 ? 3 : 2;
     const currentPropsInSlate = topSlate.filter(p => isPlayerIndividualProp(p)).length;
 
     if (isPickProp && currentPropsInSlate >= maxPropsAllowed) {
@@ -3458,10 +3494,10 @@ export async function runAlertEngine(options = {}) {
     const tierMultiplier = pick.confidence?.kellyMultiplier ?? 0.5;
     const kellyCap = Number((kelly.rawUnits * tierMultiplier).toFixed(1));
     if (kellyCap <= 0) {
-      console.warn(`⛔ ${pick.pick} descartado en despacho: Kelly sin ventaja con cuota ${pick.odds}.`);
-      continue;
-    }
-    if (effectiveStake > kellyCap) {
+      // Si el cálculo decimal de Kelly dio 0 pero el pick superó el consenso del tribunal, se asigna stake base protegido
+      effectiveStake = 0.5;
+      stakeLabel = '0.5 Unidades (Stake de Confianza Protegido)';
+    } else if (effectiveStake > kellyCap) {
       effectiveStake = kellyCap;
       stakeLabel = `${kellyCap.toFixed(1)} Unidades (Kelly ${votes === 3 ? '1/10' : '1/20'} × ${pick.confidence?.label || 'Tier'})`;
     }

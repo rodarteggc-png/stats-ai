@@ -120,6 +120,16 @@ Ubicados en [src/utils/ensemble.js](file:///c:/Users/RO106536/Documents/Perso/Pr
   - **Migración a Modelos Flash de Alta Capacidad Gratuita:** Se configuró el proxy serverless [api/gemini.js](api/gemini.js), la extracción de boletos en [api/_lib/parlayLive.js](api/_lib/parlayLive.js) y el simulador en [src/App.jsx](src/App.jsx) para priorizar **`gemini-2.0-flash`** y **`gemini-1.5-flash`**, los cuales cuentan con una cuota gratuita oficial de **1,500 peticiones diarias y 15 peticiones por minuto** sin requerir facturación activa ni costo alguno.
   - **Validación:** 30 pruebas unitarias ejecutadas con éxito (`node --test scripts/userFlows.test.mjs`), build de producción verificado con Vite sin advertencias ni regresiones en los 5 candados cuantitativos.
 
+* **2026-11-04 (Eliminación de Cuellos de Botella y Desbloqueo de Bases de Confianza):**
+  - **Bases de Confianza (Favoritos Sólidos):** Se integró formalmente la regla de negocio para aprobar favoritos pesados (probabilidad calibrada >= 65% y cuotas desde 1.25 a 2.05) como `⭐ BASE DE CONFIANZA (FAVORITO SÓLIDO)` o `⭐ BASE DE CONFIANZA (FAVORITO VISITANTE)`, eliminando el piso artificial de cuota mínima 1.42 y el descarte por margen teórico de EV. Aportan certeza, aciertos constantes y anclas ideales para combinadas/parlays de los suscriptores.
+  - **Eliminación de Micro-Candados Asfixiantes:**
+    * Se eliminó el veto ciego a selecciones cuando `oddsSource === 'model'`, permitiendo cuotas de mercado estándar (-110 / 1.91) o analíticas mientras la cuota sea >= 1.10.
+    * Se eliminó el filtro `marketOutlier` que vetaba al modelo por tener mayor confianza que Las Vegas.
+    * Se flexibilizó el cupo de Player Props (`maxPropsAllowed`) a 2 por tanda (o 3 en alta cartelera), permitiendo que jugadores con rachas sobresalientes (80%-90% L10) no queden ocultos en memoria.
+    * Se protegió el despacho de Telegram: si el Criterio de Kelly arroja 0 por decimales, ya no descarta la selección (`continue;`), sino que le asigna un stake base de 0.5 unidades.
+  - **Preservación Estricta de Turnos:** Se mantiene la división de turnos solicitada por el usuario (Matutino 9:30 AM y Vespertino 3:30 PM CDMX) para maximizar el engagement diario de la comunidad.
+  - **Validación:** 30/30 pruebas unitarias aprobadas (`node --test scripts/userFlows.test.mjs`).
+
 * **2026-11-03 (Auditoría de Llave Gemini en Vercel, Diagnóstico Free Tier y Actualización a gemini-3.8-flash):**
   - **Auditoría de Llave en Producción:** Se verificó la variable `GEMINI_API_KEY` en Vercel Production asociada a la llave de Google AI Studio terminación `...ytCg`.
   - **Diagnóstico de Cuotas (Free Tier vs Tier 1):** Las pruebas con la API de Google confirmaron que la llave pertenece al nivel gratuito (`quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"`), con límite estricto de 20 peticiones diarias por modelo en la serie 3.x Flash. Para superar este límite a futuro, se requiere asociar una cuenta de facturación en Google Cloud Console para habilitar el plan de pago (Pay-as-you-go).
