@@ -162,6 +162,21 @@ function saveLocalCache(cache) {
   }
 }
 
+export function parseValidDecimalOdds(value) {
+  const odds = Number(value);
+  return Number.isFinite(odds) && odds >= 1.10 ? odds : null;
+}
+
+export function collectScheduleBatches(results, sourceNames = ['Fútbol', 'MLB', 'NFL', 'NCAAF', 'NBA']) {
+  const warnings = [];
+  const matches = results.map((result, index) => {
+    if (result?.status === 'fulfilled' && Array.isArray(result.value)) return result.value;
+    warnings.push(`${sourceNames[index] || `fuente ${index + 1}`}: ${result?.status === 'rejected' ? 'falló la consulta' : 'respuesta inválida'}`);
+    return [];
+  });
+  return { matches, warnings };
+}
+
 /**
  * Estado de banca para el freno de drawdown (mejora 4, 2026-11-10).
  * Lee el ledger local (si existe; en Vercel puede no estar) y el reinicio
@@ -227,7 +242,7 @@ export function recordPickToLedger(pick, effectiveStake = 1.0) {
         pick: pick.pick,
         tier: pick.isTopJoya ? 'TIER_1_VIP' : (pick.isWhalePick ? 'TIER_1_ESTELAR' : 'TIER_2_ACTION'),
         type: pick.type || 'Apuesta',
-        placedOdds: parseFloat(pick.odds) || 1.90,
+        placedOdds: parseValidDecimalOdds(pick.odds),
         closingOdds: null,
         clvPct: null,
         prob: parseFloat(pick.prob) || 60.0,
@@ -1317,8 +1332,8 @@ export function classifyOpportunity(opp = {}) {
   if (opp.match?.isPostponed) return deny('postponed', 'Partido pospuesto');
 
   // Validación de cuota numérica mínima (piso en 1.10 para permitir cuotas de mercado reales)
-  const oddsNum = parseFloat(opp.odds) || 1.90;
-  if (!Number.isFinite(oddsNum) || oddsNum < 1.10) return deny('odds_invalid', `Cuota ${opp.odds}`);
+  const oddsNum = parseValidDecimalOdds(opp.odds);
+  if (oddsNum === null) return deny('odds_invalid', `Cuota ${opp.odds}`);
 
   // Solo descartar si es un proxy de otro deporte no relacionado
   if (opp.oddsSource === 'proxy') return deny('odds_proxy', 'Cuota proxy de otro deporte');
@@ -1362,7 +1377,7 @@ export function classifyOpportunity(opp = {}) {
   // es inferior a +3.0% o el momio actual es menor a 1.45, se veta para evitar comprar tarde.
   if (opp.consensus.rlmInfo?.isRlmDetected && opp.consensus.rlmInfo?.rlmType === 'FAVORABLE') {
     const remainingEdge = parseFloat(opp.edgeVal) || 0;
-    const currentOdds = parseFloat(opp.odds) || 1.90;
+    const currentOdds = oddsNum;
     if (remainingEdge < 3.0 || currentOdds < 1.45) return deny('burned_odds', `Edge remanente ${remainingEdge}% / cuota ${currentOdds}`);
   }
 
@@ -3581,9 +3596,9 @@ export async function runAlertEngine(options = {}) {
     fetchNba ? fetchNbaSchedule(dateRange) : Promise.resolve([])
   ]);
 
-  const [soccerRaw, mlbRaw, nflRaw, ncaafRaw, nbaRaw] = scheduleBatches.map(r =>
-    r.status === 'fulfilled' && Array.isArray(r.value) ? r.value : []
-  );
+  const { matches: scheduleResults, warnings: scheduleWarnings } = collectScheduleBatches(scheduleBatches);
+  scheduleWarnings.forEach(warning => console.warn(`Aviso en calendario: ${warning}.`));
+  const [soccerRaw, mlbRaw, nflRaw, ncaafRaw, nbaRaw] = scheduleResults;
 
   const filterUpcoming = (m) => {
     if (!m || m.isCompleted || m.isPostponed) return false;
@@ -3785,7 +3800,8 @@ export async function runAlertEngine(options = {}) {
       totalAnalyzed: rawOpportunities.length,
       totalOpportunities: approvedOpps.length,
       auditSummary: auditResult.summary,
-      auditSent: auditResult.auditSent
+      auditSent: auditResult.auditSent,
+      scheduleWarnings
     };
   }
 
@@ -4175,6 +4191,7 @@ export async function runAlertEngine(options = {}) {
     totalOpportunities: approvedOpps.length,
     auditSummary: auditResult.summary,
     auditSent: auditResult.auditSent,
+    scheduleWarnings,
     vip: isVipOnly,
     targetChatId: targetChatId || process.env.TELEGRAM_CHAT_ID
   };

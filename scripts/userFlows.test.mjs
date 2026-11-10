@@ -9,8 +9,34 @@ import { scanFuture72Hours, formatFutureScan } from '../api/_lib/futureScan.js';
 import { fetchNbaSchedule } from '../src/services/nbaService.js';
 import { selectHighProbabilityCandidates, buildConservativeCombination, scanFutureMultiSport, formatFutureMultiSport, evaluateFutureModels } from '../api/_lib/futureMultiSport.js';
 import { loadFutureModelData, pickSoccerFixtures } from '../api/_lib/futureData.js';
+import { resolveScanTargetChat } from '../api/scan.js';
 import { fetchClosingOddsForPick } from '../src/services/sportsApi.js';
-import { calculatePickEffectiveStake, generateAiExecutiveReport } from './alertEngine.js';
+import { calculatePickEffectiveStake, collectScheduleBatches, generateAiExecutiveReport, parseValidDecimalOdds } from './alertEngine.js';
+
+test('una cuota decimal ausente o invalida no se reemplaza por una cuota supuesta', () => {
+  assert.equal(parseValidDecimalOdds('1.91'), 1.91);
+  assert.equal(parseValidDecimalOdds('1.09'), null);
+  assert.equal(parseValidDecimalOdds(''), null);
+  assert.equal(parseValidDecimalOdds('sin cuota'), null);
+  assert.equal(parseValidDecimalOdds('1.91texto'), null);
+  assert.equal(parseValidDecimalOdds(undefined), null);
+});
+
+test('el escaneo VIP valida su propio destino sin depender del chat publico', () => {
+  assert.equal(resolveScanTargetChat(true, { TELEGRAM_VIP_CHAT_ID: 'vip-chat' }), 'vip-chat');
+  assert.equal(resolveScanTargetChat(true, {}), '1258878024');
+  assert.equal(resolveScanTargetChat(false, { TELEGRAM_VIP_CHAT_ID: 'vip-chat' }), '');
+});
+
+test('los calendarios fallidos se distinguen de una cartelera vacia', () => {
+  const result = collectScheduleBatches([
+    { status: 'fulfilled', value: [] },
+    { status: 'rejected', reason: new Error('provider unavailable') },
+    { status: 'fulfilled', value: null }
+  ], ['Fútbol', 'MLB', 'NFL']);
+  assert.deepEqual(result.matches, [[], [], []]);
+  assert.deepEqual(result.warnings, ['MLB: falló la consulta', 'NFL: respuesta inválida']);
+});
 
 test('el CLV usa solo mercado y linea exactos antes del inicio, nunca un cero inventado', async () => {
   const originalFetch = globalThis.fetch;
@@ -1440,6 +1466,8 @@ test('modo paper: classifyOpportunity aprueba lo que pasaba y veta con motivo lo
   assert.equal(classifyOpportunity({ ...base, league: 'Liga de Marte' }).vetoReason, 'league_not_tier1');
   assert.equal(classifyOpportunity({ ...base, match: { isPostponed: true } }).vetoReason, 'postponed');
   assert.equal(classifyOpportunity({ ...base, odds: 1.05 }).vetoReason, 'odds_invalid');
+  assert.equal(classifyOpportunity({ ...base, odds: undefined }).vetoReason, 'odds_invalid');
+  assert.equal(classifyOpportunity({ ...base, odds: '1.91texto' }).vetoReason, 'odds_invalid');
   assert.equal(classifyOpportunity({ ...base, consensus: { votesPassed: 3, rlmInfo: { isTrapForPick: true } } }).vetoReason, 'rlm_trap');
   assert.equal(classifyOpportunity({ ...base, tipsterAudit: { isApproved: false } }).vetoReason, 'tipster_audit');
   assert.equal(classifyOpportunity({ ...base, prob: '50' }).vetoReason, 'prob_below_min');

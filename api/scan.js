@@ -2,17 +2,22 @@
 import { runAlertEngine } from '../scripts/alertEngine.js';
 import { requireCronAuth } from './_lib/security.js';
 
+export function resolveScanTargetChat(vip, env = process.env) {
+  return vip ? (env.TELEGRAM_VIP_CHAT_ID || '1258878024') : (env.TELEGRAM_CHAT_ID || '');
+}
+
 export default async function handler(req, res) {
   if (!requireCronAuth(req, res)) return;
   try {
+    const vip = req.query?.vip === 'true' || req.query?.vip === '1';
+    const targetChat = resolveScanTargetChat(vip);
     const hasToken = Boolean(process.env.TELEGRAM_BOT_TOKEN);
-    const hasChatId = Boolean(process.env.TELEGRAM_CHAT_ID);
 
-    if (!hasToken || !hasChatId) {
-      console.warn('Alerta api/scan: Faltan variables de entorno TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID en Vercel.');
+    if (!hasToken || !targetChat) {
+      console.warn('Alerta api/scan: Faltan variables de entorno del bot o del chat de destino en Vercel.');
       return res.status(200).json({
         success: false,
-        warning: 'Faltan configurar las variables de entorno TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID en Vercel Dashboard (Settings -> Environment Variables).',
+        warning: 'Faltan configurar TELEGRAM_BOT_TOKEN y el ID del chat de destino en Vercel Dashboard (Settings -> Environment Variables).',
         timestamp: new Date().toISOString()
       });
     }
@@ -20,15 +25,11 @@ export default async function handler(req, res) {
     const force = req.query?.force === 'true' || req.query?.force === '1';
     const audit = req.query?.audit === 'true' || req.query?.audit === '1';
     const shift = req.query?.shift || (req.query?.nocturno ? 'nocturno' : null);
-    const vip = req.query?.vip === 'true' || req.query?.vip === '1';
     // MODO PAPER (2026-11-10): ?paper=1 corre el motor sin despachar picks
     // reales; el slate paper va al mismo destino que el despacho real
     // (grupo; VIP solo con ?vip=1) y queda en el ledger paper.
     const paper = req.query?.paper === 'true' || req.query?.paper === '1';
     const result = await runAlertEngine({ force, audit, shift, vip, paper });
-    const targetChat = vip 
-      ? (process.env.TELEGRAM_VIP_CHAT_ID || '1258878024') 
-      : (process.env.TELEGRAM_CHAT_ID || '');
 
     return res.status(200).json({
       success: true,
@@ -37,6 +38,8 @@ export default async function handler(req, res) {
       totalOpportunities: result.totalOpportunities,
       auditSent: result.auditSent,
       auditSummary: result.auditSummary,
+      skipped: result.skipped || null,
+      scheduleWarnings: result.scheduleWarnings || [],
       forced: force,
       vip: vip,
       paper: paper,
