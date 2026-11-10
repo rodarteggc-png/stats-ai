@@ -34,6 +34,7 @@ import { enrichMatchWithInjuries } from '../src/services/sleeperService.js';
 import { getRefereeProfile } from '../src/services/refereeService.js';
 import { analyzeLineMovement } from '../src/services/lineMovementService.js';
 import { calculateKellyStake } from '../src/utils/kelly.js';
+import { evaluateBankroll, trimSlateToExposure, BANKROLL } from '../src/utils/bankroll.js';
 import { removeVig, noVigFromSingleSide, expectedValuePct, edgePp, deriveDoubleChanceMarket, isModelOutlier, getConfidenceTier } from '../src/utils/marketMath.js';
 
 // Umbral mínimo de Valor Esperado real (p·cuota − 1) para publicar una selección
@@ -65,7 +66,7 @@ try {
 // 1. CREDENCIALES TELEGRAM
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const FALLBACK_GEMINI_KEY = [65,81,46,65,98,56,82,78,54,73,103,87,102,101,116,101,118,120,45,77,121,115,103,97,53,111,100,100,112,84,56,45,78,53,80,111,108,90,99,83,48,80,79,99,103,100,90,78,110,112,104,121,103].map(c => String.fromCharCode(c)).join('');
+const FALLBACK_GEMINI_KEY = ''; // Sin llave en el codigo: solo GEMINI_API_KEY en variables de entorno.
 
 // 2. ARCHIVO DE MEMORIA LOCAL Y PERSISTENCIA CLOUD EN TELEGRAM (SOBREVIVE REINICIOS SERVERLESS EN VERCEL)
 const cacheDir = process.env.VERCEL ? '/tmp' : __dirname;
@@ -148,6 +149,35 @@ function saveLocalCache(cache) {
     fs.writeFileSync(SENT_CACHE_FILE, JSON.stringify(cache, null, 2), 'utf-8');
   } catch (e) {
     console.error('Error guardando cache local:', e.message);
+  }
+}
+
+/**
+ * Estado de banca para el freno de drawdown (mejora 4, 2026-11-10).
+ * Lee el ledger local (si existe; en Vercel puede no estar) y el reinicio
+ * manual registrado. Nunca escribe ni modifica el ledger.
+ */
+export function readBankrollState(nowMs = Date.now()) {
+  try {
+    const dataDir = path.join(__dirname, '..', 'data');
+    const ledgerFile = path.join(dataDir, 'pick_ledger.jsonl');
+    const rows = fs.existsSync(ledgerFile)
+      ? fs.readFileSync(ledgerFile, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l))
+      : [];
+    const resetFile = path.join(dataDir, 'bankroll_reset.json');
+    let resetAt = null;
+    if (fs.existsSync(resetFile)) {
+      try { resetAt = JSON.parse(fs.readFileSync(resetFile, 'utf-8')).resetAt || null; } catch {}
+    }
+    return evaluateBankroll({
+      closedRows: rows.filter(r => r.status === 'CLOSED'),
+      allRows: rows,
+      nowMs,
+      resetAt,
+    });
+  } catch (err) {
+    console.warn('Aviso evaluando banca (sin freno aplicable):', err.message);
+    return { blocked: false, reasons: [], drawdownUnits: 0, exposureTodayUnits: 0, remainingExposureUnits: BANKROLL.maxDailyExposureUnits, resetAt: null };
   }
 }
 
@@ -3511,7 +3541,7 @@ export async function runAlertEngine(options = {}) {
   });
 
   // topSlate ya viene filtrado contra sentCache y con prioridad estricta para los juegos de HOY
-  const toSend = (targetSport && targetSport !== 'all')
+  let toSend = (targetSport && targetSport !== 'all')
     ? topSlate.filter(p => {
         const s = (p.sport || '').toLowerCase();
         const l = (p.league || '').toLowerCase();
@@ -3591,6 +3621,42 @@ export async function runAlertEngine(options = {}) {
       auditSummary: auditResult.summary,
       auditSent: auditResult.auditSent
     };
+  }
+
+  // MEJORA 4 (2026-11-10): freno de bankroll sobre el récord real.
+  // No toca la matemática ni los candados: si el drawdown de 30 días llegó
+  // al límite, no se despachan picks nuevos (la auditoría/corte de arriba ya
+  // corrió). Si solo se agotó la exposición diaria, se recorta la cartelera
+  // por edge en vez de bloquear todo.
+  const bankrollState = readBankrollState();
+  if (bankrollState.blocked) {
+    const stopMsg = `⛔ *FRENO DE BANCA ACTIVO — NO SE DESPACHAN PICKS*\n\n${bankrollState.reasons.join('\n')}\nDrawdown 30 días: ${bankrollState.drawdownUnits}u | Exposición hoy: ${bankrollState.exposureTodayUnits}u\n\nEl freno se levanta solo cuando la ventana de 30 días rueda, o con un reinicio manual registrado (scripts/bankrollReset.mjs). El récord y la auditoría siguen intactos.`;
+    console.warn(`⛔ Freno de banca activo: ${bankrollState.reasons.join(' ')} No se despachan ${toSend.length} picks aprobados.`);
+    await sendTelegramMessage(stopMsg, isDryRun, targetChatId);
+    if (usesLock) sentCache._meta.scanLock = null;
+    if (!isDryRun) {
+      try { await saveCloudLedger(sentCache); } catch (e) { console.warn('Aviso persistiendo ledger tras freno:', e.message); }
+    }
+    return {
+      sentCount: 0,
+      skipped: 'bankroll-stop',
+      bankroll: bankrollState,
+      autoSavedUnanimousCount,
+      totalAnalyzed: rawOpportunities.length,
+      totalOpportunities: approvedOpps.length,
+      auditSummary: auditResult.summary,
+      auditSent: auditResult.auditSent,
+    };
+  }
+  if (bankrollState.remainingExposureUnits < BANKROLL.maxDailyExposureUnits) {
+    const ranked = [...toSend]
+      .map(pick => ({ pick, stake: calculatePickEffectiveStake(pick).effectiveStake, edge: Number(pick.evPct) || 0 }))
+      .sort((a, b) => b.edge - a.edge);
+    const trimmed = trimSlateToExposure(ranked, bankrollState.remainingExposureUnits);
+    if (trimmed.dropped.length) {
+      console.warn(`🏦 Tope de exposición diaria: se descartan ${trimmed.dropped.length} picks (quedan ${trimmed.usedUnits}u de ${bankrollState.remainingExposureUnits}u disponibles hoy).`);
+      toSend = trimmed.kept.map(item => item.pick);
+    }
   }
 
   console.log(`📢 Enviando ${toSend.length} nueva(s) selección(es) Élite con Consenso a Telegram...`);

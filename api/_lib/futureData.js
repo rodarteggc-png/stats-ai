@@ -10,6 +10,22 @@ const sports = {
   mlb: { odds: 'baseball_mlb', output: 'mlbMatches', league: 'Major League Baseball' }
 };
 
+// Ligas de futbol por prioridad: el plan gratuito de API-Football solo cubre
+// 48h y en semanas de paron de selecciones las 9 ligas principales no tienen
+// partidos; sin segundo nivel el escaneo de futbol evaluaba 0 partidos.
+const SOCCER_TIER_1_LEAGUES = [2, 3, 39, 61, 78, 135, 140, 253, 262];
+const SOCCER_TIER_2_LEAGUES = [88, 94, 144, 203, 128, 71, 143, 137];
+
+export function pickSoccerFixtures(fixtures, max = 6) {
+  const sorted = [...fixtures].sort((first, second) => Date.parse(first.fixture.date) - Date.parse(second.fixture.date));
+  const picked = sorted.filter(fixture => SOCCER_TIER_1_LEAGUES.includes(fixture.league?.id)).slice(0, max);
+  if (picked.length < max) {
+    const tier2 = sorted.filter(fixture => SOCCER_TIER_2_LEAGUES.includes(fixture.league?.id) && !picked.includes(fixture));
+    picked.push(...tier2.slice(0, max - picked.length));
+  }
+  return { picked, usedTier2: picked.some(fixture => SOCCER_TIER_2_LEAGUES.includes(fixture.league?.id)) };
+}
+
 function normalized(value) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
@@ -17,6 +33,14 @@ function normalized(value) {
 function recent(value, now) {
   const age = now - Date.parse(value);
   return Number.isFinite(age) && age >= -60000 && age <= 15 * 60000;
+}
+
+// Para el escaneo a 72h las cuotas de partidos de manana o pasado no se
+// actualizan cada 15 minutos como las de hoy: se aceptan hasta 12h. Solo se
+// usa en la ruta de futbol del futuro; las alertas del dia siguen con 15 min.
+function recentFuture(value, now) {
+  const age = now - Date.parse(value);
+  return Number.isFinite(age) && age >= -60000 && age <= 12 * 3600000;
 }
 
 function price(value) {
@@ -94,12 +118,12 @@ export async function loadFutureModelData(options = {}) {
   const dateTo = new Date(end).toISOString().slice(0, 10);
   const espnDates = `${dateFrom.replaceAll('-', '')}-${dateTo.replaceAll('-', '')}`;
   const keys = options.oddsKeys || getOddsApiKeys();
-  async function oddsFor(sport) {
+  async function oddsForKey(oddsKey, regions, markets) {
     const fromIso = new Date(start).toISOString().replace(/\.\d{3}Z$/, 'Z');
     const toIso = new Date(end).toISOString().replace(/\.\d{3}Z$/, 'Z');
     for (const key of keys.filter(key => !inMemoryExhaustedKeys.has(key)).slice(0, 2)) {
-      const url = new URL(`https://api.the-odds-api.com/v4/sports/${sports[sport].odds}/odds/`);
-      url.search = new URLSearchParams({ apiKey: key, regions: 'us,eu', markets: 'h2h,spreads,totals', bookmakers: 'pinnacle,bet365',
+      const url = new URL(`https://api.the-odds-api.com/v4/sports/${oddsKey}/odds/`);
+      url.search = new URLSearchParams({ apiKey: key, regions, markets, bookmakers: 'pinnacle,bet365',
         commenceTimeFrom: fromIso, commenceTimeTo: toIso }).toString();
       try {
         const response = await request(url);
@@ -117,6 +141,9 @@ export async function loadFutureModelData(options = {}) {
       }
     }
     throw new Error('Sin cuotas disponibles en el pool The Odds API.');
+  }
+  async function oddsFor(sport) {
+    return oddsForKey(sports[sport].odds, 'us,eu', 'h2h,spreads,totals');
   }
   async function footballStats(sport, team) {
     const data = await json(`https://site.api.espn.com/apis/site/v2/sports/${sports[sport].path}/teams/${team.id}/statistics`);
@@ -142,14 +169,15 @@ export async function loadFutureModelData(options = {}) {
       try {
         return await json(url);
       } catch (err) {
-        if (sport === 'nba' && err.message && err.message.includes('400')) {
-          // ESPN NBA rechaza rangos con guión en scoreboard (HTTP 400). Fallback consultando fecha por fecha:
-          const nbaDays = [];
+        // ESPN rechaza rangos con guion en scoreboard (HTTP 400) en NBA, NFL y
+        // NCAAF. Fallback consultando fecha por fecha (antes solo existia para NBA):
+        if (err.message && err.message.includes('400')) {
+          const days = [];
           for (let d = new Date(start); d < new Date(end); d.setDate(d.getDate() + 1)) {
-            nbaDays.push(d.toISOString().slice(0, 10).replaceAll('-', ''));
+            days.push(d.toISOString().slice(0, 10).replaceAll('-', ''));
           }
-          const daysData = await Promise.all(nbaDays.map(dt =>
-            json(`https://site.api.espn.com/apis/site/v2/sports/${config.path}/scoreboard?dates=${dt}&limit=100`).catch(() => ({ events: [] }))
+          const daysData = await Promise.all(days.map(dt =>
+            json(`https://site.api.espn.com/apis/site/v2/sports/${config.path}/scoreboard?dates=${dt}&limit=100${sport === 'ncaaf' ? '&groups=80' : ''}`).catch(() => ({ events: [] }))
           ));
           return { events: daysData.flatMap(d => d.events || []) };
         }
@@ -157,10 +185,7 @@ export async function loadFutureModelData(options = {}) {
       }
     };
 
-    const [schedule, odds] = await Promise.all([
-      fetchSchedule(),
-      oddsFor(sport)
-    ]);
+    const schedule = await fetchSchedule();
     const fixtures = sport === 'mlb' ? (schedule.dates || []).flatMap(date => date.games || []).map(game => ({
       id: game.gamePk, date: game.gameDate, pending: ['Scheduled', 'Pre-Game'].includes(game.status?.detailedState),
       home: { id: game.teams?.home?.team?.id, name: game.teams?.home?.team?.name, pitcherId: game.teams?.home?.probablePitcher?.id, pitcherName: game.teams?.home?.probablePitcher?.fullName },
@@ -175,6 +200,15 @@ export async function loadFutureModelData(options = {}) {
     const upcoming = fixtures.filter(game => game.pending && Date.parse(game.date) > start && Date.parse(game.date) < end)
       .sort((first, second) => Date.parse(first.date) - Date.parse(second.date));
     coverage[sport] = { scheduled: upcoming.length, evaluated: 0, skipped: 0 };
+    let odds;
+    try {
+      odds = await oddsFor(sport);
+    } catch (error) {
+      // Sin cuotas no se puede evaluar ningun partido, pero el deporte ya no
+      // se tumba entero: queda registrado cuantos habia programados y el motivo.
+      notices.push(`${config.league}: ${error.message}`);
+      return;
+    }
     for (const game of upcoming.slice(0, 4)) {
       try {
         const matching = odds.filter(event => normalized(event.home_team) === normalized(game.home.name)
@@ -213,7 +247,7 @@ export async function loadFutureModelData(options = {}) {
     if (upcoming.length > 4) notices.push(`${config.league}: muestra de 4 partidos; cobertura parcial.`);
   }
   let footballClient;
-  async function loadSoccer() {
+  async function loadSoccerPrimary() {
     footballClient = createTicketClient({ ...options, now, fetchImpl: request, maxRequests: 30, reserveRequests: 10, budgetMs: 35000 });
     await footballClient.request('/status');
     const fixtures = new Map();
@@ -235,15 +269,15 @@ export async function loadFutureModelData(options = {}) {
       }
     }
     coverage.futbol = { scheduled: fixtures.size, evaluated: 0, skipped: 0 };
-    const priority = [...fixtures.values()].filter(fixture => [2, 3, 39, 61, 78, 135, 140, 253, 262].includes(fixture.league?.id))
-      .sort((first, second) => Date.parse(first.fixture.date) - Date.parse(second.fixture.date)).slice(0, 6);
+    const { picked: priority, usedTier2 } = pickSoccerFixtures([...fixtures.values()]);
+    if (usedTier2) notices.push('Futbol: sin suficientes partidos de ligas principales en 48h; se incluyeron ligas de segundo nivel (Eredivisie, Primeira Liga, Copa del Rey, Coppa Italia, etc.).');
     for (const fixture of priority) {
       try {
         let event;
         let book;
         for (const bookmaker of ['4', '8']) {
           const response = await footballClient.request('/odds', { fixture: String(fixture.fixture.id), bookmaker });
-          event = response.data.find(item => item.fixture?.id === fixture.fixture.id && recent(item.update, now()));
+          event = response.data.find(item => item.fixture?.id === fixture.fixture.id && recentFuture(item.update, now()));
           book = event?.bookmakers?.find(book => book.id === Number(bookmaker));
           if (book) break;
         }
@@ -272,6 +306,123 @@ export async function loadFutureModelData(options = {}) {
       }
     }
     if (fixtures.size > priority.length) notices.push('Futbol: muestra de hasta 6 partidos de ligas principales; cobertura parcial.');
+  }
+
+  // Respaldo de fútbol cuando API-Sports no responde (suspendida, 429 o sin
+  // saldo): calendario por ESPN (gratis, sin llave) + cuotas por The Odds API.
+  // Mejora 2, 2026-11-10. Solo ligas principales con slug ESPN y clave de
+  // cuotas conocidos; las copas (Copa del Rey, Coppa Italia) no tienen
+  // respaldo y quedan fuera con aviso. Máximo 4 ligas y 6 partidos para no
+  // quemar el pool de cuotas (3 créditos por liga: h2h+totals+btts en UE).
+  const SOCCER_FALLBACK_LEAGUES = [
+    { apiFootballId: 39, espn: 'eng.1', odds: 'soccer_epl', name: 'Premier League' },
+    { apiFootballId: 140, espn: 'esp.1', odds: 'soccer_spain_la_liga', name: 'LaLiga' },
+    { apiFootballId: 135, espn: 'ita.1', odds: 'soccer_italy_serie_a', name: 'Serie A' },
+    { apiFootballId: 78, espn: 'ger.1', odds: 'soccer_germany_bundesliga', name: 'Bundesliga' },
+  ];
+
+  async function loadSoccerFallback(reason) {
+    const days = [];
+    for (let d = new Date(start); d < new Date(end); d.setDate(d.getDate() + 1)) {
+      days.push(d.toISOString().slice(0, 10).replaceAll('-', ''));
+    }
+    const fixtures = [];
+    const seenFixtureIds = new Set();
+    for (const league of SOCCER_FALLBACK_LEAGUES) {
+      for (const day of days) {
+        try {
+          const data = await json(`https://site.api.espn.com/apis/site/v2/sports/soccer/${league.espn}/scoreboard?dates=${day}&limit=100`);
+          for (const ev of data.events || []) {
+            const comp = ev.competitions?.[0];
+            if (comp?.status?.type?.state !== 'pre') continue;
+            const home = comp.competitors?.find(c => c.homeAway === 'home')?.team;
+            const away = comp.competitors?.find(c => c.homeAway === 'away')?.team;
+            if (!home || !away) continue;
+            const date = Date.parse(ev.date);
+            if (date > start && date < end && !seenFixtureIds.has(ev.id)) {
+              seenFixtureIds.add(ev.id);
+              fixtures.push({ league, id: ev.id, date: ev.date, home, away });
+            }
+          }
+        } catch {
+          // Liga/día sin datos en ESPN: se omite sin tumbar el respaldo.
+        }
+      }
+    }
+    coverage.futbol = { scheduled: fixtures.length, evaluated: 0, skipped: 0 };
+    const picked = fixtures.sort((a, b) => Date.parse(a.date) - Date.parse(b.date)).slice(0, 6);
+    const oddsByLeague = new Map();
+    for (const league of [...new Set(picked.map(f => f.league))]) {
+      try {
+        oddsByLeague.set(league.espn, await oddsForKey(league.odds, 'eu', 'h2h,totals,btts'));
+      } catch (error) {
+        notices.push(`Futbol (respaldo): sin cuotas para ${league.name}: ${error.message}`);
+      }
+    }
+    const espnTeamGoals = async (league, team) => {
+      const data = await json(`https://site.api.espn.com/apis/site/v2/sports/soccer/${league.espn}/teams/${team.id}/statistics`);
+      const stats = (data.results?.stats?.categories || []).flatMap(category => category.stats || []);
+      const value = (names) => {
+        const entry = stats.find(item => names.includes(String(item.name).toLowerCase()));
+        const parsed = Number(String(entry?.value ?? entry?.displayValue ?? '').replaceAll(',', ''));
+        return Number.isFinite(parsed) ? parsed : null;
+      };
+      const goals = value(['goals', 'totalgoals', 'goalsscored']);
+      const games = value(['gamesplayed', 'appearances', 'matchesplayed', 'games']);
+      if (!(goals > 0) || !(games >= 5)) throw new Error('Sin promedio de goles ESPN suficiente para modelar.');
+      return { name: team.displayName, xG: goals / games, elo: getDynamicElo(team.displayName) };
+    };
+    for (const fixture of picked) {
+      try {
+        const events = oddsByLeague.get(fixture.league.espn) || [];
+        const matching = events.filter(event => normalized(event.home_team) === normalized(fixture.home.displayName)
+          && normalized(event.away_team) === normalized(fixture.away.displayName)
+          && Math.abs(Date.parse(event.commence_time) - Date.parse(fixture.date)) < 15 * 60000);
+        if (matching.length !== 1) throw new Error('Sin cruce unico de equipos y horario con cuotas.');
+        const book = matching[0].bookmakers?.filter(item => ['pinnacle', 'bet365'].includes(item.key) && recentFuture(item.last_update, now()))
+          .sort((first, second) => Number(second.key === 'pinnacle') - Number(first.key === 'pinnacle'))[0];
+        if (!book) throw new Error('Sin cuota sharp actualizada en 12h.');
+        const [home, away] = await Promise.all([
+          espnTeamGoals(fixture.league, fixture.home),
+          espnTeamGoals(fixture.league, fixture.away),
+        ]);
+        const find = (marketKey, outcomeName) => {
+          const market = book.markets?.find(item => item.key === marketKey);
+          const outcome = market?.outcomes?.find(item => normalized(item.name) === normalized(outcomeName));
+          return price(outcome?.price);
+        };
+        const total = book.markets?.find(item => item.key === 'totals');
+        const over = total?.outcomes?.find(item => normalized(item.name) === 'over' && item.point === 2.5);
+        const under = total?.outcomes?.find(item => normalized(item.name) === 'under' && item.point === 2.5);
+        const match = { id: `future-fallback-${fixture.id}`, sport: 'futbol', league: fixture.league.name, gameDate: fixture.date, home, away,
+          inputBasis: 'Respaldo ESPN + The Odds API: promedio de goles de temporada ESPN como tasa del modelo; no xG medido ni alineaciones confirmadas',
+          market: { homeOdds: find('h2h', fixture.home.displayName), awayOdds: find('h2h', fixture.away.displayName), drawOdds: find('h2h', 'Draw'), bttsOdds: find('btts', 'Yes'),
+            sharpBookmaker: book.title, isPinnacle: book.key === 'pinnacle', updatedAt: book.last_update },
+          vegas: { overUnder: 2.5, overOdds: price(over?.price), underOdds: price(under?.price) } };
+        match.market.hasRealOdds = Boolean(match.market.homeOdds && match.market.awayOdds && match.market.drawOdds);
+        if (!match.market.hasRealOdds) throw new Error('Cuotas 1X2 incompletas en el respaldo.');
+        result.soccerMatches.push(match);
+        coverage.futbol.evaluated++;
+      } catch (error) {
+        coverage.futbol.skipped++;
+        notices.push(`Futbol (respaldo): ${error.message}`);
+      }
+    }
+    notices.push(`Futbol: API-Sports no disponible (${reason}); respaldo ESPN + The Odds API: ${coverage.futbol.evaluated} evaluados de ${coverage.futbol.scheduled} programados.`);
+  }
+
+  async function loadSoccer() {
+    try {
+      await loadSoccerPrimary();
+    } catch (error) {
+      notices.push(`Futbol: ruta principal falló: ${error.message}`);
+      try {
+        await loadSoccerFallback(error.message);
+      } catch (fallbackError) {
+        notices.push(`Futbol: respaldo también falló: ${fallbackError.message}`);
+        coverage.futbol ||= { scheduled: null, evaluated: 0, skipped: 0 };
+      }
+    }
   }
   try {
     const jobs = [loadSoccer(), ...Object.keys(sports).map(loadAmericanSport)];

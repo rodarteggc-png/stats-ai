@@ -1,0 +1,223 @@
+{
+  "ratings": {
+    "milwaukee bucks": {
+      "pace": 101.9,
+      "ortg": 108.2,
+      "drtg": 116.4,
+      "games": 10,
+      "source": "live-espn"
+    },
+    "chicago bulls": {
+      "pace": 105.1,
+      "ortg": 107.6,
+      "drtg": 116.9,
+      "games": 9,
+      "source": "live-espn"
+    },
+    "brooklyn nets": {
+      "pace": 101.9,
+      "ortg": 107.1,
+      "drtg": 112.6,
+      "games": 10,
+      "source": "live-espn"
+    },
+    "indiana pacers": {
+      "pace": 102.3,
+      "ortg": 109.6,
+      "drtg": 112,
+      "games": 11,
+      "source": "live-espn"
+    },
+    "orlando magic": {
+      "pace": 101.5,
+      "ortg": 107.9,
+      "drtg": 113.4,
+      "games": 9,
+      "source": "live-espn"
+    },
+    "charlotte hornets": {
+      "pace": 99.5,
+      "ortg": 104.4,
+      "drtg": 112,
+      "games": 11,
+      "source": "live-espn"
+    },
+    "washington wizards": {
+      "pace": 101,
+      "ortg": 108.8,
+      "drtg": 112.3,
+      "games": 11,
+      "source": "live-espn"
+    },
+    "miami heat": {
+      "pace": 104.3,
+      "ortg": 110.2,
+      "drtg": 113.3,
+      "games": 10,
+      "source": "live-espn"
+    },
+    "cleveland cavaliers": {
+      "pace": 102.4,
+      "ortg": 112.7,
+      "drtg": 111.8,
+      "games": 11,
+      "source": "live-espn"
+    },
+    "toronto raptors": {
+      "pace": 103.1,
+      "ortg": 111.8,
+      "drtg": 110,
+      "games": 10,
+      "source": "live-espn"
+    },
+    "new york knicks": {
+      "pace": 100.1,
+      "ortg": 111.2,
+      "drtg": 107.8,
+      "games": 9,
+      "source": "live-espn"
+    },
+    "atlanta hawks": {
+      "pace": 104.8,
+      "ortg": 111.3,
+      "drtg": 110,
+      "games": 12,
+      "source": "live-espn"
+    },
+    "detroit pistons": {
+      "pace": 100.6,
+      "ortg": 112.3,
+      "drtg": 107.3,
+      "games": 10,
+      "source": "live-espn"
+    },
+    "boston celtics": {
+      "pace": 100.3,
+      "ortg": 114.1,
+      "drtg": 107.5,
+      "games": 10,
+      "source": "live-espn"
+    },
+    "philadelphia 76ers": {
+      "pace": 102.1,
+      "ortg": 109.5,
+      "drtg": 107.6,
+      "games": 11,
+      "source": "live-espn"
+    },
+    "sacramento kings": {
+      "pace": 102.4,
+      "ortg": 108.1,
+      "drtg": 116.3,
+      "games": 10,
+      "source": "live-espn"
+    },
+    "utah jazz": {
+      "pace": 102.8,
+      "ortg": 106,
+      "drtg": 113.1,
+      "games": 10,
+      "source": "live-espn"
+    },
+    "la clippers": {
+      "pace": 102.8,
+      "ortg": 109.8,
+      "drtg": 112.1,
+      "games": 9,
+      "source": "live-espn"
+    },
+    "new orleans pelicans": {
+      "pace": 104.5,
+      "ortg": 111,
+      "drtg": 114,
+      "games": 11,
+      "source": "live-espn"
+    },
+    "phoenix suns": {
+      "pace": 100.4,
+      "ortg": 111.2,
+      "drtg": 116.3,
+      "games": 9,
+      "source": "live-espn"
+    },
+    "denver nuggets": {
+      "pace": 100.2,
+      "ortg": 113.3,
+      "drtg": 112.9,
+      "games": 9,
+      "source": "live-espn"
+    },
+    "portland trail blazers": {
+      "pace": 102.7,
+      "ortg": 113.9,
+      "drtg": 110.7,
+      "games": 9,
+      "source": "live-espn"
+    },
+    "dallas mavericks": {
+      "pace": 101.5,
+      "ortg": 112.7,
+      "drtg": 109.8,
+      "games": 11,
+      "source": "live-espn"
+    },
+    "memphis grizzlies": {
+      "pace": 102.5,
+      "ortg": 113.3,
+      "drtg": 109.1,
+      "games": 10,
+      "source": "live-espn"
+    },
+    "golden state warriors": {
+      "pace": 101.5,
+      "ortg": 116.1,
+      "drtg": 110.3,
+      "games": 11,
+      "source": "live-espn"
+    },
+    "minnesota timberwolves": {
+      "pace": 102.6,
+      "ortg": 113.4,
+      "drtg": 106.4,
+      "games": 11,
+      "source": "live-espn"
+    },
+    "houston rockets": {
+      "pace": 99.7,
+      "ortg": 115,
+      "drtg": 109.1,
+      "games": 11,
+      "source": "live-espn"
+    },
+    "oklahoma city thunder": {
+      "pace": 101.4,
+      "ortg": 111,
+      "drtg": 106.1,
+      "games": 10,
+      "source": "live-espn"
+    },
+    "san antonio spurs": {
+      "pace": 102.3,
+      "ortg": 114.1,
+      "drtg": 106.8,
+      "games": 11,
+      "source": "live-espn"
+    },
+    "los angeles lakers": {
+      "pace": 101.5,
+      "ortg": 117.4,
+      "drtg": 112.3,
+      "games": 12,
+      "source": "live-espn"
+    }
+  },
+  "leagueAvg": {
+    "pace": 102,
+    "ortg": 111.1,
+    "drtg": 111.2
+  },
+  "fetchedAt": "2026-11-10T14:22:42.766Z",
+  "season": "2026-27",
+  "teams": 30,
+  "notices": []
+}

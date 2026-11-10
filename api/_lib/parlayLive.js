@@ -1,5 +1,6 @@
-import { getApiSportsKey } from '../../src/services/apiSports.js';
+import { getApiSportsKey, markApiSportsKeyUnhealthy } from '../../src/services/apiSports.js';
 import { getOddsApiKeys, inMemoryExhaustedKeys } from '../../src/services/sportsApi.js';
+import { createProviderGuard, isSuspendedError } from '../../src/services/providerGuard.js';
 
 const cache = new Map();
 const RESERVE_REQUESTS = 10;
@@ -8,11 +9,14 @@ const ODDS_API_SPORTS = { nba: 'basketball_nba', nfl: 'americanfootball_nfl', nc
 const FOOTBALL_MARKETS = ['match_winner', 'goals_over_under', 'both_teams_score', 'double_chance', 'asian_handicap'];
 const US_MARKETS = ['match_winner', 'total', 'spread'];
 
-export function createTicketClient({ fetchImpl = fetch, now = Date.now, apiKey = getApiSportsKey(), maxRequests = MAX_TICKET_REQUESTS, reserveRequests = RESERVE_REQUESTS, budgetMs = 20000 } = {}) {
+export function createTicketClient({ fetchImpl = fetch, now = Date.now, apiKey = getApiSportsKey(), maxRequests = MAX_TICKET_REQUESTS, reserveRequests = RESERVE_REQUESTS, budgetMs = 20000, providerGuard = null, guardMinIntervalMs = 150 } = {}) {
   let remaining = null;
   let requests = 0;
   let initialized = false;
   const deadline = now() + budgetMs;
+  // Guardrail anti-ráfaga (mejora 2, 2026-11-10): serializa las peticiones,
+  // impone ritmo mínimo y convierte un 429/suspensión en señal de respaldo.
+  const guard = providerGuard || createProviderGuard({ now, minIntervalMs: guardMinIntervalMs });
 
   async function request(path, params = {}, ttl = 60000) {
     const url = new URL(path, 'https://v3.football.api-sports.io');
@@ -26,6 +30,7 @@ export function createTicketClient({ fetchImpl = fetch, now = Date.now, apiKey =
     if (path !== '/status' && (!initialized || remaining === null || remaining <= reserveRequests)) {
       throw new Error(`Saldo diario insuficiente; se reservan ${reserveRequests} consultas para las alertas.`);
     }
+    await guard.acquire();
     requests++;
     if (remaining !== null) remaining--;
     const response = await fetchImpl(url, {
@@ -34,11 +39,24 @@ export function createTicketClient({ fetchImpl = fetch, now = Date.now, apiKey =
     });
     const header = response.headers.get('x-ratelimit-requests-remaining');
     if (header !== null && Number.isFinite(Number(header))) remaining = Number(header);
-    if (!response.ok) throw new Error(`API-Sports HTTP ${response.status}.`);
+    if (!response.ok) {
+      const failure = guard.noteFailure({ status: response.status });
+      // Rotación (2026-11-10): un 429 marca esta llave como no saludable en la
+      // instancia; el siguiente cliente usará la otra llave del pool.
+      if (failure.degraded) markApiSportsKeyUnhealthy(apiKey, '429');
+      if (failure.degraded) throw new Error('API-Sports 429: límite de peticiones superado; proveedor degradado, usa el respaldo.');
+      throw new Error(`API-Sports HTTP ${response.status}.`);
+    }
     const data = await response.json();
     if (data.errors && Object.keys(data.errors).length) {
-      throw new Error(`API-Sports: ${Object.values(data.errors).join(' ').slice(0, 180)}`);
+      const message = Object.values(data.errors).join(' ');
+      if (isSuspendedError(message)) {
+        markApiSportsKeyUnhealthy(apiKey, 'suspended');
+        throw new Error(`API-Sports: cuenta suspendida. ${message.slice(0, 180)}`);
+      }
+      throw new Error(`API-Sports: ${message.slice(0, 180)}`);
     }
+    guard.noteSuccess({ remaining });
     const value = { data: data.response, checkedAt: new Date(now()).toISOString(), paging: data.paging };
     if (path === '/status') {
       const current = data.response?.requests?.current;
@@ -55,7 +73,7 @@ export function createTicketClient({ fetchImpl = fetch, now = Date.now, apiKey =
     return value;
   }
 
-  return { request, usage: () => ({ remaining, requests, reserve: reserveRequests }) };
+  return { request, usage: () => ({ remaining, requests, reserve: reserveRequests, providerGuard: guard.state() }) };
 }
 
 function normalizeTeam(value = '') {

@@ -1,6 +1,6 @@
 // api/quota.js - Vercel Serverless Function para auditar cuota de The Odds API y API-Sports
 import { getOddsApiKeys } from '../src/services/sportsApi.js';
-import { getApiSportsStatus } from '../src/services/apiSports.js';
+import { getApiSportsStatusAll } from '../src/services/apiSports.js';
 
 export default async function handler(req, res) {
   try {
@@ -53,20 +53,24 @@ export default async function handler(req, res) {
           keys: results
         };
       })(),
-      getApiSportsStatus()
+      getApiSportsStatusAll()
     ]);
+
+    const firstKey = apiSportsStatus.keys?.[0] || {};
 
     return res.status(200).json({
       success: true,
       timestamp: new Date().toISOString(),
       apiSports: {
         provider: 'API-SPORTS (api-sports.io)',
-        plan: apiSportsStatus.plan,
-        active: apiSportsStatus.active,
-        dailyLimit: apiSportsStatus.dailyLimit,
-        requestsUsedToday: apiSportsStatus.requestsUsedToday,
-        remainingToday: apiSportsStatus.remainingToday,
-        status: apiSportsStatus.success ? '🟢 CONECTADA Y OPERATIVA' : '🔴 ERROR'
+        plan: firstKey.plan,
+        active: firstKey.active,
+        dailyLimit: apiSportsStatus.poolSummary.totalCapacity,
+        requestsUsedToday: apiSportsStatus.poolSummary.totalUsed,
+        remainingToday: apiSportsStatus.poolSummary.totalRemaining,
+        status: apiSportsStatus.poolSummary.healthyKeys > 0 ? '🟢 CONECTADA Y OPERATIVA' : '🔴 ERROR',
+        poolSummary: apiSportsStatus.poolSummary,
+        keys: apiSportsStatus.keys
       },
       theOddsApi: theOddsApiResults
     });

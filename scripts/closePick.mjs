@@ -59,8 +59,9 @@ if (isSummary) {
   const totalStaked = closed.reduce((acc, p) => acc + (parseFloat(p.stakeUnits) || 1.0), 0);
   const roi = totalStaked > 0 ? ((netUnits / totalStaked) * 100).toFixed(1) : '0.0';
   const beatClvCount = closed.filter(p => (parseFloat(p.clvPct) || 0) > 0).length;
-  const clvRate = closed.length > 0 ? ((beatClvCount / closed.length) * 100).toFixed(1) : '0.0';
-  const avgClv = closed.length > 0 ? (closed.reduce((acc, p) => acc + (parseFloat(p.clvPct) || 0), 0) / closed.length).toFixed(2) : '0.00';
+  const withClv = closed.filter(p => p.clvPct !== null && p.clvPct !== undefined);
+  const clvRate = withClv.length > 0 ? ((beatClvCount / withClv.length) * 100).toFixed(1) : null;
+  const avgClv = withClv.length > 0 ? (withClv.reduce((acc, p) => acc + (parseFloat(p.clvPct) || 0), 0) / withClv.length).toFixed(2) : null;
 
   console.log(`\n======================================================`);
   console.log(`📊 RESUMEN AUDITADO DEL PICK LEDGER`);
@@ -72,7 +73,7 @@ if (isSummary) {
   console.log(`Hit Rate (Win %):        ${winRate}%`);
   console.log(`P&L Neto Acumulado:      ${netUnits >= 0 ? '+' : ''}${netUnits.toFixed(2)} Unidades`);
   console.log(`ROI Real:                ${roi}%`);
-  console.log(`Beat Closing Line (CLV): ${clvRate}% (Promedio CLV: ${avgClv}%)`);
+  console.log(`Beat Closing Line (CLV): ${clvRate === null ? 'sin datos (no hay cierres capturados)' : `${clvRate}% (Promedio CLV: ${avgClv}%)`}`);
   console.log(`======================================================\n`);
   process.exit(0);
 }
@@ -106,10 +107,12 @@ if (pickId && result) {
   const p = picks[idx];
   const placedOdds = parseFloat(p.placedOdds) || 1.90;
   const stake = parseFloat(p.stakeUnits) || 1.0;
-  const finalCloseOdds = closingOdds || placedOdds;
+  // Sin cuota de cierre capturada no hay CLV: null, nunca se copia la cuota
+  // publicada (ese bug dejaba clvPct 0 en todos los cierres; ver gradeLedger.mjs).
+  const finalCloseOdds = closingOdds || null;
 
-  // Cálculo CLV: ((placed / close) - 1) * 100
-  const clvPct = Number((((placedOdds / finalCloseOdds) - 1) * 100).toFixed(2));
+  // Cálculo CLV: ((placed / close) - 1) * 100; null si no hay cierre real.
+  const clvPct = finalCloseOdds ? Number((((placedOdds / finalCloseOdds) - 1) * 100).toFixed(2)) : null;
 
   // Cálculo PnL
   let pnlUnits = 0;

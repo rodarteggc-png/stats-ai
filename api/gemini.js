@@ -5,7 +5,7 @@ const ALLOWED = {
 };
 const MAX_BODY_BYTES = 200 * 1024;
 
-const FALLBACK_GEMINI_KEY = [65,81,46,65,98,56,82,78,54,73,103,87,102,101,116,101,118,120,45,77,121,115,103,97,53,111,100,100,112,84,56,45,78,53,80,111,108,90,99,83,48,80,79,99,103,100,90,78,110,112,104,121,103].map(c => String.fromCharCode(c)).join('');
+const FALLBACK_GEMINI_KEY = ''; // Sin llave en el codigo: solo GEMINI_API_KEY en variables de entorno.
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {

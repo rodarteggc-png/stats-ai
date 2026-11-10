@@ -41,14 +41,61 @@ const LEAGUE_AVERAGE_PACE = 99.2;
 const LEAGUE_AVERAGE_EFFICIENCY = 114.5;
 const HOME_COURT_ADVANTAGE_PTS = 2.4;
 
+// Ratings en vivo (ESPN, temporada en curso), cargados por src/services/nbaRatings.js.
+// Misma forma que la tabla estática: { 'nombre normalizado': { pace, ortg, drtg, games, source } }.
+// Si es null, el modelo usa la tabla estática (respaldo). Las fórmulas no cambian: solo la fuente de datos.
+let LIVE_NBA_RATINGS = null;
+
+export function setLiveNbaRatings(ratings) {
+  LIVE_NBA_RATINGS = ratings && typeof ratings === 'object' ? ratings : null;
+}
+
+export function getLiveNbaRatings() {
+  return LIVE_NBA_RATINGS;
+}
+
+export function clearLiveNbaRatings() {
+  LIVE_NBA_RATINGS = null;
+}
+
 export function getNbaTeamBaseline(teamName = '') {
   const norm = teamName.toLowerCase().trim();
+  if (!norm) return { pace: LEAGUE_AVERAGE_PACE, ortg: LEAGUE_AVERAGE_EFFICIENCY, drtg: LEAGUE_AVERAGE_EFFICIENCY };
+  // 1) Ratings en vivo (ESPN, temporada en curso) cuando están cargados.
+  const live = getLiveNbaRatings();
+  if (live) {
+    for (const [key, val] of Object.entries(live)) {
+      if (norm.includes(key) || key.includes(norm)) {
+        return val;
+      }
+    }
+  }
+  // 2) Tabla estática (fósil: última actualización manual, sin fecha) solo como respaldo.
   for (const [key, val] of Object.entries(NBA_TEAM_METRICS)) {
     if (norm.includes(key) || key.includes(norm)) {
       return val;
     }
   }
   return { pace: LEAGUE_AVERAGE_PACE, ortg: LEAGUE_AVERAGE_EFFICIENCY, drtg: LEAGUE_AVERAGE_EFFICIENCY };
+}
+
+/**
+ * Origen del rating que se usará para un equipo: 'live' | 'static' | 'average'.
+ * Diagnóstico: permite auditar si el modelo corre con datos frescos o con la tabla fósil.
+ */
+export function getNbaBaselineSource(teamName = '') {
+  const norm = (teamName || '').toLowerCase().trim();
+  if (!norm) return 'average';
+  const live = getLiveNbaRatings();
+  if (live) {
+    for (const key of Object.keys(live)) {
+      if (norm.includes(key) || key.includes(norm)) return 'live';
+    }
+  }
+  for (const key of Object.keys(NBA_TEAM_METRICS)) {
+    if (norm.includes(key) || key.includes(norm)) return 'static';
+  }
+  return 'average';
 }
 const getTeamBaseline = getNbaTeamBaseline;
 
@@ -99,8 +146,14 @@ export function calculateNbaProbabilities(match) {
   const awayWinProb = 1 - homeWinProb;
 
   // Evaluación de cuotas de mercado (Vegas / Pinnacle)
-  const marketSpread = parseFloat(match.spread || (match.odds?.spread !== undefined ? match.odds.spread : 0));
-  const marketTotal = parseFloat(match.total || (match.odds?.overUnder !== undefined ? match.odds.overUnder : Math.round(projectedTotal)));
+  // Sin línea publicada (partido finalizado o línea aún no publicada), el spread es 0
+  // (pick'em) y el total es el proyectado: nunca NaN. Los emisores de picks ya exigen
+  // línea real (m.spread !== null / m.total !== null), así que esto solo evita
+  // probabilidades NaN en la UI y en /futuro; no crea picks fantasma.
+  const parsedSpread = parseFloat(match.spread ?? match.odds?.spread);
+  const marketSpread = Number.isFinite(parsedSpread) ? parsedSpread : 0;
+  const parsedTotal = parseFloat(match.total ?? match.odds?.overUnder);
+  const marketTotal = Number.isFinite(parsedTotal) ? parsedTotal : Math.round(projectedTotal);
 
   // Probabilidad de cubrir el spread de mercado
   // Si marketSpread es -4.5 para Home, Home cubre si Margin >= 4.5
@@ -126,6 +179,8 @@ export function calculateNbaProbabilities(match) {
     overProb: Number((overProb * 100).toFixed(1)),
     underProb: Number((underProb * 100).toFixed(1)),
     marketSpread,
-    marketTotal
+    marketTotal,
+    // Origen de los ratings usados ('live' solo si AMBOS equipos traen datos frescos).
+    ratingsSource: (getNbaBaselineSource(homeName) === 'live' && getNbaBaselineSource(awayName) === 'live') ? 'live' : 'static'
   };
 }

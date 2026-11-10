@@ -11,6 +11,10 @@
     "alert:telegram": "node scripts/alertEngine.js",
     "audit:nightly": "node scripts/auditNightly.mjs",
     "ledger:summary": "node scripts/closePick.mjs --summary",
+    "ledger:grade": "node scripts/gradeLedger.mjs --apply --fix-clv",
+    "ledger:report": "node scripts/ledgerReport.mjs",
+    "bankroll:status": "node scripts/bankrollReset.mjs --status",
+    "nba:ratings": "node scripts/updateNbaRatings.mjs",
     "backtest": "node scripts/backtest.js"
   },
   "dependencies": {

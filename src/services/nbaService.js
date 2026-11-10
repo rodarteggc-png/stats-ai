@@ -3,6 +3,7 @@
 // Combina ESPN Scoreboard oficial (gratuito) con cuotas institucionales de Pinnacle vía API-Sports
 
 import { calculateNbaProbabilities } from '../utils/hoops.js';
+import { ensureLiveNbaRatings } from './nbaRatings.js';
 
 const NBA_CACHE = new Map();
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hora
@@ -18,6 +19,21 @@ export async function fetchNbaSchedule(range = 'hoy') {
   }
 
   try {
+    // Ratings en vivo (ESPN, temporada en curso) antes de calcular probabilidades.
+    // Si ESPN falla, ensureLiveNbaRatings devuelve null y el modelo sigue con la tabla
+    // estática de hoops.js: el escaneo nunca se rompe por esto.
+    try {
+      const live = await ensureLiveNbaRatings();
+      if (live) {
+        console.log(`[NBA] Ratings en vivo cargados: ${live.teams} equipos (${live.season || 'temporada en curso'}), promedio liga ORtg ${live.leagueAvg.ortg}.`);
+        if (live.notices?.length) live.notices.forEach((n) => console.warn(`[NBA] ${n}`));
+      } else {
+        console.warn('[NBA] Ratings en vivo no disponibles; se usa la tabla estática de hoops.js.');
+      }
+    } catch (err) {
+      console.warn('[NBA] No se pudieron cargar ratings en vivo, se usa tabla estática:', err.message);
+    }
+
     const url = new URL('https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard');
     if (/^\d{8}(?:-\d{8})?$/.test(range)) url.searchParams.set('dates', range);
     const res = await fetch(url, { headers: { 'User-Agent': 'StatsAIPro/1.0' } });

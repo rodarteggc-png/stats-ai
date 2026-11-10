@@ -70,6 +70,19 @@ export default function App() {
 
   // History & Learning State
   const [history, setHistory] = useState([]);
+  // Récord verificado del ledger publicado (mejora 5, 2026-11-10): se lee de
+  // /record.json, generado por scripts/ledgerReport.mjs desde
+  // data/pick_ledger.jsonl. Es el récord REAL (no el backtest del 83.9%).
+  // Si el archivo no existe (dev local), la tarjeta simplemente no aparece.
+  const [verifiedRecord, setVerifiedRecord] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/record.json')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (!cancelled && data && data.overall) setVerifiedRecord(data); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
   const [lessons, setLessons] = useState([]);
   const [globalStats, setGlobalStats] = useState({ total: 0, won: 0, lost: 0, accuracy: 0, roi: 0 });
   const [diagnosingId, setDiagnosingId] = useState(null);
@@ -3849,6 +3862,33 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            {/* RÉCORD VERIFICADO DEL LEDGER (mejora 5, 2026-11-10) */}
+            {verifiedRecord && (
+              <div style={{ background: verifiedRecord.overall.roiPct >= 0 ? "#10b98111" : "#ef444411", border: `1px solid ${verifiedRecord.overall.roiPct >= 0 ? "#10b98155" : "#ef444455"}`, borderRadius: 12, padding: "16px 20px", marginTop: 15 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "#94a3b8" }}>
+                  📜 RÉCORD VERIFICADO DEL LEDGER — PICKS PUBLICADOS EN TELEGRAM, CALIFICADOS CON MARCADOR FINAL
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 28px", marginTop: 8, fontSize: 15, fontWeight: 800, color: "#f8fafc" }}>
+                  <span>{verifiedRecord.overall.wins}W - {verifiedRecord.overall.losses}L - {verifiedRecord.overall.pushes}P ({verifiedRecord.overall.hitRate}% acierto)</span>
+                  <span style={{ color: verifiedRecord.overall.roiPct >= 0 ? "#10b981" : "#ef4444" }}>
+                    ROI {verifiedRecord.overall.roiPct >= 0 ? "+" : ""}{verifiedRecord.overall.roiPct}% ({verifiedRecord.overall.netUnits >= 0 ? "+" : ""}{verifiedRecord.overall.netUnits}u)
+                  </span>
+                  <span style={{ color: "#94a3b8", fontWeight: 700 }}>
+                    Modelo decía {verifiedRecord.overall.avgProbPct}% · CLV: {verifiedRecord.clv.n === 0 ? "sin datos" : `${verifiedRecord.clv.beatRatePct}%`}
+                  </span>
+                  <span style={{ color: "#94a3b8", fontWeight: 700 }}>
+                    Drawdown máx. {verifiedRecord.drawdown.maxDrawdownUnits}u
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 6 }}>
+                  {verifiedRecord.closed} picks cerrados de {verifiedRecord.totalPicks} publicados
+                  {verifiedRecord.pending > 0 ? ` · ${verifiedRecord.pending} pendiente(s)` : ""} · Actualizado {new Date(verifiedRecord.generatedAt).toLocaleDateString("es-MX")}
+                  {verifiedRecord.warnings && verifiedRecord.warnings.length > 0 ? ` · ${verifiedRecord.warnings[0]}` : ""}
+                  {" "}· El 83.9% publicitado es un backtest, no este récord.
+                </div>
+              </div>
+            )}
 
             {/* SECCIÓN 1: BASE DE CONOCIMIENTOS (LECCIONES ACTIVAS) */}
             {lessons.length > 0 && (

@@ -118,7 +118,7 @@ export function formatFutureMultiSport(report) {
   lines.push(
     `Red: ${report.usage.requests}/60 peticiones. API-Football: ${report.usage.apiFootball?.requests ?? 0}/30; saldo ${report.usage.apiFootball?.remaining ?? '?'}; reserva observada 10.`,
     `The Odds API: ${report.usage.oddsCalls} peticiones; creditos reportados ${report.usage.oddsCredits} (si el proveedor informa consumo). Cada peticion puede costar varios creditos.`,
-    'Cobertura parcial: hasta 6 partidos de futbol y 4 por cada otro deporte. Datos faltantes, cuotas >15 min y mercados sin precio se omiten.',
+    'Cobertura parcial: hasta 6 partidos de futbol y 4 por cada otro deporte. Datos faltantes y mercados sin precio se omiten; en futbol a 72h se aceptan cuotas actualizadas en las ultimas 12 h (las de hoy exigen 15 min).',
     'Son candidatos, no picks oficiales: no se publican al canal, no se registran en el ledger y requieren revisar alineaciones y cuotas cerca del inicio.',
     'No se confirma RLM, no se garantiza acierto y no se aumenta el limite contratado ni se compra cuota adicional.'
   );

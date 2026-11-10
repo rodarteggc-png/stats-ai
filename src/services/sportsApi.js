@@ -396,12 +396,7 @@ export function extractEspnSharpMarket(oddsObj, homeName = "Local", awayName = "
 // ================= CACHÉ PERSISTENTE (3 HORAS) Y POOL DE LLAVES =================
 const ODDS_CACHE_TTL_MS = 3 * 60 * 60 * 1000; // 3 Horas exactas
 
-const BUILTIN_ODDS_API_KEYS = [
-  'f4be189edb927a1635acef59d40362c7',
-  '808792fe357f689d26d811f76898eb30',
-  '2cf22cbdc223414dccab14aac31334ba',
-  '0adaba07b5df146cce420b554c5a56f4'
-];
+const BUILTIN_ODDS_API_KEYS = []; // Sin llaves en el codigo: solo ODDS_API_KEYS en variables de entorno o la llave que el usuario pegue en Ajustes (localStorage).
 
 export const inMemoryExhaustedKeys = new Set();
 

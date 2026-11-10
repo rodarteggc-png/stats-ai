@@ -5,26 +5,81 @@
 
 import { fetchWithRetry } from './httpClient.js';
 
-const DEFAULT_APISPORTS_KEY = '7184f1016b68c388a5c1e102b0f6eaef';
+// Sin llave en el codigo: solo APISPORTS_KEY en variables de entorno (servidor).
 const CACHE_TTL_MS = 3 * 60 * 60 * 1000; // 3 Horas de caché (consumo mínimo: ~2 a 4 req/día)
 
 const memoryCache = new Map();
 
-export function getApiSportsKey() {
+// Pool de llaves API-Sports (rotación 2026-11-10).
+// El plan gratuito da 100 req/día POR LLAVE, y /futuro consume hasta 30 por toque,
+// así que una sola llave se satura. Con 2 llaves el tope diario es 200.
+// Configuración en Vercel: APISPORTS_KEYS con las llaves separadas por coma
+// (ej. "llaveNueva,llaveVieja"); APISPORTS_KEY singular sigue funcionando como respaldo.
+// La llave vieja suspendida NO debe entrar al pool hasta confirmar su desbloqueo:
+// cada petición con ella fallaría y la mitad del tráfico se perdería.
+// Cada invocación usa la siguiente llave sana (round-robin); una llave que responde
+// 429 o suspensión se marca no saludable en ESTA instancia y las siguientes
+// invocaciones usan la otra. Si todas están marcadas, se usa la primera y el
+// llamador degrada y usa el respaldo, igual que con una sola llave.
+// Los valores de las llaves nunca se registran en logs ni se devuelven: solo
+// se exponen los últimos 4 caracteres enmascarados (ver getApiSportsStatusAll).
+export const inMemoryUnhealthyApiSportsKeys = new Set();
+let lastApiSportsKeyIndex = -1;
+
+export function getApiSportsKeys() {
   if (typeof process !== 'undefined' && process.env) {
-    const envKey = (process.env.APISPORTS_KEY || process.env.API_SPORTS_KEY || '').trim();
-    if (envKey && envKey.length > 10) return envKey;
+    // APISPORTS_KEYS (plural) tiene precedencia EXCLUSIVA: si existe, la singular
+    // se ignora, para que una llave vieja suspendida no contamine el pool.
+    const plural = (process.env.APISPORTS_KEYS || '').trim();
+    if (plural) {
+      return [...new Set(plural.split(/[\n,;]+/).map((k) => k.trim()).filter((k) => k.length > 10))];
+    }
+    const singular = (process.env.APISPORTS_KEY || process.env.API_SPORTS_KEY || '').trim();
+    if (singular) {
+      return [...new Set(singular.split(/[\n,;]+/).map((k) => k.trim()).filter((k) => k.length > 10))];
+    }
   }
-  return DEFAULT_APISPORTS_KEY;
+  return [];
+}
+
+export function getApiSportsKeyEntry() {
+  const keys = getApiSportsKeys();
+  if (!keys.length) return { key: '', index: -1 };
+  const healthy = keys.map((key, index) => ({ key, index }))
+    .filter(({ key }) => !inMemoryUnhealthyApiSportsKeys.has(key));
+  const pool = healthy.length ? healthy : keys.map((key, index) => ({ key, index }));
+  lastApiSportsKeyIndex = (lastApiSportsKeyIndex + 1) % pool.length;
+  return pool[lastApiSportsKeyIndex];
+}
+
+export function getApiSportsKey() {
+  return getApiSportsKeyEntry().key;
+}
+
+export function markApiSportsKeyUnhealthy(key, _reason = '') {
+  if (key) inMemoryUnhealthyApiSportsKeys.add(key);
+}
+
+export function resetApiSportsKeyHealth() {
+  inMemoryUnhealthyApiSportsKeys.clear();
+  lastApiSportsKeyIndex = -1;
+}
+
+export function getApiSportsPoolState() {
+  const keys = getApiSportsKeys();
+  const unhealthy = keys.filter((k) => inMemoryUnhealthyApiSportsKeys.has(k)).length;
+  return { total: keys.length, healthy: keys.length - unhealthy, unhealthy };
 }
 
 /**
  * Consulta el estado de cuenta y consumo de cuota diaria en API-Sports
+ * para UNA llave (por defecto, la siguiente del pool). Detecta la suspensión
+ * tanto por HTTP como por el cuerpo de errores de la API.
  */
-export async function getApiSportsStatus() {
-  const apiKey = getApiSportsKey();
+export async function getApiSportsStatus(apiKeyOverride = '') {
+  const apiKey = apiKeyOverride || getApiSportsKey();
   if (!apiKey) {
-    return { success: false, error: 'APISPORTS_KEY no configurada', requestsUsedToday: null, dailyLimit: 100, remainingToday: null };
+    return { success: false, error: 'APISPORTS_KEY no configurada', requestsUsedToday: null, dailyLimit: 100, remainingToday: null, suspended: false, status: '🔴 ERROR' };
   }
   try {
     const res = await fetchWithRetry('https://v3.football.api-sports.io/status', {
@@ -32,6 +87,10 @@ export async function getApiSportsStatus() {
     }, { retries: 1, timeoutMs: 5000 });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    const errorText = Object.values(data.errors || {}).join(' ');
+    if (/suspended/i.test(errorText)) {
+      return { success: false, error: errorText.slice(0, 180), requestsUsedToday: null, dailyLimit: 100, remainingToday: null, suspended: true, status: '🔴 SUSPENDIDA' };
+    }
     return {
       success: true,
       account: data.response?.account?.firstname + ' ' + (data.response?.account?.lastname || ''),
@@ -41,17 +100,54 @@ export async function getApiSportsStatus() {
       expires: data.response?.subscription?.end,
       requestsUsedToday: data.response?.requests?.current ?? 0,
       dailyLimit: data.response?.requests?.limit_day ?? 100,
-      remainingToday: (data.response?.requests?.limit_day ?? 100) - (data.response?.requests?.current ?? 0)
+      remainingToday: (data.response?.requests?.limit_day ?? 100) - (data.response?.requests?.current ?? 0),
+      suspended: false,
+      status: '🟢 CONECTADA Y OPERATIVA'
     };
   } catch (err) {
+    const suspended = /suspended/i.test(err.message || '');
     return {
       success: false,
       error: err.message,
       requestsUsedToday: null,
       dailyLimit: 100,
-      remainingToday: null
+      remainingToday: null,
+      suspended,
+      status: suspended ? '🔴 SUSPENDIDA' : '🔴 ERROR'
     };
   }
+}
+
+/**
+ * Estado de TODAS las llaves del pool (1 petición /status por llave).
+ * Nunca expone valores: solo los últimos 4 caracteres enmascarados.
+ */
+export async function getApiSportsStatusAll() {
+  const keys = getApiSportsKeys();
+  const results = [];
+  for (let i = 0; i < keys.length; i++) {
+    const status = await getApiSportsStatus(keys[i]);
+    results.push({
+      id: `Llave ${i + 1}`,
+      key: `****${keys[i].slice(-4)}`,
+      ...status
+    });
+  }
+  const totalCapacity = results.reduce((acc, r) => acc + (r.dailyLimit || 0), 0);
+  const totalUsed = results.reduce((acc, r) => acc + (r.requestsUsedToday || 0), 0);
+  const totalRemaining = results.reduce((acc, r) => acc + (r.remainingToday || 0), 0);
+  return {
+    poolSummary: {
+      totalKeys: keys.length,
+      healthyKeys: results.filter((r) => r.success && !r.suspended).length,
+      suspendedKeys: results.filter((r) => r.suspended).length,
+      totalCapacity,
+      totalRemaining,
+      totalUsed,
+      usagePercentage: totalCapacity > 0 ? ((totalUsed / totalCapacity) * 100).toFixed(1) + '%' : '0%'
+    },
+    keys: results
+  };
 }
 
 /**
