@@ -13,6 +13,10 @@
     "ledger:summary": "node scripts/closePick.mjs --summary",
     "ledger:grade": "node scripts/gradeLedger.mjs --apply --fix-clv",
     "ledger:report": "node scripts/ledgerReport.mjs",
+    "paper:scan": "node scripts/alertEngine.js --paper",
+    "paper:grade": "node scripts/gradePaper.mjs --apply",
+    "paper:report": "node scripts/paperReport.mjs",
+    "paper:import": "node scripts/paperImport.mjs",
     "bankroll:status": "node scripts/bankrollReset.mjs --status",
     "nba:ratings": "node scripts/updateNbaRatings.mjs",
     "backtest": "node scripts/backtest.js"

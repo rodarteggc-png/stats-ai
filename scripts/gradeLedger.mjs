@@ -252,8 +252,10 @@ function splitGame(game) {
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-export async function gradePendingPicks({ fetchImpl = fetch, apply = false, onlyId = null, limit = Infinity, ledgerPath = LEDGER_PATH } = {}) {
-  const closuresPath = path.join(path.dirname(ledgerPath), 'pick_ledger_closures.jsonl');
+export async function gradePendingPicks({ fetchImpl = fetch, apply = false, onlyId = null, limit = Infinity, ledgerPath = LEDGER_PATH, closuresPath = null } = {}) {
+  // closuresPath separado para el ledger paper (gradePaper): las clausuras
+  // paper nunca deben mezclarse con pick_ledger_closures.jsonl del récord real.
+  const closuresFile = closuresPath || path.join(path.dirname(ledgerPath), 'pick_ledger_closures.jsonl');
   if (!fs.existsSync(ledgerPath)) return { graded: [], skipped: [], error: 'Ledger no encontrado.' };
   const picks = fs.readFileSync(ledgerPath, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
   const pending = picks.filter(p => p.status === 'PENDING' && (!onlyId || p.id === onlyId)).slice(0, limit);
@@ -336,7 +338,7 @@ export async function gradePendingPicks({ fetchImpl = fetch, apply = false, only
       game: g.pick.game, pick: g.pick.pick, score: g.score,
       result: g.result, pnlUnits: g.pnlUnits, closingOdds: null, clvPct: null,
     })).join('\n') + '\n';
-    fs.appendFileSync(closuresPath, lines, 'utf-8');
+    fs.appendFileSync(closuresFile, lines, 'utf-8');
   }
   return { graded, skipped, total: pending.length };
 }

@@ -14,6 +14,7 @@ import { calculateNflProbabilities } from '../src/utils/gridiron.js';
 import { simulateSoccerMatch, simulateMlbMatch, simulateNflMatch } from '../src/utils/monteCarlo.js';
 import { evaluateEnsembleConsensus } from '../src/utils/ensemble.js';
 import { applyPlattCalibration, recalibrateFromAudit, hydratePlattCoefficients } from '../src/utils/calibration.js';
+import { buildPaperEntry, compactPaperEntry, expandPaperEntry, paperSlateMessage, accumulatePaperReport, paperReportSectionLines, PAPER_MAX_STASH_ENTRIES, PAPER_MAX_STASH_JSON_CHARS } from '../src/utils/paperLedger.js';
 import { getPairCorrelation } from '../src/utils/correlationMatrix.js';
 import { detectReverseLineMovement } from '../src/utils/rlmDetector.js';
 import { auditCandidateAsTipsterPro } from '../src/utils/tipsterAuditor.js';
@@ -273,6 +274,61 @@ function mirrorLedgerEntryToTelegram(entry) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ chat_id: ledgerChat, text: `LEDGER ${JSON.stringify(entry)}`, disable_notification: true })
   }).catch(err => console.warn('Aviso espejo ledger:', err.message));
+}
+
+/**
+ * MODO PAPER (2026-11-10): espejo de una entrada paper en el mismo canal del
+ * ledger, con prefijo PAPER_LEDGER para no mezclarse jamás con el ledger real.
+ * Los lectores del ledger real ignoran cualquier mensaje que no empiece por "LEDGER ".
+ */
+function mirrorPaperEntryToTelegram(entry) {
+  const ledgerChat = process.env.TELEGRAM_LEDGER_CHAT_ID;
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (!ledgerChat || !botToken) return;
+  fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: ledgerChat, text: `PAPER_LEDGER ${JSON.stringify(entry)}`, disable_notification: true })
+  }).catch(err => console.warn('Aviso espejo paper:', err.message));
+}
+
+/**
+ * MODO PAPER (2026-11-10): registra una entrada paper en data/paper_ledger.jsonl
+ * (nunca en pick_ledger.jsonl) y la espeja a Telegram. Devuelve true si la
+ * entrada quedó registrada (false si ya existía por id). En Vercel el disco es
+ * de solo lectura: el append falla y solo queda el espejo Telegram.
+ */
+export function recordPaperPick(entry, { paperPath } = {}) {
+  try {
+    const dataDir = path.join(__dirname, '..', 'data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    const paperFile = paperPath || path.join(dataDir, 'paper_ledger.jsonl');
+    let exists = false;
+    if (fs.existsSync(paperFile)) {
+      const lines = fs.readFileSync(paperFile, 'utf-8').split('\n').filter(Boolean);
+      for (const line of lines) {
+        try {
+          if (JSON.parse(line).id === entry.id) { exists = true; break; }
+        } catch (e) {}
+      }
+    }
+    if (!exists) {
+      fs.appendFileSync(paperFile, JSON.stringify(entry) + '\n', 'utf-8');
+      console.log(`🧪 Paper [${entry.id}] asentado en data/paper_ledger.jsonl`);
+      mirrorPaperEntryToTelegram(entry);
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.error('Error registrando pick paper:', err.message);
+    if (err.code === 'EROFS' || err.code === 'EACCES' || err.code === 'ENOENT') {
+      mirrorPaperEntryToTelegram(entry);
+      return true;
+    }
+    return false;
+  }
 }
 
 /**
@@ -1236,6 +1292,85 @@ function resolveOddsProvenance(opp) {
   }
 
   opp.oddsSource = m.market?.hasRealOdds ? 'market' : 'model';
+}
+
+/**
+ * Clasifica una oportunidad cruda: aprobada o vetada (con motivo).
+ * Contiene EXACTAMENTE las condiciones y el orden del filtro de aprobación
+ * histórico de buildOpportunitiesAndTopSlate: moverlas aquí no cambia qué se
+ * aprueba; solo permite registrar el motivo del veto (modo paper).
+ * Devuelve { approved: true } o { approved: false, vetoReason, vetoDetail }.
+ * Los 5 candados viven dentro de evaluateEnsembleConsensus (votos/RLM) y de
+ * estas reglas; esta función no los relaja ni los endurece.
+ */
+export function classifyOpportunity(opp = {}) {
+  const deny = (vetoReason, vetoDetail = null) => ({ approved: false, vetoReason, vetoDetail });
+  if (opp.match?.isPostponed) return deny('postponed', 'Partido pospuesto');
+
+  // Validación de cuota numérica mínima (piso en 1.10 para permitir cuotas de mercado reales)
+  const oddsNum = parseFloat(opp.odds) || 1.90;
+  if (!Number.isFinite(oddsNum) || oddsNum < 1.10) return deny('odds_invalid', `Cuota ${opp.odds}`);
+
+  // Solo descartar si es un proxy de otro deporte no relacionado
+  if (opp.oddsSource === 'proxy') return deny('odds_proxy', 'Cuota proxy de otro deporte');
+
+  // Bases de Confianza (favoritos sólidos prob >= 65% y cuota >= 1.25)
+  // No se descartan por el piso de EV ya que su valor radica en su alta certeza y estabilidad
+  const isBaseConfianza = (opp.type || '').includes('BASE DE CONFIANZA') || (parseFloat(opp.prob) >= 65.0 && oddsNum >= 1.25);
+  if (!isBaseConfianza && !(opp.evPct >= MIN_EV_PCT)) return deny('ev_below_min', `EV ${opp.evPct ?? '?'}% < ${MIN_EV_PCT}%`);
+
+  if (!opp.consensus || opp.consensus.votesPassed < 2) {
+    const detail = opp.consensus?.badgeText || opp.consensus?.vote1Reason || opp.consensus?.vote3Reason || opp.consensus?.keyPlayerOutReason || 'Menos de 2 de 3 votos del Tribunal';
+    return deny('consensus_votes', String(detail).slice(0, 200));
+  }
+  if (opp.consensus.rlmInfo?.isTrapForPick || opp.consensus.rlmInfo?.isVetoedByMarket) {
+    return deny('rlm_trap', opp.consensus.rlmInfo?.rlmType || 'Trampa institucional / flujo adverso');
+  }
+
+  // ACCIÓN 1: WHITELIST ESTRICTA DE LIGAS TIER 1 (Cero ligas exóticas en Telegram)
+  if (!isTier1League(opp.league, opp.sport)) {
+    return deny('league_not_tier1', `${opp.league || '?'} / ${opp.sport || '?'}`);
+  }
+
+  // ACCIÓN 3.A: VETO A FAVORITOS VISITANTES EN SPREADS COLEGIALES (NCAAF Road Favorites)
+  if (opp.sport === 'NCAAF') {
+    const isSpread = (opp.type || '').toUpperCase().includes('SPREAD') || (opp.type || '').toUpperCase().includes('VENTAJA SPREAD');
+    const pickText = (opp.pick || '').toLowerCase();
+    const awayName = (opp.match?.away?.name || '').toLowerCase();
+    // Si el pick es el equipo visitante cubriendo spread con signo negativo (-) es un favorito visitante
+    if (isSpread && awayName && pickText.includes(awayName) && /-\d+/.test(pickText)) {
+      return deny('ncaaf_road_favorite', 'Favorito visitante en spread colegial');
+    }
+  }
+
+  // Veto Cualitativo Tipster Pro: Rechaza trampas de fatiga, vestidor o clima adverso
+  if (opp.tipsterAudit && opp.tipsterAudit.isApproved === false) {
+    return deny('tipster_audit', opp.tipsterAudit.reason || 'Veto cualitativo Tipster Pro');
+  }
+
+  // Candado de Momio Quemado (Opción C):
+  // Si la selección tiene RLM institucional pero la cuota cayó tanto que el Edge remanente
+  // es inferior a +3.0% o el momio actual es menor a 1.45, se veta para evitar comprar tarde.
+  if (opp.consensus.rlmInfo?.isRlmDetected && opp.consensus.rlmInfo?.rlmType === 'FAVORABLE') {
+    const remainingEdge = parseFloat(opp.edgeVal) || 0;
+    const currentOdds = parseFloat(opp.odds) || 1.90;
+    if (remainingEdge < 3.0 || currentOdds < 1.45) return deny('burned_odds', `Edge remanente ${remainingEdge}% / cuota ${currentOdds}`);
+  }
+
+  const probNum = parseFloat(opp.prob) || 0;
+  const pickStr = (opp.pick || '').toLowerCase();
+  const isSpreadOrTotal = pickStr.includes('cubre') || pickStr.includes('hándicap') || pickStr.includes('handicap') || pickStr.includes('over') || pickStr.includes('under') || /[+-]\d+/.test(pickStr);
+
+  // Filtros calibrados por mercado (elimina parálisis algorítmica sin relajar el EV positivo):
+  // - Para Spreads y Totales (mercados equilibrados con momios 1.65-2.30): exige prob >= 53.0%
+  // - Para Victoria Directa 1X2 / Moneyline: exige prob >= 54.0% (y prob >= 58.0% si cuota <= 1.70)
+  if (isSpreadOrTotal) {
+    if (probNum < 53.0) return deny('prob_below_min', `Prob ${probNum}% < 53% (spread/total)`);
+  } else {
+    if (probNum < 54.0) return deny('prob_below_min', `Prob ${probNum}% < 54% (ML/1X2)`);
+    if (oddsNum <= 1.70 && probNum < 58.0) return deny('prob_below_min', `Prob ${probNum}% < 58% con cuota ${oddsNum}`);
+  }
+  return { approved: true, vetoReason: null, vetoDetail: null };
 }
 
 /**
@@ -2369,66 +2504,17 @@ export function buildOpportunitiesAndTopSlate({
   // Solo se aprueban selecciones con mínimo 2 de 3 votos del Tribunal.
   // Veto preventivo si hay trampa institucional detectada por RLM.
   // Para Spreads/Totales se exige prob >= 55.5% y para 1X2/ML/BTTS prob >= 60.0%
+  //
+  // MODO PAPER (2026-11-10): la decisión de aprobar vive en classifyOpportunity
+  // para que el motivo del veto quede registrado. Las condiciones y el orden
+  // son EXACTAMENTE los del filtro original: esto solo observa, no cambia
+  // qué se aprueba. Los 5 candados y la matemática quedan intactos.
+  const vetoedOpps = [];
   const approvedOpps = rawOpportunities.filter(opp => {
-    if (opp.match?.isPostponed) return false;
-
-    // Validación de cuota numérica mínima (piso en 1.10 para permitir cuotas de mercado reales)
-    const oddsNum = parseFloat(opp.odds) || 1.90;
-    if (!Number.isFinite(oddsNum) || oddsNum < 1.10) return false;
-
-    // Solo descartar si es un proxy de otro deporte no relacionado
-    if (opp.oddsSource === 'proxy') return false;
-
-    // Bases de Confianza (favoritos sólidos prob >= 65% y cuota >= 1.25)
-    // No se descartan por el piso de EV ya que su valor radica en su alta certeza y estabilidad
-    const isBaseConfianza = (opp.type || '').includes('BASE DE CONFIANZA') || (parseFloat(opp.prob) >= 65.0 && oddsNum >= 1.25);
-    if (!isBaseConfianza && !(opp.evPct >= MIN_EV_PCT)) return false;
-
-    if (!opp.consensus || opp.consensus.votesPassed < 2) return false;
-    if (opp.consensus.rlmInfo?.isTrapForPick || opp.consensus.rlmInfo?.isVetoedByMarket) return false;
-
-    // ACCIÓN 1: WHITELIST ESTRICTA DE LIGAS TIER 1 (Cero ligas exóticas en Telegram)
-    if (!isTier1League(opp.league, opp.sport)) {
+    const verdict = classifyOpportunity(opp);
+    if (!verdict.approved) {
+      vetoedOpps.push({ ...opp, vetoReason: verdict.vetoReason, vetoDetail: verdict.vetoDetail });
       return false;
-    }
-
-    // ACCIÓN 3.A: VETO A FAVORITOS VISITANTES EN SPREADS COLEGIALES (NCAAF Road Favorites)
-    if (opp.sport === 'NCAAF') {
-      const isSpread = (opp.type || '').toUpperCase().includes('SPREAD') || (opp.type || '').toUpperCase().includes('VENTAJA SPREAD');
-      const pickText = (opp.pick || '').toLowerCase();
-      const awayName = (opp.match?.away?.name || '').toLowerCase();
-      // Si el pick es el equipo visitante cubriendo spread con signo negativo (-) es un favorito visitante
-      if (isSpread && awayName && pickText.includes(awayName) && /-\d+/.test(pickText)) {
-        return false;
-      }
-    }
-
-    // Veto Cualitativo Tipster Pro: Rechaza trampas de fatiga, vestidor o clima adverso
-    if (opp.tipsterAudit && opp.tipsterAudit.isApproved === false) {
-      return false;
-    }
-
-    // Candado de Momio Quemado (Opción C):
-    // Si la selección tiene RLM institucional pero la cuota cayó tanto que el Edge remanente
-    // es inferior a +3.0% o el momio actual es menor a 1.45, se veta para evitar comprar tarde.
-    if (opp.consensus.rlmInfo?.isRlmDetected && opp.consensus.rlmInfo?.rlmType === 'FAVORABLE') {
-      const remainingEdge = parseFloat(opp.edgeVal) || 0;
-      const currentOdds = parseFloat(opp.odds) || 1.90;
-      if (remainingEdge < 3.0 || currentOdds < 1.45) return false;
-    }
-
-    const probNum = parseFloat(opp.prob) || 0;
-    const pickStr = (opp.pick || '').toLowerCase();
-    const isSpreadOrTotal = pickStr.includes('cubre') || pickStr.includes('hándicap') || pickStr.includes('handicap') || pickStr.includes('over') || pickStr.includes('under') || /[+-]\d+/.test(pickStr);
-
-    // Filtros calibrados por mercado (elimina parálisis algorítmica sin relajar el EV positivo):
-    // - Para Spreads y Totales (mercados equilibrados con momios 1.65-2.30): exige prob >= 53.0%
-    // - Para Victoria Directa 1X2 / Moneyline: exige prob >= 54.0% (y prob >= 58.0% si cuota <= 1.70)
-    if (isSpreadOrTotal) {
-      if (probNum < 53.0) return false;
-    } else {
-      if (probNum < 54.0) return false;
-      if (oddsNum <= 1.70 && probNum < 58.0) return false;
     }
     return true;
   });
@@ -2598,7 +2684,7 @@ export function buildOpportunitiesAndTopSlate({
     return (b.edgeVal || 0) - (a.edgeVal || 0);
   });
 
-  return { rawOpportunities, approvedOpps, topSlate };
+  return { rawOpportunities, approvedOpps, topSlate, vetoedOpps };
 }
 
 /**
@@ -2935,6 +3021,57 @@ export async function runDailyTelegramAudit(options = {}) {
     }
   }
 
+  // ================= MODO PAPER: CALIFICACIÓN DE PICKS PAPER EN PRODUCCIÓN =================
+  // Los picks paper viven SOLO en _meta.paperLedger (nunca como entradas del
+  // cache real): así no contaminan el récord real, el refit Platt ni las
+  // penalizaciones. Se califican con los mismos partidos oficiales y el mismo
+  // gradeOfficialPick; los calificados se acumulan en _meta.paperReport y
+  // salen del stash (el espejo Telegram guarda el registro completo).
+  let paperReport = null;
+  try {
+    const paperStash = providedCache._meta?.paperLedger;
+    if (Array.isArray(paperStash) && paperStash.length > 0) {
+      const paperEntries = paperStash.map(expandPaperEntry).filter(Boolean);
+      const stillPending = [];
+      const newlyGradedPaper = [];
+      for (const entry of paperEntries) {
+        if (entry.status !== 'PENDING') { stillPending.push(entry); continue; }
+        const withOdds = { ...entry, odds: entry.placedOdds };
+        const matchedGame = allCompletedMatches.find(m => belongsTo(withOdds, m));
+        if (!matchedGame) {
+          const postponed = allPostponedMatches.find(m => belongsTo(withOdds, m));
+          if (postponed) {
+            newlyGradedPaper.push({ ...entry, status: 'CLOSED', result: 'PUSH', score: 'Pospuesto', pnlUnits: 0, closedAt: new Date().toISOString(), closedBy: 'paper-audit' });
+          } else {
+            stillPending.push(entry);
+          }
+          continue;
+        }
+        let graded = null;
+        if (isPlayerIndividualProp(entry)) {
+          try { graded = await resolvePlayerPropBoxscore(withOdds, matchedGame); } catch (e) { graded = null; }
+        }
+        if (!graded) graded = gradeOfficialPick(withOdds, matchedGame);
+        if (!graded) { stillPending.push(entry); continue; }
+        const res = graded.status === 'won' ? 'WON' : (graded.status === 'void' ? 'PUSH' : 'LOST');
+        const netUnits = Number.isFinite(graded.netUnits) ? Number(graded.netUnits.toFixed(2)) : 0;
+        newlyGradedPaper.push({ ...entry, status: 'CLOSED', result: res, score: graded.scoreDisplay || `${matchedGame.homeScore}-${matchedGame.awayScore}`, pnlUnits: netUnits, closedAt: new Date().toISOString(), closedBy: 'paper-audit' });
+      }
+      if (newlyGradedPaper.length > 0) {
+        if (!providedCache._meta) providedCache._meta = {};
+        providedCache._meta.paperReport = accumulatePaperReport(providedCache._meta.paperReport || null, newlyGradedPaper);
+        ledgerModified = true;
+      }
+      if (!providedCache._meta) providedCache._meta = {};
+      providedCache._meta.paperLedger = stillPending.map(compactPaperEntry);
+      paperReport = providedCache._meta.paperReport || null;
+    } else if (providedCache._meta?.paperReport) {
+      paperReport = providedCache._meta.paperReport;
+    }
+  } catch (err) {
+    console.warn('Aviso calificando picks paper:', err.message);
+  }
+
   // Filtrar para el reporte diario: el Corte de Caja debe ser estrictamente de las apuestas/picks de un día antes
   // Se calcula la fecha de "ayer" en zona horaria CDMX y una ventana máxima de 36 horas
   const cdmxTodayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
@@ -3059,7 +3196,9 @@ export async function runDailyTelegramAudit(options = {}) {
       `🎯 *Récord Oficial:* \`${won} Ganadas - ${lost} Perdidas${push > 0 ? ` - ${push} Push` : ''} (${winRate}% Efectividad)\``,
       `💼 *Unidades Netas:* \`${netSign}${netUnits.toFixed(2)} Unidades\``,
       `💰 *ROI de la Jornada:* \`${roiSign}${roi}%\``,
-      memoryLine + pendingLine
+      memoryLine + pendingLine,
+      // Sección paper: simulación acumulada, separada del récord oficial.
+      ...(paperReport ? paperReportSectionLines(paperReport) : [])
     ].join('\n');
 
     auditSent = await sendTelegramMessage(reportMsg, isDryRun, targetChatId);
@@ -3304,6 +3443,11 @@ async function enrichSoccerWithSharpOdds(soccerMatches = []) {
 // 5. MOTOR PRINCIPAL DE EVALUACIÓN Y DESPACHO A TELEGRAM
 export async function runAlertEngine(options = {}) {
   const isDryRun = options.dryRun || process.argv.includes('--dry-run');
+  // MODO PAPER (2026-11-10): corre el motor completo pero NO despacha picks
+  // reales. Registra emitidos + vetados en el ledger paper y manda el slate
+  // paper al chat VIP. Se activa con --paper, options.paper o PAPER_MODE=1
+  // en Vercel (el cron de 9:30/3:30 corre en paper sin cambiar nada más).
+  const isPaper = options.paper || process.argv.includes('--paper') || ['1', 'true'].includes(String(process.env.PAPER_MODE || '').toLowerCase());
   const isVerbose = options.verbose || process.argv.includes('--verbose');
   const isForce = options.force || process.argv.includes('--force');
   const forceAudit = options.audit || process.argv.includes('--audit');
@@ -3528,7 +3672,7 @@ export async function runAlertEngine(options = {}) {
     } catch (e) {}
   });
 
-  const { rawOpportunities, approvedOpps, topSlate } = buildOpportunitiesAndTopSlate({
+  const { rawOpportunities, approvedOpps, topSlate, vetoedOpps } = buildOpportunitiesAndTopSlate({
     soccerMatches: enrichedSoccer,
     mlbMatches: enrichedMlb,
     nflMatches: enrichedNfl,
@@ -3559,7 +3703,9 @@ export async function runAlertEngine(options = {}) {
   let autoSavedUnanimousCount = 0;
 
   for (const uPick of allUnanimousOpps) {
-    if (!sentCache[uPick.id]) {
+    // En modo paper no se auto-guardan unánimes en el cache real: los picks
+    // paper viven en el ledger paper, no en la auditoría del récord real.
+    if (!isPaper && !sentCache[uPick.id]) {
       sentCache[uPick.id] = {
         id: uPick.id,
         sport: uPick.sport,
@@ -3607,7 +3753,7 @@ export async function runAlertEngine(options = {}) {
     console.log(`Pendientes por enviar a Telegram (no duplicadas): ${toSend.length}`);
   }
 
-  if (toSend.length === 0) {
+  if (toSend.length === 0 && !isPaper) {
     if (usesLock) sentCache._meta.scanLock = null;
     if (!isDryRun && (usesLock || auditResult.auditSent || autoSavedUnanimousCount > 0)) {
       await saveCloudLedger(sentCache);
@@ -3629,7 +3775,9 @@ export async function runAlertEngine(options = {}) {
   // corrió). Si solo se agotó la exposición diaria, se recorta la cartelera
   // por edge en vez de bloquear todo.
   const bankrollState = readBankrollState();
-  if (bankrollState.blocked) {
+  // En modo paper el freno NO bloquea el registro: solo queda anotado
+  // (brakeBlocked) en cada entrada paper, para medir qué habría pasado.
+  if (bankrollState.blocked && !isPaper) {
     const stopMsg = `⛔ *FRENO DE BANCA ACTIVO — NO SE DESPACHAN PICKS*\n\n${bankrollState.reasons.join('\n')}\nDrawdown 30 días: ${bankrollState.drawdownUnits}u | Exposición hoy: ${bankrollState.exposureTodayUnits}u\n\nEl freno se levanta solo cuando la ventana de 30 días rueda, o con un reinicio manual registrado (scripts/bankrollReset.mjs). El récord y la auditoría siguen intactos.`;
     console.warn(`⛔ Freno de banca activo: ${bankrollState.reasons.join(' ')} No se despachan ${toSend.length} picks aprobados.`);
     await sendTelegramMessage(stopMsg, isDryRun, targetChatId);
@@ -3657,6 +3805,63 @@ export async function runAlertEngine(options = {}) {
       console.warn(`🏦 Tope de exposición diaria: se descartan ${trimmed.dropped.length} picks (quedan ${trimmed.usedUnits}u de ${bankrollState.remainingExposureUnits}u disponibles hoy).`);
       toSend = trimmed.kept.map(item => item.pick);
     }
+  }
+
+  // MODO PAPER (2026-11-10): a partir de aquí el flujo normal despacharía
+  // picks reales a Telegram y los asentaría en el ledger real. En paper se
+  // registra TODO lo que el motor habría hecho —emitidos, aprobados sin cupo
+  // y vetados con su motivo— en el ledger paper, se manda el slate paper al
+  // chat VIP de Tavo y se retorna sin tocar el ledger real ni el canal.
+  if (isPaper) {
+    const paperShift = activeShiftType;
+    const wouldStake = (pick) => {
+      try { return calculatePickEffectiveStake(pick).effectiveStake; } catch (e) { return 1.0; }
+    };
+    const emittedEntries = toSend.map(pick => buildPaperEntry(pick, { shift: paperShift, brakeBlocked: bankrollState.blocked, wouldStake: wouldStake(pick) }));
+    const sentIds = new Set(toSend.map(p => p.id));
+    const approvedNotInSlate = approvedOpps
+      .filter(p => !sentIds.has(p.id) && !sentCache[p.id]?.dispatchedToTelegram)
+      .map(pick => buildPaperEntry(pick, { vetoReason: 'slate_cupo', shift: paperShift, brakeBlocked: bankrollState.blocked, wouldStake: wouldStake(pick) }));
+    const vetoedEntries = (vetoedOpps || []).map(opp => buildPaperEntry(opp, { vetoReason: opp.vetoReason, vetoDetail: opp.vetoDetail, shift: paperShift, brakeBlocked: bankrollState.blocked, wouldStake: 1.0 }));
+    const allPaper = [...emittedEntries, ...approvedNotInSlate, ...vetoedEntries];
+    let paperRecorded = 0;
+    for (const entry of allPaper) { if (recordPaperPick(entry)) paperRecorded++; }
+    // Stash compacto en el cloud cache (best-effort, tope 30 pendientes):
+    // la auditoría lo califica en producción y lo resume en el Corte.
+    if (!sentCache._meta) sentCache._meta = {};
+    const stash = Array.isArray(sentCache._meta.paperLedger) ? [...sentCache._meta.paperLedger] : [];
+    for (const entry of allPaper) stash.push(compactPaperEntry(entry));
+    const trimmedStash = stash.slice(-PAPER_MAX_STASH_ENTRIES);
+    if (JSON.stringify(trimmedStash).length <= PAPER_MAX_STASH_JSON_CHARS) {
+      sentCache._meta.paperLedger = trimmedStash;
+    } else {
+      console.warn('Aviso modo paper: stash demasiado grande, no se persiste en el cloud cache (el espejo Telegram sigue siendo el registro).');
+    }
+    if (usesLock) sentCache._meta.scanLock = null;
+    const paperText = paperSlateMessage({
+      shiftLabel, dateStr: cdmxDateStr,
+      emitted: emittedEntries, vetoed: vetoedEntries, approvedNotInSlate,
+      brakeBlocked: bankrollState.blocked, brakeReasons: bankrollState.reasons,
+    });
+    const paperChatId = process.env.TELEGRAM_VIP_CHAT_ID || '1258878024';
+    await sendTelegramMessage(paperText, isDryRun, paperChatId);
+    if (!isDryRun) {
+      try { await saveCloudLedger(sentCache); } catch (e) { console.warn('Aviso persistiendo paper ledger:', e.message); }
+    }
+    console.log(`🧪 Modo paper: ${emittedEntries.length} emitidos, ${approvedNotInSlate.length} aprobados sin cupo, ${vetoedEntries.length} vetados registrados (${paperRecorded} nuevos).`);
+    return {
+      sentCount: 0,
+      paper: true,
+      paperEmitted: emittedEntries.length,
+      paperApprovedNoCupo: approvedNotInSlate.length,
+      paperVetoed: vetoedEntries.length,
+      paperRecorded,
+      totalAnalyzed: rawOpportunities.length,
+      totalOpportunities: approvedOpps.length,
+      bankroll: bankrollState,
+      auditSummary: auditResult.summary,
+      auditSent: auditResult.auditSent,
+    };
   }
 
   console.log(`📢 Enviando ${toSend.length} nueva(s) selección(es) Élite con Consenso a Telegram...`);

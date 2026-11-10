@@ -1413,3 +1413,162 @@ test('apiSports pool: getApiSportsStatusAll reporta cada llave enmascarada con s
     restoreApiSportsEnv(prev);
   }
 });
+
+import { fileURLToPath } from 'node:url';
+import { classifyOpportunity, buildOpportunitiesAndTopSlate, recordPaperPick } from './alertEngine.js';
+import { buildPaperEntry, compactPaperEntry, expandPaperEntry, paperSlateMessage, computePaperStats, accumulatePaperReport, paperReportSectionLines, fitPlattPooled } from '../src/utils/paperLedger.js';
+
+test('modo paper: classifyOpportunity aprueba lo que pasaba y veta con motivo lo que no', () => {
+  const base = {
+    sport: 'Baloncesto', league: 'NBA', game: 'Boston Celtics vs Washington Wizards',
+    pick: 'UNDER 240.5 Pts', type: '🏀 TOTALES NBA (UNDER)', odds: 1.91, prob: '60',
+    evPct: 5, match: { isPostponed: false }, oddsSource: 'market',
+    consensus: { votesPassed: 3 }, tipsterAudit: { isApproved: true },
+  };
+  assert.equal(classifyOpportunity(base).approved, true);
+  assert.equal(classifyOpportunity(base).vetoReason, null);
+  assert.equal(classifyOpportunity({ ...base, consensus: { votesPassed: 1 } }).vetoReason, 'consensus_votes');
+  assert.equal(classifyOpportunity({ ...base, evPct: 0.5 }).vetoReason, 'ev_below_min');
+  assert.equal(classifyOpportunity({ ...base, league: 'Liga de Marte' }).vetoReason, 'league_not_tier1');
+  assert.equal(classifyOpportunity({ ...base, match: { isPostponed: true } }).vetoReason, 'postponed');
+  assert.equal(classifyOpportunity({ ...base, odds: 1.05 }).vetoReason, 'odds_invalid');
+  assert.equal(classifyOpportunity({ ...base, consensus: { votesPassed: 3, rlmInfo: { isTrapForPick: true } } }).vetoReason, 'rlm_trap');
+  assert.equal(classifyOpportunity({ ...base, tipsterAudit: { isApproved: false } }).vetoReason, 'tipster_audit');
+  assert.equal(classifyOpportunity({ ...base, prob: '50' }).vetoReason, 'prob_below_min');
+  assert.equal(classifyOpportunity({ ...base, consensus: { votesPassed: 3, rlmInfo: { isRlmDetected: true, rlmType: 'FAVORABLE' } }, edgeVal: 1.0 }).vetoReason, 'burned_odds');
+  const ncaaf = {
+    sport: 'NCAAF', league: 'NCAAF', game: 'Marshall vs Alabama',
+    pick: 'Alabama -3.5 (Cubre Línea)', type: '🎓 VENTAJA SPREAD COLEGIAL (NCAAF)',
+    odds: 1.91, prob: '60', evPct: 5, match: { home: { name: 'Marshall' }, away: { name: 'Alabama' } },
+    oddsSource: 'market', consensus: { votesPassed: 3 }, tipsterAudit: { isApproved: true },
+  };
+  assert.equal(classifyOpportunity(ncaaf).vetoReason, 'ncaaf_road_favorite');
+});
+
+test('modo paper: buildOpportunitiesAndTopSlate devuelve los vetados con motivo', () => {
+  const out = buildOpportunitiesAndTopSlate({ soccerMatches: [], mlbMatches: [], nflMatches: [], ncaafMatches: [], nbaMatches: [] });
+  assert.deepEqual(out.rawOpportunities, []);
+  assert.deepEqual(out.approvedOpps, []);
+  assert.deepEqual(out.topSlate, []);
+  assert.deepEqual(out.vetoedOpps, []);
+});
+
+test('modo paper: la entrada paper lleva identificador y la compactación es reversible', () => {
+  const pick = { id: 'nba-tot-1', sport: 'Baloncesto', league: 'NBA', game: 'Boston Celtics vs Washington Wizards', gameDate: '2026-11-10T23:30:00Z', pick: 'UNDER 240.5 Pts', type: '🏀 TOTALES NBA (UNDER)', odds: 1.91, prob: '60', rawProb: '66', evPct: 5, consensus: { votesPassed: 3 } };
+  const emitted = buildPaperEntry(pick, { shift: 'matutino', wouldStake: 1 });
+  assert.equal(emitted.paper, true);
+  assert.equal(emitted.status, 'PENDING');
+  assert.equal(emitted.vetoReason, null);
+  assert.equal(emitted.prob, 60);
+  assert.equal(emitted.rawProb, 66);
+  const vetoed = buildPaperEntry(pick, { vetoReason: 'consensus_votes', vetoDetail: 'Menos de 2 de 3', shift: 'vespertino' });
+  assert.ok(vetoed.id.includes('::veto-vespertino-'));
+  assert.equal(vetoed.vetoReason, 'consensus_votes');
+  const back = expandPaperEntry(compactPaperEntry(vetoed));
+  assert.equal(back.id, vetoed.id);
+  assert.equal(back.vetoReason, 'consensus_votes');
+  assert.equal(back.placedOdds, 1.91);
+  const msg = paperSlateMessage({ shiftLabel: 'MATUTINO', dateStr: '2026-11-10', emitted: [emitted], vetoed: [vetoed], approvedNotInSlate: [], brakeBlocked: true, brakeReasons: ['Drawdown 9.12u'] });
+  assert.ok(msg.includes('🧪'));
+  assert.ok(msg.includes('MODO PAPER'));
+  assert.ok(msg.includes('freno de banca'));
+  assert.ok(msg.includes('Vetados por los candados/filtros: 1'));
+});
+
+test('modo paper: el reporte separa emitidos de vetados y mide si los vetos habrían ganado', () => {
+  const rows = [
+    { id: 'e1', status: 'CLOSED', result: 'WON', sport: 'Baloncesto', prob: 60, rawProb: 66, placedOdds: 1.91, stakeUnits: 1, pnlUnits: 0.91, vetoReason: null, type: '🏀 TOTALES NBA (UNDER)', game: 'A vs B', gameDate: '2026-11-10T23:30:00Z', pick: 'UNDER 240.5 Pts' },
+    { id: 'e2', status: 'CLOSED', result: 'LOST', sport: 'Baloncesto', prob: 70, rawProb: 75, placedOdds: 1.91, stakeUnits: 1, pnlUnits: -1, vetoReason: null, type: '🏀 TOTALES NBA (UNDER)', game: 'C vs D', gameDate: '2026-11-10T23:30:00Z', pick: 'UNDER 230.5 Pts' },
+    { id: 'v1', status: 'CLOSED', result: 'WON', sport: 'Fútbol', prob: 65, rawProb: 70, placedOdds: 1.8, stakeUnits: 1, pnlUnits: 0.8, vetoReason: 'consensus_votes', type: 'x', game: 'E vs F', gameDate: '2026-11-10T20:00:00Z', pick: 'OVER 2.5 Goles' },
+    { id: 'v2', status: 'CLOSED', result: 'WON', sport: 'Fútbol', prob: 62, rawProb: 68, placedOdds: 1.9, stakeUnits: 1, pnlUnits: 0.9, vetoReason: 'consensus_votes', type: 'x', game: 'G vs H', gameDate: '2026-11-10T20:00:00Z', pick: 'OVER 2.5 Goles' },
+    { id: 'v3', status: 'CLOSED', result: 'LOST', sport: 'Fútbol', prob: 58, rawProb: 64, placedOdds: 1.85, stakeUnits: 1, pnlUnits: -1, vetoReason: 'prob_below_min', type: 'x', game: 'I vs J', gameDate: '2026-11-10T20:00:00Z', pick: 'OVER 2.5 Goles' },
+    { id: 'p1', status: 'PENDING', result: null, sport: 'Fútbol', prob: 60, rawProb: 65, placedOdds: 1.9, stakeUnits: 1, pnlUnits: null, vetoReason: null, type: 'x', game: 'K vs L', gameDate: '2026-11-11T20:00:00Z', pick: 'OVER 2.5 Goles' },
+  ];
+  const s = computePaperStats(rows);
+  assert.equal(s.total, 6);
+  assert.equal(s.graded, 5);
+  assert.equal(s.emitted.n, 3);
+  assert.equal(s.emitted.won, 1);
+  assert.equal(s.emitted.lost, 1);
+  assert.equal(s.emitted.pending, 1);
+  assert.equal(s.vetoed.n, 3);
+  assert.equal(s.vetoed.won, 2);
+  assert.equal(s.vetoed.hitRate, 66.7);
+  assert.equal(s.vetoReasons.consensus_votes.count, 2);
+  assert.equal(s.vetoReasons.consensus_votes.winRate, 100);
+  assert.equal(s.vetoReasons.prob_below_min.count, 1);
+  assert.ok(s.brierRaw !== null && s.brierCal !== null);
+  const report = accumulatePaperReport(null, rows.filter(r => r.status === 'CLOSED'));
+  assert.equal(report.totalGraded, 5);
+  assert.equal(report.vetoed.won, 2);
+  assert.equal(report.calibrationPairs.length, 5);
+  const lines = paperReportSectionLines(report);
+  assert.ok(lines.join('\n').includes('MODO PAPER'));
+  assert.ok(lines.join('\n').includes('Vetados paper'));
+});
+
+test('modo paper: el ajuste Platt pooled detecta la sobreconfianza (A < 1)', () => {
+  const rows = [];
+  for (let i = 0; i < 12; i++) {
+    rows.push({ rawProb: 85, prob: 80, status: 'CLOSED', result: i < 4 ? 'WON' : 'LOST' });
+  }
+  const fit = fitPlattPooled(rows);
+  assert.equal(fit.n, 12);
+  assert.ok(fit.A < 1, `A=${fit.A} debería ser < 1 con 4/12 aciertos a prob 85%`);
+});
+
+test('modo paper: gradePaper califica el ledger paper sin tocar el ledger real ni sus clausuras', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'grade-paper-'));
+  const tmpPaper = path.join(tmpDir, 'paper_ledger.jsonl');
+  const tmpClosures = path.join(tmpDir, 'paper_ledger_closures.jsonl');
+  const picks = [
+    { id: 'paper-nba-under', paper: true, status: 'PENDING', sport: 'Baloncesto', league: 'NBA', game: 'Miami Heat vs Minnesota Timberwolves', gameDate: '2026-10-21T23:30Z', pick: 'UNDER 240.5 Pts', type: '🏀 TOTALES NBA (UNDER)', placedOdds: 1.91, stakeUnits: 1, result: null, score: null, pnlUnits: null, closingOdds: null, clvPct: null, vetoReason: null },
+    { id: 'paper-btts::veto-matutino-2026-10-15', paper: true, status: 'PENDING', sport: 'Fútbol', league: 'MLS (EE.UU.)', game: 'Chicago Fire FC vs Philadelphia Union', gameDate: '2026-10-15T00:30Z', pick: 'Ambos Equipos Anotan: Sí (BTTS)', type: '⚽ AMBOS EQUIPOS ANOTAN (TIER 1 ÉLITE)', placedOdds: 1.62, stakeUnits: 1.1, result: null, score: null, pnlUnits: null, closingOdds: null, clvPct: null, vetoReason: 'consensus_votes' },
+  ];
+  fs.writeFileSync(tmpPaper, picks.map(p => JSON.stringify(p)).join('\n') + '\n', 'utf-8');
+  const mockFetch = async (url) => {
+    const body = String(url).includes('basketball/nba')
+      ? { events: [{ competitions: [{ status: { type: { state: 'post' } }, competitors: [
+        { homeAway: 'home', score: '110', team: { displayName: 'Miami Heat' } },
+        { homeAway: 'away', score: '105', team: { displayName: 'Minnesota Timberwolves' } }] }] }] }
+      : { events: [{ competitions: [{ status: { type: { state: 'post' } }, competitors: [
+        { homeAway: 'home', score: '2', team: { displayName: 'Chicago Fire FC' } },
+        { homeAway: 'away', score: '1', team: { displayName: 'Philadelphia Union' } }] }] }] };
+    return { ok: true, json: async () => body };
+  };
+  const { graded, skipped } = await gradePendingPicks({ fetchImpl: mockFetch, ledgerPath: tmpPaper, closuresPath: tmpClosures, apply: true });
+  assert.equal(graded.length, 2);
+  assert.equal(graded.find(g => g.id.startsWith('paper-btts')).result, 'WON');
+  assert.equal(skipped.length, 0);
+  const after = fs.readFileSync(tmpPaper, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+  assert.equal(after.find(p => p.id === 'paper-nba-under').status, 'CLOSED');
+  assert.equal(after.find(p => p.id.startsWith('paper-btts')).vetoReason, 'consensus_votes');
+  assert.ok(fs.existsSync(tmpClosures));
+  assert.ok(!fs.existsSync(path.join(tmpDir, 'pick_ledger_closures.jsonl')));
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('modo paper: recordPaperPick escribe solo en el ledger paper y nunca en el real', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'record-paper-'));
+  const tmpPaper = path.join(tmpDir, 'paper_ledger.jsonl');
+  const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const realLedger = path.join(repoRoot, 'data', 'pick_ledger.jsonl');
+  const realBefore = fs.readFileSync(realLedger, 'utf-8');
+  const prevLedgerChat = process.env.TELEGRAM_LEDGER_CHAT_ID;
+  const prevBotToken = process.env.TELEGRAM_BOT_TOKEN;
+  delete process.env.TELEGRAM_LEDGER_CHAT_ID;
+  delete process.env.TELEGRAM_BOT_TOKEN;
+  try {
+    const entry = buildPaperEntry({ id: 'paper-test-1', sport: 'Baloncesto', league: 'NBA', game: 'A vs B', gameDate: '2026-11-10T23:30:00Z', pick: 'UNDER 240.5 Pts', type: 'x', odds: 1.91, prob: '60', consensus: { votesPassed: 3 } }, { shift: 'matutino', wouldStake: 1 });
+    assert.equal(recordPaperPick(entry, { paperPath: tmpPaper }), true);
+    assert.equal(recordPaperPick(entry, { paperPath: tmpPaper }), false);
+    const lines = fs.readFileSync(tmpPaper, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0].paper, true);
+    assert.equal(fs.readFileSync(realLedger, 'utf-8'), realBefore);
+  } finally {
+    if (prevLedgerChat !== undefined) process.env.TELEGRAM_LEDGER_CHAT_ID = prevLedgerChat;
+    if (prevBotToken !== undefined) process.env.TELEGRAM_BOT_TOKEN = prevBotToken;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
