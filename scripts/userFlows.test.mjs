@@ -682,7 +682,15 @@ test('las fuentes futuras cargan cinco deportes sin inventar precios ni estadist
   assert.equal(data.matches.nflMatches[0].home.ypp, 6.25);
   assert.ok(requests.filter(url => url.pathname.endsWith('/scoreboard')).every(url => url.searchParams.get('dates') === '20261102-20261105'));
   const modeled = evaluateFutureModels(data.matches, timestamp, timestamp + 72 * 3600000);
-  assert.ok(modeled.candidates.some(pick => pick.sport === 'Baloncesto'), 'El modelo existente debe producir un candidato NBA en este caso favorable.');
+  const direct = buildOpportunitiesAndTopSlate({ ...data.matches, isForce: true, sentCache: {}, maxPicksToSend: 100 });
+  // Afinación 2026-11-10: con la calibración nueva (Platt A=0.65/B=-0.20, σ NBA
+  // 14.7) el modelo evalúa el partido NBA pero rechaza los dos picks por EV
+  // negativo (spread y ML con EV < 2%): ya no hay candidato NBA en este caso,
+  // y es lo correcto (antes el spread salía con EV +4%).
+  const nbaVetoed = (direct.vetoedOpps || []).filter(p => p.sport === 'Baloncesto');
+  assert.equal(nbaVetoed.length, 2);
+  assert.ok(nbaVetoed.every(p => p.vetoReason === 'ev_below_min'));
+  assert.equal(modeled.candidates.some(pick => pick.sport === 'Baloncesto'), false);
 });
 
 test('el analisis multideporte ordena candidatos sin enviar alertas ni forzar una combinada', async () => {
@@ -1116,18 +1124,18 @@ test('futuro: si API-Sports cae, el fútbol usa el respaldo ESPN + The Odds API'
 
 import { evaluateBankroll, trimSlateToExposure, capStake, settledDrawdown, BANKROLL } from '../src/utils/bankroll.js';
 
-test('bankroll: el freno se activa con drawdown de 8u en 30 días y no con 7u', () => {
+test('bankroll: el freno se activa con drawdown de 15u en 30 días y no con 14u', () => {
   const day = 86400000;
   const nowMs = Date.parse('2026-11-10T12:00:00Z');
   const mk = (daysAgo, pnl) => ({ result: pnl > 0 ? 'WON' : 'LOST', pnlUnits: pnl, timestamp: new Date(nowMs - daysAgo * day).toISOString(), closedAt: new Date(nowMs - daysAgo * day).toISOString() });
-  const bad = [mk(1, 1), mk(2, -3), mk(3, -6)];
+  const bad = [mk(1, 1), mk(2, -3), mk(3, -13)];
   const dd = settledDrawdown(bad, nowMs);
-  // Orden cronológico: -6, -3, +1. Pico 0u, cierre -8u → drawdown actual 8u;
-  // la caída máxima intra-ventana fue 9u.
-  assert.equal(dd.drawdownUnits, 8);
-  assert.equal(dd.maxDrawdownUnits, 9);
+  // Orden cronológico: -13, -3, +1. Pico 0u, cierre -15u → drawdown actual 15u;
+  // la caída máxima intra-ventana fue 16u.
+  assert.equal(dd.drawdownUnits, 15);
+  assert.equal(dd.maxDrawdownUnits, 16);
   assert.equal(evaluateBankroll({ closedRows: bad, allRows: bad, nowMs }).blocked, true);
-  const ok = [mk(1, 1), mk(2, -3), mk(3, -5)];
+  const ok = [mk(1, 1), mk(2, -3), mk(3, -12)];
   assert.equal(evaluateBankroll({ closedRows: ok, allRows: ok, nowMs }).blocked, false);
 });
 
@@ -1137,7 +1145,7 @@ test('bankroll: las pérdidas viejas fuera de la ventana no cuentan y el reinici
   const mk = (daysAgo, pnl) => ({ result: pnl > 0 ? 'WON' : 'LOST', pnlUnits: pnl, timestamp: new Date(nowMs - daysAgo * day).toISOString(), closedAt: new Date(nowMs - daysAgo * day).toISOString() });
   const old = [mk(40, -20)];
   assert.equal(settledDrawdown(old, nowMs).drawdownUnits, 0);
-  const recent = [mk(5, -9), mk(1, 1)];
+  const recent = [mk(5, -16), mk(1, 1)];
   assert.equal(evaluateBankroll({ closedRows: recent, allRows: recent, nowMs }).blocked, true);
   const resetAt = new Date(nowMs - 2 * day).toISOString();
   assert.equal(evaluateBankroll({ closedRows: recent, allRows: recent, nowMs, resetAt }).blocked, false);
@@ -1443,6 +1451,33 @@ test('modo paper: classifyOpportunity aprueba lo que pasaba y veta con motivo lo
     oddsSource: 'market', consensus: { votesPassed: 3 }, tipsterAudit: { isApproved: true },
   };
   assert.equal(classifyOpportunity(ncaaf).vetoReason, 'ncaaf_road_favorite');
+});
+
+import { applyPlattCalibration } from '../src/utils/calibration.js';
+
+test('afinación 2026-11-10: los spreads quedan en pausa (veto spread_paused) y los totales siguen', () => {
+  const base = {
+    sport: 'Baloncesto', league: 'NBA', game: 'Utah Jazz vs Miami Heat',
+    pick: 'Utah Jazz +9.5 (Cubre Línea)', type: '🏀 SPREAD NBA', odds: 1.91, prob: '60',
+    evPct: 5, match: { isPostponed: false }, oddsSource: 'market',
+    consensus: { votesPassed: 3 }, tipsterAudit: { isApproved: true },
+  };
+  // El spread pasa todo lo demás (candados, EV, prob mínima) y solo lo frena la pausa.
+  assert.equal(classifyOpportunity(base).vetoReason, 'spread_paused');
+  assert.equal(classifyOpportunity(base).approved, false);
+  // El mismo perfil en total sí se aprueba: la pausa es solo para spreads.
+  assert.equal(classifyOpportunity({ ...base, pick: 'UNDER 240.5 Pts', type: '🏀 TOTALES NBA (UNDER)' }).approved, true);
+  // También por el texto del pick aunque el type no diga SPREAD.
+  assert.equal(classifyOpportunity({ ...base, type: '🏀 NBA' }).vetoReason, 'spread_paused');
+});
+
+test('afinación 2026-11-10: Platt usa el ajuste del ledger (A=0.65, B=-0.20)', () => {
+  // Corrección parcial: el ajuste pooled pide A≈0.20 pero eso deja el slate
+  // vacío (muestra seleccionada); A=0.65 corrige la sobreconfianza sin
+  // silenciar el motor. Cruda 85% → calibrada 71.7%; cruda 70% → 58.7%.
+  assert.equal(applyPlattCalibration(85, 'nba'), 71.7);
+  assert.equal(applyPlattCalibration(70, 'futbol'), 58.7);
+  assert.equal(applyPlattCalibration(90, 'ncaaf'), 77.4);
 });
 
 test('modo paper: buildOpportunitiesAndTopSlate devuelve los vetados con motivo', () => {

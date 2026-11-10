@@ -40,6 +40,15 @@ import { removeVig, noVigFromSingleSide, expectedValuePct, edgePp, deriveDoubleC
 
 // Umbral mínimo de Valor Esperado real (p·cuota − 1) para publicar una selección
 const MIN_EV_PCT = 2.0;
+// Pausa de spreads (2026-11-10, decisión de Tavo): los spreads son TODA la
+// pérdida del ledger real (1W-9L, -7.51u; NBA 0W-6L, -6.30u; resto +0.40u).
+// Mientras esté en true, ningún spread se despacha como pick real: se veta
+// con motivo 'spread_paused' al final de classifyOpportunity (después de
+// todos los demás filtros, así el motivo solo cubre spreads que habrían
+// salido) y el modo paper los sigue registrando y calificando contra
+// resultados reales. Re-activar solo cuando el reporte paper muestre que
+// los spreads ganan con muestra suficiente (20+ picks paper).
+const SPREADS_PAUSED = true;
 // Brecha máxima tolerada entre el modelo y la probabilidad sin vig del mercado sharp
 const MAX_MODEL_MARKET_GAP_PP = 12;
 
@@ -1369,6 +1378,16 @@ export function classifyOpportunity(opp = {}) {
   } else {
     if (probNum < 54.0) return deny('prob_below_min', `Prob ${probNum}% < 54% (ML/1X2)`);
     if (oddsNum <= 1.70 && probNum < 58.0) return deny('prob_below_min', `Prob ${probNum}% < 58% con cuota ${oddsNum}`);
+  }
+
+  // Pausa de spreads (2026-11-10): va al final, así solo veta spreads que ya
+  // pasaron todo lo demás (candados, EV, prob mínima) y que habrían salido.
+  // El modo paper los registra con este motivo y los califica, para decidir
+  // con evidencia cuándo re-activarlos.
+  if (SPREADS_PAUSED) {
+    const isSpread = (opp.type || '').toUpperCase().includes('SPREAD')
+      || pickStr.includes('cubre') || pickStr.includes('hándicap') || pickStr.includes('handicap');
+    if (isSpread) return deny('spread_paused', 'Spreads en pausa: mercado en medición (1W-9L en el ledger)');
   }
   return { approved: true, vetoReason: null, vetoDetail: null };
 }

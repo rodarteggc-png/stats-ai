@@ -41,6 +41,7 @@ export const PAPER_VETO_REASONS = {
   tipster_audit: 'Veto cualitativo Tipster Pro (fatiga/vestidor/clima)',
   burned_odds: 'Momio quemado: RLM favorable pero edge remanente < 3% o cuota < 1.45',
   prob_below_min: 'Probabilidad calibrada por debajo del mínimo del mercado',
+  spread_paused: 'Spreads en pausa: mercado en medición (1W-9L en el ledger real)',
   slate_cupo: 'Aprobado pero sin cupo en el Top Slate',
 };
 

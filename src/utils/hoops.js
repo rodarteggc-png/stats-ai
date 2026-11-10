@@ -136,8 +136,12 @@ export function calculateNbaProbabilities(match) {
   const projectedTotal = projectedHomeScore + projectedAwayScore;
   const projectedSpread = projectedHomeScore - projectedAwayScore; // Positivo si gana local
 
-  // Desviación estándar histórica en NBA: Margen ~ 11.2 pts | Total ~ 17.5 pts
-  const spreadStdDev = 11.2;
+  // Desviación estándar del margen en NBA: 11.2 pts era el supuesto histórico;
+  // la auditoría de los 6 spreads del ledger (2026-11-10) midió un error real
+  // de margen de ~14.7 pts, así que la σ asumida subestimaba la varianza y las
+  // coberturas salían sobreconfiadas. Total sigue en 17.5 pts (sin evidencia
+  // en contra). Afecta a la prob. de victoria directa y a la de cubrir spread.
+  const spreadStdDev = 14.7;
   const totalStdDev = 17.5;
 
   // Probabilidad de victoria directa (Moneyline)

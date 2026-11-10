@@ -7,13 +7,26 @@
  * Coeficientes empíricos de Platt Scaling por deporte.
  * Calibrados a partir de los datos históricos de auditoría forense para mitigar sesgos de cola.
  * Formulación: P_calibrada = 1 / (1 + exp(A * logit(P_raw) + B))
+ *
+ * 2026-11-10 (afinación, decisión de Tavo): los defaults ya NO son los de la
+ * era del backtest (A≈0.85-0.92). El ajuste pooled sobre el ledger real
+ * (37 picks cerrados, 17W-20L) pide A≈0.20, B≈-0.35, PERO ese ajuste está
+ * fitado solo sobre picks DESPACHADOS (muestra seleccionada: ya pasaron los
+ * mínimos de prob/EV y el consenso) y su encogimiento deja el slate vacío
+ * (corrida en seco 2026-11-10: 0 emitidos, todo vetado por EV). Por eso los
+ * defaults usan una corrección PARCIAL (A=0.65, B=-0.20): corrige la
+ * sobreconfianza (cruda 75% → 64.9% en vez de ~73%) sin silenciar el motor.
+ * El modo paper ahora registra TODAS las oportunidades (emitidas + vetadas)
+ * y las califica, así que la próxima recalibración se fitará sobre una
+ * muestra sin sesgo de selección. El refit por deporte (recalibrateFromAudit,
+ * umbral 30 picks) sigue adaptando por deporte cuando haya muestra suficiente.
  */
 let PLATT_COEFFICIENTS = {
-  futbol: { A: 0.88, B: -0.04 }, // Ajusta riesgo de empate en favoritos inflados
-  nfl: { A: 0.92, B: 0.00 },    // Calibrado con números clave 3 y 7
-  ncaaf: { A: 0.85, B: 0.00 },  // Mayor regresión a la media por volatilidad colegial
-  mlb: { A: 0.82, B: 0.02 },    // Suaviza sobreestimaciones provocadas por bullpen tardío
-  nba: { A: 0.90, B: 0.00 }     // Calibrado con posesiones y ritmo NBA
+  futbol: { A: 0.65, B: -0.20 },
+  nfl: { A: 0.65, B: -0.20 },
+  ncaaf: { A: 0.65, B: -0.20 },
+  mlb: { A: 0.65, B: -0.20 },
+  nba: { A: 0.65, B: -0.20 }
 };
 
 // Cargar coeficientes auto-aprendidos (Área 11) de memoria local si existen

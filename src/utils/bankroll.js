@@ -8,19 +8,22 @@
 // faltaban:
 //  - Exposición diaria: máximo 6.0u nuevas por día (CDMX). Si la cartelera
 //    supera el tope, se recorta por edge (se descartan las de menor edge).
-//  - Freno de drawdown: si el drawdown de los últimos 30 días llega a 8.0u,
-//    se bloquea el despacho de picks nuevos. El freno NO es permanente: se
-//    levanta solo cuando la ventana de 30 días rueda y el drawdown baja, o
-//    con un reinicio manual explícito y registrado (scripts/bankrollReset.mjs).
-//    Sin picks nuevos no hay resultados nuevos: la recuperación es por el
-//    paso de la ventana, no por apostar más.
+//  - Freno de drawdown: si el drawdown de los últimos 30 días llega a 15.0u,
+//    se bloquea el despacho de picks nuevos. Es red de seguridad de último
+//    recurso, no objetivo de calidad: el objetivo interno es no perder más
+//    de 6.0u en 30 días afinando el sistema (Tavo 2026-11-10); el stop-loss
+//    es de cada jugador/suscriptor, el sistema no debe parar de generar picks.
+//    El freno NO es permanente: se levanta solo cuando la ventana de 30 días
+//    rueda y el drawdown baja, o con un reinicio manual explícito y registrado
+//    (scripts/bankrollReset.mjs). Sin picks nuevos no hay resultados nuevos:
+//    la recuperación es por el paso de la ventana, no por apostar más.
 //
 // Todo puro y testeable: recibe filas del ledger, no lee archivos.
 
 export const BANKROLL = {
   maxStakeUnits: 2.0,
   maxDailyExposureUnits: 6.0,
-  drawdownStopUnits: 8.0,
+  drawdownStopUnits: 15.0,
   drawdownWindowDays: 30,
   timeZone: 'America/Mexico_City',
 };
