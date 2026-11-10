@@ -22,7 +22,8 @@ export default async function handler(req, res) {
     const shift = req.query?.shift || (req.query?.nocturno ? 'nocturno' : null);
     const vip = req.query?.vip === 'true' || req.query?.vip === '1';
     // MODO PAPER (2026-11-10): ?paper=1 corre el motor sin despachar picks
-    // reales; el slate paper va al chat VIP y queda en el ledger paper.
+    // reales; el slate paper va al mismo destino que el despacho real
+    // (grupo; VIP solo con ?vip=1) y queda en el ledger paper.
     const paper = req.query?.paper === 'true' || req.query?.paper === '1';
     const result = await runAlertEngine({ force, audit, shift, vip, paper });
     const targetChat = vip 

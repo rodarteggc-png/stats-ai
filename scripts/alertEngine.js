@@ -3445,7 +3445,8 @@ export async function runAlertEngine(options = {}) {
   const isDryRun = options.dryRun || process.argv.includes('--dry-run');
   // MODO PAPER (2026-11-10): corre el motor completo pero NO despacha picks
   // reales. Registra emitidos + vetados en el ledger paper y manda el slate
-  // paper al chat VIP. Se activa con --paper, options.paper o PAPER_MODE=1
+  // paper al mismo destino que el despacho real (grupo por defecto; VIP
+  // solo con --vip). Se activa con --paper, options.paper o PAPER_MODE=1
   // en Vercel (el cron de 9:30/3:30 corre en paper sin cambiar nada más).
   const isPaper = options.paper || process.argv.includes('--paper') || ['1', 'true'].includes(String(process.env.PAPER_MODE || '').toLowerCase());
   const isVerbose = options.verbose || process.argv.includes('--verbose');
@@ -3843,12 +3844,18 @@ export async function runAlertEngine(options = {}) {
       emitted: emittedEntries, vetoed: vetoedEntries, approvedNotInSlate,
       brakeBlocked: bankrollState.blocked, brakeReasons: bankrollState.reasons,
     });
-    const paperChatId = process.env.TELEGRAM_VIP_CHAT_ID || '1258878024';
-    await sendTelegramMessage(paperText, isDryRun, paperChatId);
+    const vipId = String(process.env.TELEGRAM_VIP_CHAT_ID || '1258878024');
+    // Destino = el mismo que el despacho real (regla del usuario 2026-11-10):
+    // programado → grupo (TELEGRAM_CHAT_ID, destino por defecto);
+    // VIP solo bajo petición (--vip / ?vip=1). Antes el slate paper iba
+    // siempre al VIP por error (el turno de las 3:30 del 2026-11-10 llegó
+    // al VIP en vez de al grupo).
+    const paperDestLabel = !targetChatId ? 'grupo (TELEGRAM_CHAT_ID)' : (String(targetChatId) === vipId ? 'VIP' : `chat ${targetChatId}`);
+    await sendTelegramMessage(paperText, isDryRun, targetChatId);
     if (!isDryRun) {
       try { await saveCloudLedger(sentCache); } catch (e) { console.warn('Aviso persistiendo paper ledger:', e.message); }
     }
-    console.log(`🧪 Modo paper: ${emittedEntries.length} emitidos, ${approvedNotInSlate.length} aprobados sin cupo, ${vetoedEntries.length} vetados registrados (${paperRecorded} nuevos).`);
+    console.log(`🧪 Modo paper: ${emittedEntries.length} emitidos, ${approvedNotInSlate.length} aprobados sin cupo, ${vetoedEntries.length} vetados registrados (${paperRecorded} nuevos) → ${paperDestLabel}.`);
     return {
       sentCount: 0,
       paper: true,
