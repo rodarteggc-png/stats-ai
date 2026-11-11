@@ -107,7 +107,7 @@ export function computeLedgerReport(rows) {
         beatRatePct: r2((withClv.filter(r => Number(r.clvPct) > 0).length / withClv.length) * 100),
         avgClvPct: r2(withClv.reduce((a, r) => a + Number(r.clvPct), 0) / withClv.length),
       }
-      : { n: 0, beatRatePct: null, avgClvPct: null, note: 'Sin datos: no hay cuotas de cierre capturadas. El CLV requiere captura poco antes del inicio (ver scripts/captureClosingOdds.mjs, pendiente de cuota).' },
+      : { n: 0, beatRatePct: null, avgClvPct: null, note: 'Sin datos: no hay cuotas de cierre capturadas. El CLV requiere correr scripts/captureClosingOdds.mjs (ESPN/DraftKings, gratis) poco antes del inicio de cada partido.' },
     drawdown: {
       maxDrawdownUnits: r2(maxDrawdown),
       currentDrawdownUnits: r2(peak - running),

@@ -325,8 +325,10 @@ export async function gradePendingPicks({ fetchImpl = fetch, apply = false, only
         result: g.result,
         score: g.score,
         // Sin captura de cierre no hay CLV: null, nunca 0 inventado.
-        closingOdds: null,
-        clvPct: null,
+        // Si captureClosingOdds.mjs ya capturó el cierre (ESPN/DraftKings),
+        // se conserva: borrarlo aquí era lo que dejaba el CLV en 0 siempre.
+        closingOdds: p.closingOdds ?? null,
+        clvPct: p.clvPct ?? null,
         pnlUnits: g.pnlUnits,
         closedAt: new Date().toISOString(),
         closedBy: 'gradeLedger.mjs (ESPN Scoreboard)',
@@ -336,7 +338,9 @@ export async function gradePendingPicks({ fetchImpl = fetch, apply = false, only
     const lines = graded.map(g => JSON.stringify({
       pickId: g.id, closedAt: new Date().toISOString(), source: 'espn-scoreboard',
       game: g.pick.game, pick: g.pick.pick, score: g.score,
-      result: g.result, pnlUnits: g.pnlUnits, closingOdds: null, clvPct: null,
+      result: g.result, pnlUnits: g.pnlUnits,
+      closingOdds: g.pick.closingOdds ?? null, clvPct: g.pick.clvPct ?? null,
+      closingSource: g.pick.closingSource ?? null, beatClosingLine: g.pick.beatClosingLine ?? null,
     })).join('\n') + '\n';
     fs.appendFileSync(closuresFile, lines, 'utf-8');
   }

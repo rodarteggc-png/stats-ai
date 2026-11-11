@@ -19,7 +19,9 @@
     "paper:import": "node scripts/paperImport.mjs",
     "bankroll:status": "node scripts/bankrollReset.mjs --status",
     "nba:ratings": "node scripts/updateNbaRatings.mjs",
-    "backtest": "node scripts/backtest.js"
+    "backtest": "node scripts/backtest.js",
+    "closing:capture": "node scripts/captureClosingOdds.mjs",
+    "closing:test": "node --test scripts/captureClosingOdds.test.mjs"
   },
   "dependencies": {
     "html-to-image": "^1.11.13",
