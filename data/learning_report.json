@@ -1,0 +1,108 @@
+{
+  "generatedAt": "2026-11-12T05:27:12.564Z",
+  "model": "gemini-2.5-flash",
+  "tuning": {
+    "platt": {
+      "futbol": {
+        "A": 0.65,
+        "B": -0.2
+      },
+      "nfl": {
+        "A": 0.65,
+        "B": -0.2
+      },
+      "ncaaf": {
+        "A": 0.65,
+        "B": -0.2
+      },
+      "mlb": {
+        "A": 0.65,
+        "B": -0.2
+      },
+      "nba": {
+        "A": 0.65,
+        "B": -0.2
+      }
+    },
+    "nbaSigma": 14.7,
+    "spreadsPaused": true,
+    "drawdownStopUnits": 15,
+    "maxDailyExposureUnits": 6,
+    "internalQualityTargetUnits30d": 6
+  },
+  "summary": {
+    "overall": {
+      "n": 37,
+      "wins": 17,
+      "losses": 20,
+      "pushes": 0,
+      "hitRate": 45.95,
+      "netUnits": -7.11,
+      "stakedUnits": 33.3,
+      "roiPct": -21.35,
+      "avgProbPct": 68.83,
+      "avgImpliedPct": 55.36,
+      "calibrationGapPts": 22.88
+    },
+    "clv": {
+      "n": 0,
+      "beatRatePct": null,
+      "avgClvPct": null,
+      "note": "Sin datos: no hay cuotas de cierre capturadas. El CLV requiere correr scripts/captureClosingOdds.mjs (ESPN/DraftKings, gratis) poco antes del inicio de cada partido."
+    },
+    "drawdown": {
+      "maxDrawdownUnits": 9.21,
+      "currentDrawdownUnits": 9.12,
+      "peakUnits": 2.01
+    },
+    "bySport": [
+      "Fútbol: 14 picks, 8W-6L, acierto 57.14%, ROI -2.48%, prob. modelo 69.01%, brecha 11.87 pts",
+      "NCAAF: 12 picks, 5W-7L, acierto 41.67%, ROI -11.47%, prob. modelo 62.78%, brecha 21.11 pts",
+      "Baloncesto: 10 picks, 3W-7L, acierto 30%, ROI -58.49%, prob. modelo 76.35%, brecha 46.35 pts",
+      "MLB: 1 picks, 1W-0L, acierto 100%, ROI 70%, prob. modelo 63.7%, brecha -36.3 pts"
+    ],
+    "byMarket": [
+      "Totales: 17 picks, 10W-7L, acierto 58.82%, ROI -3.73%, prob. modelo 66.45%, brecha 7.62 pts",
+      "Spread/Hándicap: 10 picks, 1W-9L, acierto 10%, ROI -86.32%, prob. modelo 70.31%, brecha 60.31 pts",
+      "BTTS: 4 picks, 2W-2L, acierto 50%, ROI -12.43%, prob. modelo 62.38%, brecha 12.38 pts",
+      "Player prop: 2 picks, 1W-1L, acierto 50%, ROI -17.67%, prob. modelo 88.05%, brecha 38.05 pts",
+      "Moneyline: 2 picks, 2W-0L, acierto 100%, ROI 88.57%, prob. modelo 66.1%, brecha -33.9 pts",
+      "Doble oportunidad: 2 picks, 1W-1L, acierto 50%, ROI 11.25%, prob. modelo 78.1%, brecha 28.1 pts"
+    ],
+    "byProbBucket": [
+      "60–70%: 20 picks, 10W-10L, acierto 50%, ROI -26.42%, prob. modelo 63.73%, brecha 13.73 pts",
+      "80%+: 8 picks, 3W-5L, acierto 37.5%, ROI -34.72%, prob. modelo 85.65%, brecha 48.15 pts",
+      "50–60%: 5 picks, 2W-3L, acierto 40%, ROI -6.47%, prob. modelo 58.32%, brecha 18.32 pts",
+      "70–80%: 4 picks, 2W-2L, acierto 50%, ROI 7.08%, prob. modelo 73.85%, brecha 23.85 pts"
+    ],
+    "recentForm": [
+      "W Memphis Grizzlies vs Utah Jazz (UNDER 241.5 Pts, 0.64u)",
+      "L Milwaukee Bucks vs Chicago Bulls (UNDER 240.5 Pts, -2u)",
+      "L Milwaukee Bucks vs Chicago Bulls (Milwaukee Bucks -1.5 (Cubre Línea), -2u)",
+      "W Servette vs OH Leuven (Ambos Equipos Anotan: Sí (BTTS), 0.66u)",
+      "L Atlanta Hawks vs Cleveland Cavaliers (Cleveland Cavaliers +1.5 (Cubre Línea), -1.5u)",
+      "W Atlanta Hawks vs Cleveland Cavaliers (UNDER 237.5 Pts, 0.82u)",
+      "L James Madison Dukes vs Troy Trojans (OVER 52.5 Pts, -0.7u)",
+      "L James Madison Dukes vs Troy Trojans (James Madison Dukes -17.5 (Cubre Línea), -0.3u)",
+      "W Deportivo vs Osasuna (Deportivo o Empate (1X), 0.19u)",
+      "L Lorient vs Brest (Lorient o Empate (1X), -0.1u)"
+    ],
+    "streaks": {
+      "current": {
+        "type": "L",
+        "count": 1
+      },
+      "longestWin": 3,
+      "longestLoss": 4
+    },
+    "warnings": [
+      "Muestra insuficiente: 37 picks cerrados. Con menos de ~100 picks no se puede concluir que el modelo tenga edge; el ROI observado puede ser varianza.",
+      "ROI negativo en la muestra cerrada: el récord publicado pierde dinero. No usar el backtest de 83.9% como argumento comercial.",
+      "El modelo sobreestima: probabilidad promedio 68.83% vs acierto real 45.95%. Revisar calibración antes de subir stakes."
+    ]
+  },
+  "ai": {
+    "available": false,
+    "reason": "Sin GEMINI_API_KEY en el entorno."
+  }
+}

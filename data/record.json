@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-10T07:08:47.248Z",
+  "generatedAt": "2026-11-12T05:25:44.929Z",
   "source": "data/pick_ledger.jsonl (38 picks publicados por Telegram, calificados con marcador final ESPN)",
   "totalPicks": 38,
   "closed": 37,
@@ -24,12 +24,252 @@
     "n": 0,
     "beatRatePct": null,
     "avgClvPct": null,
-    "note": "Sin datos: no hay cuotas de cierre capturadas. El CLV requiere captura poco antes del inicio (ver scripts/captureClosingOdds.mjs, pendiente de cuota)."
+    "note": "Sin datos: no hay cuotas de cierre capturadas. El CLV requiere correr scripts/captureClosingOdds.mjs (ESPN/DraftKings, gratis) poco antes del inicio de cada partido."
   },
   "drawdown": {
     "maxDrawdownUnits": 9.21,
     "currentDrawdownUnits": 9.12,
     "peakUnits": 2.01
+  },
+  "recentForm": [
+    {
+      "id": "nba-under-nba-401909838",
+      "date": "2026-11-10",
+      "game": "Memphis Grizzlies vs Utah Jazz",
+      "pick": "UNDER 241.5 Pts",
+      "result": "WON",
+      "pnlUnits": 0.64
+    },
+    {
+      "id": "nba-under-nba-401909848",
+      "date": "2026-11-10",
+      "game": "Milwaukee Bucks vs Chicago Bulls",
+      "pick": "UNDER 240.5 Pts",
+      "result": "LOST",
+      "pnlUnits": -2
+    },
+    {
+      "id": "nba-spread-h-nba-401909848",
+      "date": "2026-11-10",
+      "game": "Milwaukee Bucks vs Chicago Bulls",
+      "pick": "Milwaukee Bucks -1.5 (Cubre Línea)",
+      "result": "LOST",
+      "pnlUnits": -2
+    },
+    {
+      "id": "btts-soccer-401916998",
+      "date": "2026-11-10",
+      "game": "Servette vs OH Leuven",
+      "pick": "Ambos Equipos Anotan: Sí (BTTS)",
+      "result": "WON",
+      "pnlUnits": 0.66
+    },
+    {
+      "id": "nba-spread-a-nba-401909893",
+      "date": "2026-11-10",
+      "game": "Atlanta Hawks vs Cleveland Cavaliers",
+      "pick": "Cleveland Cavaliers +1.5 (Cubre Línea)",
+      "result": "LOST",
+      "pnlUnits": -1.5
+    },
+    {
+      "id": "nba-under-nba-401909893",
+      "date": "2026-11-10",
+      "game": "Atlanta Hawks vs Cleveland Cavaliers",
+      "pick": "UNDER 237.5 Pts",
+      "result": "WON",
+      "pnlUnits": 0.82
+    },
+    {
+      "id": "ncaaf-tot-ncaaf-401869963",
+      "date": "2026-11-10",
+      "game": "James Madison Dukes vs Troy Trojans",
+      "pick": "OVER 52.5 Pts",
+      "result": "LOST",
+      "pnlUnits": -0.7
+    },
+    {
+      "id": "ncaaf-spread-h-ncaaf-401869963",
+      "date": "2026-11-10",
+      "game": "James Madison Dukes vs Troy Trojans",
+      "pick": "James Madison Dukes -17.5 (Cubre Línea)",
+      "result": "LOST",
+      "pnlUnits": -0.3
+    },
+    {
+      "id": "steam-soccer-401882824",
+      "date": "2026-11-10",
+      "game": "Deportivo vs Osasuna",
+      "pick": "Deportivo o Empate (1X)",
+      "result": "WON",
+      "pnlUnits": 0.19
+    },
+    {
+      "id": "dc-soccer-401876419",
+      "date": "2026-11-10",
+      "game": "Lorient vs Brest",
+      "pick": "Lorient o Empate (1X)",
+      "result": "LOST",
+      "pnlUnits": -0.1
+    }
+  ],
+  "equityCurve": [
+    {
+      "date": "2026-10-21",
+      "units": -1.4
+    },
+    {
+      "date": "2026-10-21",
+      "units": -0.76
+    },
+    {
+      "date": "2026-10-21",
+      "units": 1.04
+    },
+    {
+      "date": "2026-10-21",
+      "units": 2.01
+    },
+    {
+      "date": "2026-10-21",
+      "units": 0.51
+    },
+    {
+      "date": "2026-10-29",
+      "units": -0.19
+    },
+    {
+      "date": "2026-10-29",
+      "units": -0.13
+    },
+    {
+      "date": "2026-11-10",
+      "units": 0.55
+    },
+    {
+      "date": "2026-11-10",
+      "units": 1.04
+    },
+    {
+      "date": "2026-11-10",
+      "units": 0.14
+    },
+    {
+      "date": "2026-11-10",
+      "units": -0.56
+    },
+    {
+      "date": "2026-11-10",
+      "units": 0.08
+    },
+    {
+      "date": "2026-11-10",
+      "units": -0.82
+    },
+    {
+      "date": "2026-11-10",
+      "units": -1.52
+    },
+    {
+      "date": "2026-11-10",
+      "units": -2.52
+    },
+    {
+      "date": "2026-11-10",
+      "units": -1.61
+    },
+    {
+      "date": "2026-11-10",
+      "units": -0.7
+    },
+    {
+      "date": "2026-11-10",
+      "units": -1.7
+    },
+    {
+      "date": "2026-11-10",
+      "units": -0.79
+    },
+    {
+      "date": "2026-11-10",
+      "units": -0.02
+    },
+    {
+      "date": "2026-11-10",
+      "units": 0.04
+    },
+    {
+      "date": "2026-11-10",
+      "units": -0.66
+    },
+    {
+      "date": "2026-11-10",
+      "units": -0.02
+    },
+    {
+      "date": "2026-11-10",
+      "units": -0.72
+    },
+    {
+      "date": "2026-11-10",
+      "units": -1.42
+    },
+    {
+      "date": "2026-11-10",
+      "units": -2.12
+    },
+    {
+      "date": "2026-11-10",
+      "units": -2.82
+    },
+    {
+      "date": "2026-11-10",
+      "units": -2.18
+    },
+    {
+      "date": "2026-11-10",
+      "units": -4.18
+    },
+    {
+      "date": "2026-11-10",
+      "units": -6.18
+    },
+    {
+      "date": "2026-11-10",
+      "units": -5.52
+    },
+    {
+      "date": "2026-11-10",
+      "units": -7.02
+    },
+    {
+      "date": "2026-11-10",
+      "units": -6.2
+    },
+    {
+      "date": "2026-11-10",
+      "units": -6.9
+    },
+    {
+      "date": "2026-11-10",
+      "units": -7.2
+    },
+    {
+      "date": "2026-11-10",
+      "units": -7.01
+    },
+    {
+      "date": "2026-11-10",
+      "units": -7.11
+    }
+  ],
+  "streaks": {
+    "current": {
+      "type": "L",
+      "count": 1
+    },
+    "longestWin": 3,
+    "longestLoss": 4
   },
   "bySport": [
     {

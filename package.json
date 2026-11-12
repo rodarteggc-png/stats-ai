@@ -21,7 +21,10 @@
     "nba:ratings": "node scripts/updateNbaRatings.mjs",
     "backtest": "node scripts/backtest.js",
     "closing:capture": "node scripts/captureClosingOdds.mjs",
-    "closing:test": "node --test scripts/captureClosingOdds.test.mjs"
+    "closing:test": "node --test scripts/captureClosingOdds.test.mjs",
+    "ledger:import": "node scripts/realImport.mjs",
+    "ledger:learn": "node scripts/learnFromLedger.mjs",
+    "test": "node --test scripts/userFlows.test.mjs scripts/captureClosingOdds.test.mjs scripts/realImport.test.mjs scripts/learnFromLedger.test.mjs"
   },
   "dependencies": {
     "html-to-image": "^1.11.13",

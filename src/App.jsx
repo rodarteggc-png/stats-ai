@@ -3887,6 +3887,67 @@ export default function App() {
                   {verifiedRecord.warnings && verifiedRecord.warnings.length > 0 ? ` · ${verifiedRecord.warnings[0]}` : ""}
                   {" "}· El 83.9% publicitado es un backtest, no este récord.
                 </div>
+                {/* VISUALIZACIÓN DE ACIERTOS/DERROTAS (2026-11-11): por deporte, mercado y probabilidad + forma reciente + curva de unidades */}
+                {verifiedRecord.bySport && verifiedRecord.bySport.length > 0 && (
+                  <div style={{ marginTop: 12, borderTop: "1px solid #ffffff14", paddingTop: 10 }}>
+                    <div style={{ fontSize: 11, fontWeight: 800, color: "#94a3b8", marginBottom: 6 }}>✅ ACIERTOS Y DERROTAS — POR DEPORTE / MERCADO / PROBABILIDAD</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {verifiedRecord.bySport.map((g) => (
+                        <span key={`s-${g.key}`} style={{ fontSize: 12, fontWeight: 700, color: "#f8fafc", background: "#1e293b", border: "1px solid #334155", borderRadius: 6, padding: "4px 8px" }}>
+                          {g.key}: {g.wins}W-{g.losses}L ({g.roiPct >= 0 ? "+" : ""}{g.roiPct}%)
+                        </span>
+                      ))}
+                      {verifiedRecord.byMarket && verifiedRecord.byMarket.map((g) => (
+                        <span key={`m-${g.key}`} style={{ fontSize: 12, fontWeight: 700, color: "#f8fafc", background: "#1e293b", border: "1px solid #334155", borderRadius: 6, padding: "4px 8px" }}>
+                          {g.key}: {g.wins}W-{g.losses}L ({g.roiPct >= 0 ? "+" : ""}{g.roiPct}%)
+                        </span>
+                      ))}
+                    </div>
+                    {verifiedRecord.byProbBucket && verifiedRecord.byProbBucket.length > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                        {verifiedRecord.byProbBucket.map((g) => (
+                          <span key={`b-${g.key}`} style={{ fontSize: 12, fontWeight: 700, color: "#f8fafc", background: "#1e293b", border: "1px solid #334155", borderRadius: 6, padding: "4px 8px" }}>
+                            {g.key}: acierto {g.hitRate}% (modelo {g.avgProbPct}%)
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {verifiedRecord.recentForm && verifiedRecord.recentForm.length > 0 && (
+                      <div style={{ marginTop: 10, fontSize: 12, color: "#94a3b8" }}>
+                        <span style={{ fontWeight: 800, color: "#f8fafc" }}>Últimos {verifiedRecord.recentForm.length}: </span>
+                        {verifiedRecord.recentForm.map((r, i) => (
+                          <span key={r.id || i} title={`${r.game} — ${r.pick}`} style={{ display: "inline-block", width: 18, height: 18, lineHeight: "18px", textAlign: "center", borderRadius: 4, marginRight: 3, fontSize: 11, fontWeight: 800, color: "#fff", background: r.result === "WON" ? "#10b981" : r.result === "LOST" ? "#ef4444" : "#64748b" }}>
+                            {r.result === "WON" ? "W" : r.result === "LOST" ? "L" : "P"}
+                          </span>
+                        ))}
+                        {verifiedRecord.streaks && verifiedRecord.streaks.current && verifiedRecord.streaks.current.type && (
+                          <span style={{ marginLeft: 8 }}>
+                            Racha: {verifiedRecord.streaks.current.count}x {verifiedRecord.streaks.current.type === "W" ? "ganadas" : "perdidas"} · Más larga perdida: {verifiedRecord.streaks.longestLoss}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {verifiedRecord.equityCurve && verifiedRecord.equityCurve.length > 1 && (() => {
+                      const pts = verifiedRecord.equityCurve;
+                      const vals = pts.map((p) => p.units);
+                      const min = Math.min(...vals, 0);
+                      const max = Math.max(...vals, 0);
+                      const span = max - min || 1;
+                      const xy = pts.map((p, i) => `${(i / (pts.length - 1)) * 100},${36 - ((p.units - min) / span) * 32}`).join(" ");
+                      const last = pts[pts.length - 1].units;
+                      const zeroY = 36 - ((0 - min) / span) * 32;
+                      return (
+                        <div style={{ marginTop: 10 }}>
+                          <div style={{ fontSize: 11, fontWeight: 800, color: "#94a3b8" }}>CURVA DE UNIDADES (ACUMULADO) — ÚLTIMO: {last >= 0 ? "+" : ""}{last}u</div>
+                          <svg viewBox="0 0 100 40" preserveAspectRatio="none" style={{ width: "100%", height: 44, marginTop: 4 }}>
+                            <line x1="0" y1={zeroY} x2="100" y2={zeroY} stroke="#334155" strokeWidth="0.6" />
+                            <polyline points={xy} fill="none" stroke={last >= 0 ? "#10b981" : "#ef4444"} strokeWidth="1.6" />
+                          </svg>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
               </div>
             )}
 

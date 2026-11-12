@@ -93,6 +93,39 @@ export function computeLedgerReport(rows) {
     if (p < 80) return '70–80%';
     return '80%+';
   };
+  // Visualización de aciertos/derrotas (2026-11-11): forma reciente, curva de
+  // equity y rachas, en orden cronológico de cierre. Es lo que alimenta la
+  // tarjeta web y lo que la IA usa para generar criterio.
+  const recentForm = ordered.slice(-10).map((r) => ({
+    id: r.id,
+    date: (r.closedAt || r.timestamp || '').slice(0, 10),
+    game: r.game,
+    pick: r.pick,
+    result: r.result,
+    pnlUnits: r2(Number(r.pnlUnits) || 0)
+  }));
+  let runningUnits = 0;
+  const equityCurve = ordered.map((r) => {
+    runningUnits += Number(r.pnlUnits) || 0;
+    return { date: (r.closedAt || r.timestamp || '').slice(0, 10), units: r2(runningUnits) };
+  });
+  const streaks = (() => {
+    let current = { type: null, count: 0 };
+    let longestWin = 0;
+    let longestLoss = 0;
+    let runType = null;
+    let runCount = 0;
+    for (const r of ordered) {
+      const t = r.result === 'WON' ? 'W' : r.result === 'LOST' ? 'L' : null;
+      if (!t) { runType = null; runCount = 0; continue; }
+      if (t === runType) runCount++;
+      else { runType = t; runCount = 1; }
+      if (t === 'W') longestWin = Math.max(longestWin, runCount);
+      else longestLoss = Math.max(longestLoss, runCount);
+    }
+    if (runType) current = { type: runType, count: runCount };
+    return { current, longestWin, longestLoss };
+  })();
   return {
     generatedAt: new Date().toISOString(),
     source: 'data/pick_ledger.jsonl (38 picks publicados por Telegram, calificados con marcador final ESPN)',
@@ -113,6 +146,9 @@ export function computeLedgerReport(rows) {
       currentDrawdownUnits: r2(peak - running),
       peakUnits: r2(peak),
     },
+    recentForm,
+    equityCurve,
+    streaks,
     bySport: groupBy(closed, r => r.sport),
     byLeague: groupBy(closed, r => r.league),
     byMarket: groupBy(closed, marketOf),
@@ -140,6 +176,10 @@ function printReport(report) {
   console.log(`Prob. modelo prom.: ${o.avgProbPct}% | Implícita prom.: ${o.avgImpliedPct}% | Brecha calibración: ${o.calibrationGapPts} pts`);
   console.log(`CLV: ${report.clv.n === 0 ? 'sin datos' : `${report.clv.beatRatePct}% lo superan (prom. ${report.clv.avgClvPct}%)`}`);
   console.log(`Drawdown máx.: ${report.drawdown.maxDrawdownUnits}u | Actual: ${report.drawdown.currentDrawdownUnits}u`);
+  if (report.recentForm && report.recentForm.length) {
+    console.log(`\nForma reciente (últimos ${report.recentForm.length}): ${report.recentForm.map((r) => r.result === 'WON' ? 'W' : r.result === 'LOST' ? 'L' : 'P').join(' ')}`);
+    console.log(`Racha actual: ${report.streaks.current.type ? `${report.streaks.current.count}x ${report.streaks.current.type === 'W' ? 'ganadas' : 'perdidas'}` : 'sin racha'} | Más larga ganada: ${report.streaks.longestWin} | Más larga perdida: ${report.streaks.longestLoss}`);
+  }
   console.log(`\nPor mercado:`);
   for (const g of report.byMarket) console.log(` • ${g.key}: ${g.n} picks, ${g.wins}W-${g.losses}L, ROI ${g.roiPct}%`);
   console.log(`\nPor cubo de probabilidad (modelo vs real):`);
