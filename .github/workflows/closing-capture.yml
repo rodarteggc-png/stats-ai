@@ -1,0 +1,61 @@
+# .github/workflows/closing-capture.yml
+# Captura de cuota de cierre (ESPN/DraftKings) para los picks PENDING, como
+# parte del proyecto: no depende de Muse ni de ninguna máquina externa.
+#
+# Cada 15 min, en la ventana de partidos, corre
+# scripts/captureClosingOdds.mjs (real + paper) y, SOLO si hubo capturas,
+# hace commit del ledger actualizado. Sin capturas no hay commit ni deploy.
+#
+# Horario (GitHub Actions usa UTC; Monterrey es UTC-6 todo el año, sin DST):
+#   15-23 UTC = 09:00-17:45 CST  |  00-05 UTC = 18:00-23:45 CST del día anterior
+#   => cubre 09:00-23:45 CST, cuando empiezan los partidos (NBA 18:00-21:00,
+#   Liga MX/MLS 18:00-21:00, NFL domingo 12:00-19:20, NCAAF sábado 11:00-21:00).
+# La captura es gratis: ESPN no tiene llave ni cuota. No toca The Odds API
+# ni API-Sports. Si una corrida falla, la siguiente (15 min después) vuelve
+# a capturar mientras el partido no haya empezado: se auto-repara.
+name: closing-capture
+
+on:
+  schedule:
+    - cron: '*/15 15-23 * * *'
+    - cron: '*/15 0-5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: closing-capture
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Capturar cierres (real + paper)
+        run: |
+          node scripts/captureClosingOdds.mjs --window-mins 90
+          node scripts/captureClosingOdds.mjs --paper --window-mins 90
+
+      - name: Commit solo si hubo capturas
+        run: |
+          for f in data/pick_ledger.jsonl data/closing_ledger.jsonl data/paper_ledger.jsonl data/paper_closing_ledger.jsonl; do
+            [ -f "$f" ] && git add "$f"
+          done
+          if git diff --cached --quiet; then
+            echo "Sin capturas: no hay commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(cierre): cuotas de cierre ESPN capturadas"
+          git push || (git pull --rebase && git push)
