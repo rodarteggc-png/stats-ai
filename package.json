@@ -24,7 +24,7 @@
     "closing:test": "node --test scripts/captureClosingOdds.test.mjs",
     "ledger:import": "node scripts/realImport.mjs",
     "ledger:learn": "node scripts/learnFromLedger.mjs",
-    "test": "node --test scripts/userFlows.test.mjs scripts/captureClosingOdds.test.mjs scripts/realImport.test.mjs scripts/learnFromLedger.test.mjs"
+    "test": "node --test scripts/userFlows.test.mjs scripts/captureClosingOdds.test.mjs scripts/realImport.test.mjs scripts/learnFromLedger.test.mjs scripts/fixBatch.test.mjs scripts/securityBatch.test.mjs scripts/fixBatch2.test.mjs"
   },
   "dependencies": {
     "html-to-image": "^1.11.13",

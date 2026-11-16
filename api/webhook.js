@@ -367,6 +367,12 @@ export default async function handler(req, res) {
 
   } catch (error) {
     console.error('Fallo no controlado en api/webhook:', error);
+    // C5 (2026-11-16): se mantiene el 200 hacia Telegram (si no, reintenta),
+    // pero el fallo se avisa al VIP en vez de tragarse solo con un log.
+    try {
+      const vipId = process.env.TELEGRAM_VIP_CHAT_ID ? Number(process.env.TELEGRAM_VIP_CHAT_ID) : 1258878024;
+      await sendTelegramMessage(`⚠️ *TURNO FALLIDO — STATS-AI PRO*\n\nMotivo: \`webhook_error\`\n${String(error?.message || error).slice(0, 300)}`, false, vipId);
+    } catch {}
     return res.status(200).send('OK'); // Telegram requiere siempre 200 para no reintentar
   }
 }

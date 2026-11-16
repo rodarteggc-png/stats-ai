@@ -51,6 +51,10 @@ const MIN_EV_PCT = 2.0;
 const SPREADS_PAUSED = true;
 // Brecha máxima tolerada entre el modelo y la probabilidad sin vig del mercado sharp
 const MAX_MODEL_MARKET_GAP_PP = 12;
+// E4 (2026-11-16): antigüedad máxima de una cuota ESPN al despachar. ESPN no
+// da timestamp de sus cuotas; la frescura es la hora de nuestra descarga
+// (match.oddsFetchedAt). Más de 15 min → veto 'odds_stale'.
+const ESPN_ODDS_MAX_AGE_MS = 15 * 60 * 1000;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -178,15 +182,63 @@ export function collectScheduleBatches(results, sourceNames = ['Fútbol', 'MLB',
 }
 
 /**
- * Estado de banca para el freno de drawdown (mejora 4, 2026-11-10).
- * Lee el ledger local (si existe; en Vercel puede no estar) y el reinicio
- * manual registrado. Nunca escribe ni modifica el ledger.
+ * Convierte entradas del cloud ledger (sentCache) a filas con forma de
+ * ledger para el freno de banca (C2, 2026-11-16). Una entrada cerrada es la
+ * que la auditoría ya calificó: audited + status won/lost, con netUnits y
+ * auditedAt. Solo cuentan picks despachados a Telegram (un portal_3v3 sin
+ * despachar no arriesga banca).
+ *
+ * LÍMITE CONOCIDO: pruneCache conserva solo 8 días / 100 entradas, así que
+ * la nube por sí sola no cubre la ventana de 30 días; por eso se fusiona
+ * con el archivo local (ver readBankrollState). La vía mínima para una
+ * ventana real de 30 días en la nube es un resumen diario compacto en
+ * _meta (ver informe del lote); un almacén real es el arreglo A2, fuera de
+ * este lote.
  */
-export function readBankrollState(nowMs = Date.now()) {
+export function cloudCacheToBankrollRows(cache = {}) {
+  const closedRows = [];
+  const allRows = [];
+  for (const [id, entry] of Object.entries(cache || {})) {
+    if (!id || id === '_meta' || !entry || typeof entry !== 'object') continue;
+    if (entry.dispatchedToTelegram !== true) continue;
+    const ts = Number(entry.timestamp) || 0;
+    if (!ts) continue;
+    const timestamp = new Date(ts).toISOString();
+    const stakeUnits = Number(entry.stakeUnits) || 0;
+    allRows.push({ id, status: (entry.audited && entry.status && entry.status !== 'pending') ? 'CLOSED' : 'PENDING', timestamp, stakeUnits });
+    if (entry.audited && (entry.status === 'won' || entry.status === 'lost')) {
+      closedRows.push({
+        id,
+        status: 'CLOSED',
+        result: entry.status === 'won' ? 'WON' : 'LOST',
+        closedAt: new Date(entry.auditedAt || ts).toISOString(),
+        timestamp,
+        pnlUnits: Number(entry.netUnits) || 0,
+        stakeUnits,
+      });
+    }
+  }
+  return { closedRows, allRows };
+}
+
+/**
+ * Estado de banca para el freno de drawdown (mejora 4, 2026-11-10).
+ * C2 (2026-11-16): el ledger en disco está congelado en el deploy (38 picks,
+ * último 2 nov); los picks despachados desde el 11 nov solo viven en el cloud
+ * ledger. Fuente primaria: el sentCache ya cargado por runAlertEngine,
+ * fusionado con el archivo por id (gana la nube, que trae el resultado
+ * auditado). Sin sentCache se mantiene el comportamiento anterior (archivo).
+ * Nunca escribe ni modifica el ledger.
+ */
+export function readBankrollState(nowMsOrOptions = Date.now()) {
+  const opts = (typeof nowMsOrOptions === 'object' && nowMsOrOptions !== null) ? nowMsOrOptions : { nowMs: nowMsOrOptions };
+  const nowMs = opts.nowMs || Date.now();
+  const sentCache = opts.sentCache || null;
+  const hasBotToken = Boolean(process.env.TELEGRAM_BOT_TOKEN);
   try {
     const dataDir = path.join(__dirname, '..', 'data');
     const ledgerFile = path.join(dataDir, 'pick_ledger.jsonl');
-    const rows = fs.existsSync(ledgerFile)
+    const fileRows = fs.existsSync(ledgerFile)
       ? fs.readFileSync(ledgerFile, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l))
       : [];
     const resetFile = path.join(dataDir, 'bankroll_reset.json');
@@ -194,16 +246,111 @@ export function readBankrollState(nowMs = Date.now()) {
     if (fs.existsSync(resetFile)) {
       try { resetAt = JSON.parse(fs.readFileSync(resetFile, 'utf-8')).resetAt || null; } catch {}
     }
-    return evaluateBankroll({
+    let rows = fileRows;
+    let source = 'file';
+    let cloudEmpty = false;
+    if (sentCache && typeof sentCache === 'object') {
+      const cloud = cloudCacheToBankrollRows(sentCache);
+      cloudEmpty = cloud.allRows.length === 0 && cloud.closedRows.length === 0;
+      const byId = new Map();
+      fileRows.forEach(r => { if (r && r.id) byId.set(r.id, r); });
+      // El orden importa: allRows primero y closedRows después, porque un
+      // pick auditado aparece en AMBOS y la fila cerrada es la rica (lleva
+      // result/pnlUnits); si se pusiera al revés, la fila pobre de allRows
+      // pisaría el resultado y el drawdown perdería ese pick.
+      [...cloud.allRows, ...cloud.closedRows].forEach(r => { if (r && r.id) byId.set(r.id, r); });
+      const noId = [...fileRows.filter(r => !r || !r.id), ...cloud.allRows.filter(r => !r || !r.id)];
+      rows = [...byId.values(), ...noId];
+      source = 'cloud+file';
+    }
+    const evaluated = evaluateBankroll({
       closedRows: rows.filter(r => r.status === 'CLOSED'),
       allRows: rows,
       nowMs,
       resetAt,
     });
+    const totalKnownPicks = rows.length;
+    // C2: fail-closed. Sin registro no se puede verificar el freno. En
+    // producción (token configurado) se bloquea el despacho y se avisa al
+    // VIP; en local (sin token) el archivo es el registro y solo se marca
+    // como no fiable. Lo mismo si la nube llegó vacía en producción: el
+    // archivo puede estar congelado y las pérdidas recientes serían invisibles.
+    //
+    // MATIZ (2026-11-16): cloud vacío + archivo CON picks NO bloquea, solo
+    // avisa (ver el aviso bankroll_unreliable en runAlertEngine). Bloquear
+    // ahí crearía un punto muerto: pruneCache vacía el cloud tras 8 días
+    // sin despachos, y sin despachos el cloud nunca se vuelve a llenar —
+    // el sistema quedaría congelado para siempre tras cualquier pausa de
+    // 8+ días. Con archivo, el freno se calcula del archivo (mejor registro
+    // disponible) y el VIP recibe el aviso; sin archivo no hay nada que
+    // calcular y sí se bloquea.
+    const noRecord = totalKnownPicks === 0;
+    const cloudEmptyInProd = cloudEmpty && hasBotToken;
+    const unreliable = noRecord || cloudEmptyInProd;
+    if (unreliable) {
+      const failReason = noRecord
+        ? 'Freno de banca no fiable: no se pudo leer ningún registro (cloud ledger vacío y ledger local vacío). Despacho bloqueado por seguridad.'
+        : 'Freno de banca no fiable: el cloud ledger llegó vacío en producción; el ledger local puede estar congelado y las pérdidas recientes serían invisibles. Se despacha con el freno calculado del ledger local.';
+      if (noRecord && hasBotToken) {
+        return {
+          ...evaluated,
+          blocked: true,
+          reasons: [...evaluated.reasons, failReason],
+          remainingExposureUnits: 0,
+          settledInWindow: evaluated.settledInWindow,
+          totalKnownPicks,
+          source,
+          unreliable: true,
+        };
+      }
+      return { ...evaluated, reasons: [...evaluated.reasons, failReason], totalKnownPicks, source, unreliable: true };
+    }
+    return { ...evaluated, totalKnownPicks, source, unreliable: false };
   } catch (err) {
-    console.warn('Aviso evaluando banca (sin freno aplicable):', err.message);
-    return { blocked: false, reasons: [], drawdownUnits: 0, exposureTodayUnits: 0, remainingExposureUnits: BANKROLL.maxDailyExposureUnits, resetAt: null };
+    // C2: fail-closed. Antes cualquier error devolvía blocked:false y el
+    // freno se desactivaba en silencio.
+    console.warn('Aviso evaluando banca (freno fail-closed):', err.message);
+    return { blocked: true, reasons: [`Freno de banca no fiable: error leyendo el registro (${err.message}). Despacho bloqueado por seguridad.`], drawdownUnits: 0, maxDrawdownUnits: 0, peakUnits: 0, settledInWindow: 0, exposureTodayUnits: 0, remainingExposureUnits: 0, resetAt: null, totalKnownPicks: 0, source: 'unavailable', unreliable: true };
   }
+}
+
+/**
+ * Registro persistente de ejecuciones de turno (C5, 2026-11-16). Una línea
+ * JSON por ejecución en data/shift_log.jsonl (best-effort: en Vercel el
+ * disco es de solo lectura y solo queda el aviso en consola + Telegram).
+ * No se espeja al canal del ledger: es telemetría operativa, no registro.
+ */
+const SHIFT_LOG_FILE = path.join(__dirname, '..', 'data', 'shift_log.jsonl');
+
+export function recordShiftExecution(entry = {}, { logPath = SHIFT_LOG_FILE } = {}) {
+  try {
+    const line = JSON.stringify({ timestamp: new Date().toISOString(), ...entry });
+    fs.appendFileSync(logPath, line + '\n', 'utf-8');
+    return true;
+  } catch (err) {
+    console.warn('Aviso registrando ejecución de turno:', err.message);
+    return false;
+  }
+}
+
+/**
+ * Aviso de turno fallido al VIP (C5, 2026-11-16). Se usa en los abortos del
+ * motor (candado, freno no fiable, turno sin picks con fuentes caídas) y en
+ * los catch de api/scan.js y api/webhook.js. Respeta dryRun (solo log).
+ */
+export async function notifyShiftFailure({ reason, detail = '', targetChatId = null, isDryRun = false, proceeding = false } = {}) {
+  const vipChatId = targetChatId || process.env.TELEGRAM_VIP_CHAT_ID || '1258878024';
+  const msg = [
+    proceeding ? `⚠️ *FRENO NO FIABLE — STATS-AI PRO*` : `⚠️ *TURNO FALLIDO — STATS-AI PRO*`,
+    ``,
+    `Motivo: \`${reason}\``,
+    ...(detail ? [`${String(detail).slice(0, 500)}`] : []),
+    ``,
+    proceeding
+      ? `El turno sigue con el freno calculado del ledger local (puede estar congelado). Revisa el motivo antes del siguiente turno.`
+      : `El turno no despachó picks. Revisa el motivo antes del siguiente turno.`,
+  ].join('\n');
+  return sendTelegramMessage(msg, isDryRun, vipChatId);
 }
 
 /**
@@ -250,10 +397,14 @@ export function recordPickToLedger(pick, effectiveStake = 1.0) {
         evPct: Number.isFinite(pick.evPct) ? Number(pick.evPct.toFixed(2)) : null,
         confidenceTier: pick.confidence?.tier || null,
         oddsSource: pick.oddsSource || 'market',
+        oddsProvider: pick.oddsProvider || null,
+        evNoVig: Boolean(pick.evNoVig),
+        fairOdds: pick.fairOdds || null,
         stakeUnits: parseFloat(effectiveStake) || 1.0,
         consensus: `${pick.consensus?.votesPassed || 3}/3`,
         sharpBook: pick.sharpBookmaker || null,
         isPinnacle: Boolean(pick.isPinnacle),
+        ratingsSource: pick.ratingsSource || null,
         source: 'telegram_alert',
         status: 'PENDING',
         result: null,
@@ -278,6 +429,10 @@ export function recordPickToLedger(pick, effectiveStake = 1.0) {
         prob: parseFloat(pick.prob) || null,
         rawProb: pick.rawProb ? parseFloat(pick.rawProb) : null,
         evPct: Number.isFinite(pick.evPct) ? Number(pick.evPct.toFixed(2)) : null,
+        oddsSource: pick.oddsSource || 'market',
+        oddsProvider: pick.oddsProvider || null,
+        evNoVig: Boolean(pick.evNoVig),
+        fairOdds: pick.fairOdds || null,
         stakeUnits: parseFloat(effectiveStake) || 1.0,
         status: 'PENDING'
       });
@@ -697,6 +852,27 @@ export function generateCheatsheetReport(picks = [], dateStr = '') {
 }
 
 /**
+ * Techo de Kelly fraccionado × multiplicador del Tier (P3, 2026-11-16).
+ * Es el MISMO cálculo que usaban calculatePickEffectiveStake y el loop de
+ * despacho inline; extraído aquí para que el veto 'kelly_zero' de
+ * classifyOpportunity, el stake efectivo y el despacho usen un solo valor.
+ * No cambia la fórmula de Kelly (kelly.js) ni los tiers (marketMath.js).
+ */
+export function kellyCapForPick(pick = {}) {
+  const isPickProp = isPlayerIndividualProp(pick);
+  const votes = pick.consensus?.votesPassed || 2;
+  const isPickElite = pick.isEliteProp ||
+    pick.consensus?.isEliteProp ||
+    (pick.type || '').toUpperCase().includes('PONCHES') ||
+    (typeof pick.pick === 'string' && pick.pick.toLowerCase().includes('ponches')) ||
+    pick.votesPassed === 3 ||
+    pick.consensus?.votesPassed === 3;
+  const kelly = calculateKellyStake(pick.prob, pick.odds, votes === 3 ? 0.10 : 0.05, isPickProp ? (isPickElite ? 1.5 : 1.0) : 2.0);
+  const tierMultiplier = pick.confidence?.kellyMultiplier ?? 0.5;
+  return Number((kelly.rawUnits * tierMultiplier).toFixed(1));
+}
+
+/**
  * Calcula de forma determinista el stake efectivo y su etiqueta institucional según
  * el perfil del pick (Player Prop, Base de Confianza, RLM, Unánime 3/3 y límites Kelly).
  */
@@ -724,12 +900,13 @@ export function calculatePickEffectiveStake(pick) {
   }
 
   const votes = pick.consensus?.votesPassed || 2;
-  const kelly = calculateKellyStake(pick.prob, pick.odds, votes === 3 ? 0.10 : 0.05, isPickProp ? (isPickElite ? 1.5 : 1.0) : 2.0);
-  const tierMultiplier = pick.confidence?.kellyMultiplier ?? 0.5;
-  const kellyCap = Number((kelly.rawUnits * tierMultiplier).toFixed(1));
+  const kellyCap = kellyCapForPick(pick);
   if (kellyCap <= 0) {
-    effectiveStake = 0.5;
-    stakeLabel = '0.5 Unidades (Stake de Confianza Protegido)';
+    // P3b (2026-11-16): Kelly 0 ya no cobra 0.5u fijas: stake 0. El veto
+    // 'kelly_zero' en classifyOpportunity impide que llegue al despacho;
+    // esto es defensa en profundidad.
+    effectiveStake = 0;
+    stakeLabel = '0.0 Unidades (Kelly 0 — veto cuantitativo, sin ventaja)';
   } else if (effectiveStake > kellyCap) {
     effectiveStake = kellyCap;
     stakeLabel = `${kellyCap.toFixed(1)} Unidades (Kelly ${votes === 3 ? '1/10' : '1/20'} × ${pick.confidence?.label || 'Tier'})`;
@@ -1241,13 +1418,54 @@ export function gradeOfficialPick(pick, match) {
 
 /**
  * Determina de dónde sale la cuota publicada y la reemplaza por el precio real del libro cuando existe.
- * oddsSource: 'market' (precio real) | 'derived' (derivado de un mercado real) | 'assumed' (línea real, precio estándar -110)
+ * oddsSource: 'market' (precio sharp: Pinnacle/Bet365 vía Odds API/API-Sports) | 'espn' (precio real
+ *             de ESPN/DraftKings, segundo nivel etiquetado, variante B de P4) | 'derived' (derivado
+ *             de un mercado real) | 'assumed' (línea real, precio estándar -110)
  *             | 'proxy' (precio de otro mercado) | 'model' (cuota inventada por el modelo → nunca se publica)
+ * E2 (2026-11-16): un precio ESPN NUNCA se marca 'market'. La procedencia se decide por el
+ * enriquecimiento sharp (market.sharpBookmaker / sharpValidated) y por el proveedor del
+ * servicio (market/vegas.provider o bookmaker). Un precio real sin procedencia demostrable
+ * se marca 'model' (fail-closed): no se afirma precio de mercado que no se puede probar.
  */
-function resolveOddsProvenance(opp) {
-  if (opp.oddsSource) return;
+export function resolveOddsProvenance(opp) {
+  const m0 = opp.match || {};
+  // Tier del precio: 'market' solo con enriquecimiento sharp o proveedor sharp
+  // (Pinnacle/Bet365 integrados por el builder); 'espn' con proveedor ESPN/
+  // DraftKings; null si la procedencia no se puede demostrar.
+  const sharpEnriched0 = Boolean(m0.sharpValidated || m0.market?.sharpBookmaker || m0.sharpBook);
+  const providerName0 = m0.market?.provider || m0.vegas?.provider || m0.market?.bookmaker || '';
+  const isEspnProvider0 = /draft\s?kings/i.test(providerName0) || /espn\s?bet/i.test(providerName0);
+  const isSharpProvider0 = /pinnacle|bet365/i.test(providerName0);
+  const tierOfPrice0 = () => {
+    if (sharpEnriched0 || isSharpProvider0) return 'market';
+    if (isEspnProvider0) return 'espn';
+    return null;
+  };
+  if (opp.oddsSource) {
+    // Re-derivar un 'market' pre-fijado por el builder (p. ej. fútbol 1X2 con
+    // hasRealOdds, que incluye precios ESPN): si no hay enriquecimiento sharp
+    // y el proveedor es ESPN, baja a 'espn'; si la procedencia es desconocida,
+    // baja a 'model'. Los demás valores pre-fijados se respetan.
+    if (opp.oddsSource === 'market') {
+      const t = tierOfPrice0();
+      if (t === 'espn') {
+        opp.oddsSource = 'espn';
+        opp.oddsProvider = providerName0;
+      } else if (t === null) {
+        opp.oddsSource = 'model';
+      } else {
+        opp.oddsProvider = m0.market?.sharpBookmaker || providerName0 || null;
+      }
+    }
+    return;
+  }
   if (isPlayerIndividualProp(opp)) {
-    opp.oddsSource = 'market';
+    // C3 (2026-11-16): los props NO tienen precio real de mercado. Su cuota
+    // la calcula el propio modelo (soccerProps: 2.20 - proyectado*0.25, piso
+    // 1.65; mlbProps: 1.87 fija o estimada), así que su procedencia es
+    // 'model', no 'market'. Con el veto de P4 ya no se despachan hasta que
+    // exista una fuente real de precios de props.
+    opp.oddsSource = 'model';
     return;
   }
 
@@ -1264,12 +1482,21 @@ function resolveOddsProvenance(opp) {
     const n = parseFloat(v);
     return n > 1.01 ? n : null;
   };
+  // E2: marca la procedencia de un precio real encontrado. 'market' solo con
+  // enriquecimiento sharp o proveedor sharp; 'espn' con proveedor ESPN/
+  // DraftKings; sin procedencia demostrable, 'model' (fail-closed).
+  const markRealPrice = (found) => {
+    if (!found) { opp.oddsSource = 'model'; return; }
+    const t = tierOfPrice0();
+    opp.oddsSource = t || 'model';
+    opp.oddsProvider = t === 'espn' ? providerName0 : (t === 'market' ? (m0.market?.sharpBookmaker || providerName0 || null) : null);
+  };
   const applyTwoWay = (lineIsReal, price) => {
     if (!lineIsReal) {
       opp.oddsSource = 'model';
     } else if (price) {
       opp.odds = price.toFixed(2);
-      opp.oddsSource = 'market';
+      markRealPrice(true);
     } else {
       opp.oddsSource = 'assumed';
     }
@@ -1281,12 +1508,12 @@ function resolveOddsProvenance(opp) {
       opp.oddsSource = 'proxy';
     } else if (id.startsWith('mlb-rl-')) {
       const price = real(isHomeSide ? m.market?.homeSpreadOdds : m.market?.awaySpreadOdds);
-      opp.oddsSource = price && price === real(opp.odds) ? 'market' : 'model';
+      markRealPrice(price && price === real(opp.odds));
     } else if (isTotal) {
       const lineIsReal = m.market?.vegasOverUnder !== undefined || m.vegas?.overUnder !== undefined;
-      opp.oddsSource = lineIsReal && real(isOver ? m.market?.overOdds : m.market?.underOdds) ? 'market' : 'model';
+      markRealPrice(lineIsReal && real(isOver ? m.market?.overOdds : m.market?.underOdds));
     } else {
-      opp.oddsSource = m.market?.hasRealOdds ? 'market' : 'model';
+      markRealPrice(m.market?.hasRealOdds);
     }
     return;
   }
@@ -1306,7 +1533,7 @@ function resolveOddsProvenance(opp) {
 
   if (sport === 'baloncesto' || sport === 'nba') {
     if (id.startsWith('nba-ml-')) {
-      opp.oddsSource = real(opp.odds) && m.market?.hasRealOdds ? 'market' : 'model';
+      markRealPrice(real(opp.odds) && m.market?.hasRealOdds);
     } else if (isTotal) {
       applyTwoWay(m.total !== null && m.total !== undefined, real(isOver ? m.vegas?.overOdds : m.vegas?.underOdds));
     } else {
@@ -1315,7 +1542,58 @@ function resolveOddsProvenance(opp) {
     return;
   }
 
-  opp.oddsSource = m.market?.hasRealOdds ? 'market' : 'model';
+  markRealPrice(m.market?.hasRealOdds);
+}
+
+/**
+ * E3 (2026-11-16): probabilidad sin vig del lado apostado para precios 'espn'.
+ * Usa removeVig con AMBOS lados del mercado cuando existen (spread home/away,
+ * over/under, ML home/away, 1X2 home/draw/away); si falta un lado, devuelve
+ * NaN y el llamador estima con noVigFromSingleSide. Devuelve prob 0-100 o NaN.
+ */
+export function espnNoVigProb(opp) {
+  const m = opp.match || {};
+  const pickLower = (opp.pick || '').toLowerCase();
+  const homeLower = (m.home?.name || '').toLowerCase();
+  const awayLower = (m.away?.name || '').toLowerCase();
+  const isHomeSide = homeLower && pickLower.includes(homeLower) && !(awayLower && pickLower.startsWith(awayLower));
+  const isTotal = /^(over|under|menos de|más de)/i.test(opp.pick || '') || /-(tot|under|over)-/.test(String(opp.id || ''));
+  const isOver = /^(over|más de)/i.test(opp.pick || '');
+  const num = (v) => {
+    const n = parseFloat(v);
+    return n > 1.01 ? n : null;
+  };
+  // Precios por lado: vegas (Pinnacle si hubo enriquecimiento, ESPN si no) o
+  // market (ESPN vía extractEspnSharpMarket). Para picks 'espn' el precio
+  // vigente es el de ESPN en ambos lados.
+  const spreadHome = num(m.vegas?.spreadHomeOdds || m.market?.homeSpreadOdds);
+  const spreadAway = num(m.vegas?.spreadAwayOdds || m.market?.awaySpreadOdds);
+  const over = num(m.vegas?.overOdds || m.market?.overOdds);
+  const under = num(m.vegas?.underOdds || m.market?.underOdds);
+  const homeMl = num(m.market?.homeOdds);
+  const awayMl = num(m.market?.awayOdds);
+  const drawMl = num(m.market?.drawOdds);
+  const isMl = /-ml-/i.test(String(opp.id || '')) || /1x2/i.test(`${opp.pick || ''} ${opp.type || ''}`);
+  let prices = null;
+  let sideIdx = 0;
+  if (isTotal) {
+    if (over && under) { prices = [over, under]; sideIdx = isOver ? 0 : 1; }
+  } else if (isMl) {
+    if (/empate|draw/i.test(opp.pick || '') && homeMl && drawMl && awayMl) {
+      prices = [homeMl, drawMl, awayMl];
+      sideIdx = 1;
+    } else if (homeMl && awayMl) {
+      prices = [homeMl, awayMl];
+      sideIdx = isHomeSide ? 0 : 1;
+    }
+  } else if (spreadHome && spreadAway) {
+    prices = [spreadHome, spreadAway];
+    sideIdx = isHomeSide ? 0 : 1;
+  }
+  if (!prices) return NaN;
+  const nv = removeVig(prices);
+  if (!nv || !Number.isFinite(nv.probs[sideIdx])) return NaN;
+  return nv.probs[sideIdx] * 100;
 }
 
 /**
@@ -1335,13 +1613,41 @@ export function classifyOpportunity(opp = {}) {
   const oddsNum = parseValidDecimalOdds(opp.odds);
   if (oddsNum === null) return deny('odds_invalid', `Cuota ${opp.odds}`);
 
+  // C3 (2026-11-16): la cuota inventada por el modelo ('model') o el precio
+  // estándar -110 sin precio real ('assumed') nunca se publica como pick
+  // real. El comentario original de resolveOddsProvenance lo decía, pero el
+  // código solo vetaba 'proxy'.
+  if (opp.oddsSource === 'model') return deny('odds_model', 'Cuota inventada por el modelo, sin precio real de mercado');
+  if (opp.oddsSource === 'assumed') return deny('odds_assumed', 'Línea real sin precio: cuota -110 inventada');
   // Solo descartar si es un proxy de otro deporte no relacionado
   if (opp.oddsSource === 'proxy') return deny('odds_proxy', 'Cuota proxy de otro deporte');
+  // P4 (2026-11-16, variante B lote 2): gate de cuota de mercado. Se admiten
+  // dos niveles: 'market' (sharp: Pinnacle/Bet365) y 'espn' (precio real de
+  // ESPN/DraftKings, segundo nivel etiquetado). Cualquier otra procedencia
+  // ('derived', 'model', 'assumed', etc.) tampoco se despacha.
+  if (opp.oddsSource !== 'market' && opp.oddsSource !== 'espn') return deny('no_market_odds', `Cuota sin procedencia de mercado (${opp.oddsSource || 'sin dato'})`);
+  // E4 (2026-11-16): frescura de cuotas ESPN. El precio debe ser del escaneo
+  // actual (≤15 min). Sin fetchedAt o con más de 15 min, no se despacha.
+  if (opp.oddsSource === 'espn') {
+    const fetchedAt = opp.match?.oddsFetchedAt ? Date.parse(opp.match.oddsFetchedAt) : NaN;
+    if (!Number.isFinite(fetchedAt) || Date.now() - fetchedAt > ESPN_ODDS_MAX_AGE_MS) {
+      return deny('odds_stale', `Cuota ESPN sin fecha o con más de 15 min (${opp.match?.oddsFetchedAt || 'sin dato'})`);
+    }
+  }
+  // P1 (2026-11-16): gate NBA estático. Fail-closed: si el campo no viene,
+  // se trata como estático y el pick no se despacha.
+  if (opp.sport === 'Baloncesto' || opp.league === 'NBA') {
+    if (opp.ratingsSource !== 'live') return deny('nba_static_ratings', `Ratings NBA ${opp.ratingsSource || 'sin dato'} (se exigen en vivo)`);
+  }
 
-  // Bases de Confianza (favoritos sólidos prob >= 65% y cuota >= 1.25)
-  // No se descartan por el piso de EV ya que su valor radica en su alta certeza y estabilidad
-  const isBaseConfianza = (opp.type || '').includes('BASE DE CONFIANZA') || (parseFloat(opp.prob) >= 65.0 && oddsNum >= 1.25);
-  if (!isBaseConfianza && !(opp.evPct >= MIN_EV_PCT)) return deny('ev_below_min', `EV ${opp.evPct ?? '?'}% < ${MIN_EV_PCT}%`);
+  // P3a (2026-11-16): el piso de EV aplica a TODOS, incluidas las Bases de
+  // Confianza. Antes una Base a 65% @1.25 (EV -18.75%) saltaba este filtro;
+  // su certeza no compensa apostar con EV negativo.
+  if (!(opp.evPct >= MIN_EV_PCT)) return deny('ev_below_min', `EV ${opp.evPct ?? '?'}% < ${MIN_EV_PCT}%`);
+
+  // P2 (2026-11-16): el modelo no puede discrepar del mercado más de 12 pp.
+  // El campo ya se calculaba (MAX_MODEL_MARKET_GAP_PP) y ninguna línea lo leía.
+  if (opp.marketOutlier) return deny('market_outlier', `Modelo ${parseFloat(opp.prob) || '?'}% vs mercado sin vig: brecha > ${MAX_MODEL_MARKET_GAP_PP} pp`);
 
   if (!opp.consensus || opp.consensus.votesPassed < 2) {
     const detail = opp.consensus?.badgeText || opp.consensus?.vote1Reason || opp.consensus?.vote3Reason || opp.consensus?.keyPlayerOutReason || 'Menos de 2 de 3 votos del Tribunal';
@@ -1404,6 +1710,13 @@ export function classifyOpportunity(opp = {}) {
       || pickStr.includes('cubre') || pickStr.includes('hándicap') || pickStr.includes('handicap');
     if (isSpread) return deny('spread_paused', 'Spreads en pausa: mercado en medición (1W-9L en el ledger)');
   }
+
+  // P3b (2026-11-16): si el Kelly fraccionado da 0, el pick no tiene ventaja
+  // matemática y no se despacha. Antes se le asignaban 0.5u fijas. Va al
+  // final (como spread_paused) para no enmascarar vetos más específicos:
+  // solo frena picks que ya pasaron todo lo demás.
+  if (kellyCapForPick(opp) <= 0) return deny('kelly_zero', 'Kelly 0: sin ventaja matemática (stake 0)');
+
   return { approved: true, vetoReason: null, vetoDetail: null };
 }
 
@@ -2377,6 +2690,7 @@ export function buildOpportunitiesAndTopSlate({
       const spreadFmt = m.spread > 0 ? `+${m.spread}` : `${m.spread}`;
       rawOpportunities.push({
         id: `nba-spread-h-${m.id}`,
+        ratingsSource: probs.ratingsSource,
         sport: 'Baloncesto',
         league: 'NBA',
         game: `${m.home.name} vs ${m.away.name}`,
@@ -2398,6 +2712,7 @@ export function buildOpportunitiesAndTopSlate({
       const spreadFmt = spreadVal > 0 ? `+${spreadVal}` : `${spreadVal}`;
       rawOpportunities.push({
         id: `nba-spread-a-${m.id}`,
+        ratingsSource: probs.ratingsSource,
         sport: 'Baloncesto',
         league: 'NBA',
         game: `${m.home.name} vs ${m.away.name}`,
@@ -2420,6 +2735,7 @@ export function buildOpportunitiesAndTopSlate({
       const ev = Number((probs.underProb - 52.4).toFixed(1));
       rawOpportunities.push({
         id: `nba-under-${m.id}`,
+        ratingsSource: probs.ratingsSource,
         sport: 'Baloncesto',
         league: 'NBA',
         game: `${m.home.name} vs ${m.away.name}`,
@@ -2439,6 +2755,7 @@ export function buildOpportunitiesAndTopSlate({
       const ev = Number((probs.overProb - 52.4).toFixed(1));
       rawOpportunities.push({
         id: `nba-over-${m.id}`,
+        ratingsSource: probs.ratingsSource,
         sport: 'Baloncesto',
         league: 'NBA',
         game: `${m.home.name} vs ${m.away.name}`,
@@ -2463,6 +2780,7 @@ export function buildOpportunitiesAndTopSlate({
       if (ev >= 3.0) {
         rawOpportunities.push({
           id: `nba-ml-h-${m.id}`,
+          ratingsSource: probs.ratingsSource,
           sport: 'Baloncesto',
           league: 'NBA',
           game: `${m.home.name} vs ${m.away.name}`,
@@ -2497,19 +2815,36 @@ export function buildOpportunitiesAndTopSlate({
     opp.rawProb = opp.prob;
     opp.prob = `${calibrated}%`;
 
-    // El edge debe medirse con la probabilidad CALIBRADA contra la cuota real (sin pisos artificiales)
-    const honestEdge = edgePp(calibrated, opp.odds);
-    opp.evPct = expectedValuePct(calibrated, opp.odds);
+    // E3 (2026-11-16): probabilidad sin vig del mercado. Para 'espn' se calcula
+    // con AMBOS lados vía removeVig (espnNoVigProb); si falta un lado, se estima
+    // con noVigFromSingleSide. El forEach prefiere marketNoVigProb si el builder
+    // ya lo puso (p. ej. totales de fútbol).
+    const espnNv = opp.oddsSource === 'espn' ? espnNoVigProb(opp) : NaN;
+    const marketNoVig = Number.isFinite(opp.marketNoVigProb)
+      ? opp.marketNoVigProb
+      : (opp.oddsSource === 'espn'
+        ? (Number.isFinite(espnNv) ? espnNv : noVigFromSingleSide(opp.odds) * 100)
+        : (opp.oddsSource === 'market' || opp.oddsSource === 'assumed' ? noVigFromSingleSide(opp.odds) * 100 : NaN));
+    opp.marketOutlier = !isPlayerIndividualProp(opp) && isModelOutlier(calibrated, marketNoVig, MAX_MODEL_MARKET_GAP_PP);
+
+    // El edge debe medirse con la probabilidad CALIBRADA contra la cuota real (sin pisos artificiales).
+    // E3: para precios 'espn', el EV se mide contra la cuota JUSTA sin vig
+    // (1/probSinVig), no contra el precio retail con vig: es la ventaja contra
+    // la valoración del mercado, no el pago realizable. Se registra fairOdds
+    // y evNoVig para que el ledger lo distinga de un EV sharp.
+    let evOdds = opp.odds;
+    if (opp.oddsSource === 'espn' && Number.isFinite(marketNoVig) && marketNoVig > 0 && marketNoVig < 100) {
+      evOdds = Number((100 / marketNoVig).toFixed(2));
+      opp.fairOdds = evOdds;
+      opp.evNoVig = true;
+    }
+    const honestEdge = edgePp(calibrated, evOdds);
+    opp.evPct = expectedValuePct(calibrated, evOdds);
     opp.edgeContext = opp.edgeStr;
     if (Number.isFinite(honestEdge)) {
       opp.edgeVal = Number(honestEdge.toFixed(2));
       opp.edgeStr = `Edge ${honestEdge >= 0 ? '+' : ''}${honestEdge.toFixed(1)} pp | EV ${opp.evPct >= 0 ? '+' : ''}${opp.evPct.toFixed(1)}%`;
     }
-
-    const marketNoVig = Number.isFinite(opp.marketNoVigProb)
-      ? opp.marketNoVigProb
-      : (opp.oddsSource === 'market' || opp.oddsSource === 'assumed' ? noVigFromSingleSide(opp.odds) * 100 : NaN);
-    opp.marketOutlier = !isPlayerIndividualProp(opp) && isModelOutlier(calibrated, marketNoVig, MAX_MODEL_MARKET_GAP_PP);
 
     opp.consensus = evaluateEnsembleConsensus({
       sport: opp.sport,
@@ -2525,7 +2860,10 @@ export function buildOpportunitiesAndTopSlate({
 
     opp.confidence = getConfidenceTier({
       probPct: calibrated,
-      odds: opp.odds,
+      // E3: para 'espn' el tier se calcula con la cuota justa sin vig (evOdds),
+      // igual que evPct; el Tier A sigue fuera de alcance para 'espn' porque
+      // getConfidenceTier solo lo da con precio sharp ('market'/'derived').
+      odds: evOdds,
       votesPassed: opp.consensus?.votesPassed || 0,
       oddsSource: opp.oddsSource
     });
@@ -3544,7 +3882,12 @@ export async function runAlertEngine(options = {}) {
   if (usesLock) {
     const lock = sentCache._meta.scanLock;
     if (lock && lock.expiresAt > Date.now()) {
-      console.warn(`⏸️ Escaneo omitido: otra ejecución mantiene el candado hasta ${new Date(lock.expiresAt).toISOString()}.`);
+      // C5 (2026-11-16): un turno omitido por candado ya no pasa en silencio:
+      // se registra y se avisa al VIP con la causa.
+      const lockDetail = `Otra ejecución mantiene el candado hasta ${new Date(lock.expiresAt).toISOString()}.`;
+      console.warn(`⏸️ Escaneo omitido: ${lockDetail}`);
+      recordShiftExecution({ outcome: 'skipped', reason: 'locked', detail: lockDetail, dryRun: isDryRun });
+      await notifyShiftFailure({ reason: 'locked', detail: lockDetail, isDryRun });
       return { sentCount: 0, skipped: 'locked', totalOpportunities: 0, auditSent: false, auditSummary: null };
     }
     sentCache._meta.scanLock = { expiresAt: Date.now() + 90 * 1000, startedAt: new Date().toISOString() };
@@ -3793,6 +4136,17 @@ export async function runAlertEngine(options = {}) {
     if (!isDryRun && (usesLock || auditResult.auditSent || autoSavedUnanimousCount > 0)) {
       await saveCloudLedger(sentCache);
     }
+    // C5 (2026-11-16): turno vacío con fuentes caídas es sospechoso (el
+    // 9:30 del 2026-11-16 murió así, sin señal). Se registra siempre y se
+    // avisa al VIP solo cuando hubo avisos de calendario; un slate vacío
+    // con fuentes sanas es normal y no genera ruido.
+    if (scheduleWarnings.length > 0) {
+      const warnDetail = scheduleWarnings.join('; ');
+      recordShiftExecution({ outcome: 'empty', reason: 'schedule_warnings', detail: warnDetail, dryRun: isDryRun });
+      await notifyShiftFailure({ reason: 'turno_sin_picks', detail: `Sin picks y con fuentes caídas: ${warnDetail}`, isDryRun });
+    } else {
+      recordShiftExecution({ outcome: 'empty', reason: 'no_opportunities', dryRun: isDryRun });
+    }
     console.log('✅ Mercado analizado. Las mejores selecciones de la jornada ya fueron notificadas hoy. Cero spam.');
     return {
       sentCount: 0,
@@ -3810,12 +4164,20 @@ export async function runAlertEngine(options = {}) {
   // al límite, no se despachan picks nuevos (la auditoría/corte de arriba ya
   // corrió). Si solo se agotó la exposición diaria, se recorta la cartelera
   // por edge en vez de bloquear todo.
-  const bankrollState = readBankrollState();
+  // C2 (2026-11-16): el freno se calcula desde el cloud ledger ya cargado
+  // (sentCache) fusionado con el archivo; ver readBankrollState.
+  const bankrollState = readBankrollState({ sentCache });
   // En modo paper el freno NO bloquea el registro: solo queda anotado
   // (brakeBlocked) en cada entrada paper, para medir qué habría pasado.
   if (bankrollState.blocked && !isPaper) {
-    const stopMsg = `⛔ *FRENO DE BANCA ACTIVO — NO SE DESPACHAN PICKS*\n\n${bankrollState.reasons.join('\n')}\nDrawdown 30 días: ${bankrollState.drawdownUnits}u | Exposición hoy: ${bankrollState.exposureTodayUnits}u\n\nEl freno se levanta solo cuando la ventana de 30 días rueda, o con un reinicio manual registrado (scripts/bankrollReset.mjs). El récord y la auditoría siguen intactos.`;
+    const stopMsg = `⛔ *FRENO DE BANCA ACTIVO — NO SE DESPACHAN PICKS*\n\n${bankrollState.reasons.join('\n')}\nDrawdown 30 días: ${bankrollState.drawdownUnits}u | Cerrados en ventana: ${bankrollState.settledInWindow} picks | Exposición hoy: ${bankrollState.exposureTodayUnits}u | Fuente: ${bankrollState.source}${bankrollState.unreliable ? ' (NO FIABLE)' : ''}\n\nEl freno se levanta solo cuando la ventana de 30 días rueda, o con un reinicio manual registrado (scripts/bankrollReset.mjs). El récord y la auditoría siguen intactos.`;
     console.warn(`⛔ Freno de banca activo: ${bankrollState.reasons.join(' ')} No se despachan ${toSend.length} picks aprobados.`);
+    recordShiftExecution({ outcome: 'blocked', reason: 'bankroll-stop', detail: bankrollState.reasons.join('; '), drawdownUnits: bankrollState.drawdownUnits, settledInWindow: bankrollState.settledInWindow, source: bankrollState.source, unreliable: bankrollState.unreliable, dryRun: isDryRun });
+    // C2: si el freno es no fiable (fail-closed), el aviso va también al VIP,
+    // no solo al destino del turno (grupo).
+    if (bankrollState.unreliable) {
+      await notifyShiftFailure({ reason: 'bankroll_unreliable', detail: bankrollState.reasons.join('; '), isDryRun });
+    }
     await sendTelegramMessage(stopMsg, isDryRun, targetChatId);
     if (usesLock) sentCache._meta.scanLock = null;
     if (!isDryRun) {
@@ -3831,6 +4193,13 @@ export async function runAlertEngine(options = {}) {
       auditSummary: auditResult.summary,
       auditSent: auditResult.auditSent,
     };
+  }
+  // C2 (2026-11-16): freno no fiable pero no bloqueante (cloud vacío con
+  // ledger local presente): el turno sigue con el freno del archivo, pero
+  // el VIP recibe el aviso — no es "turno fallido", es freno degradado.
+  // Sin token (CLI local) no hay a quién avisar.
+  if (bankrollState.unreliable && !isPaper && process.env.TELEGRAM_BOT_TOKEN) {
+    await notifyShiftFailure({ reason: 'bankroll_unreliable', detail: bankrollState.reasons.join('; '), isDryRun, proceeding: true });
   }
   if (bankrollState.remainingExposureUnits < BANKROLL.maxDailyExposureUnits) {
     const ranked = [...toSend]
@@ -3928,10 +4297,19 @@ export async function runAlertEngine(options = {}) {
       if (reportOk) {
         aiExecutiveReportSent = true;
         for (const pick of toSend) {
-          sentCount++;
           const { effectiveStake } = calculatePickEffectiveStake(pick);
+          if (effectiveStake <= 0) {
+            // P3b: defensa en profundidad (el veto 'kelly_zero' ya lo frena en
+            // clasificación). No se registra un pick de stake 0.
+            console.warn(`⛔ Kelly 0 en despacho IA (${pick.id}): no se registra.`);
+            continue;
+          }
+          sentCount++;
           // PASO 2 AUDITORÍA: Persistencia automática e inmutable en disco
-          recordPickToLedger(pick, effectiveStake);
+          // C4 (2026-11-16): en dry-run (/cheatsheet) NO se registra nada en
+          // el ledger real: antes el append fallaba en Vercel (EROFS) y el
+          // catch espejaba picks falsos como LEDGER reales al canal.
+          if (!isDryRun) recordPickToLedger(pick, effectiveStake);
 
           sentCache[pick.id] = {
             ...(sentCache[pick.id] || {}),
@@ -3945,6 +4323,11 @@ export async function runAlertEngine(options = {}) {
             prob: pick.prob,
             rawProb: pick.rawProb,
             odds: pick.odds,
+            ratingsSource: pick.ratingsSource || null,
+            oddsSource: pick.oddsSource || null,
+            oddsProvider: pick.oddsProvider || null,
+            evNoVig: Boolean(pick.evNoVig),
+            fairOdds: pick.fairOdds || null,
             stakeUnits: effectiveStake,
             homeName: pick.match?.home?.name,
             awayName: pick.match?.away?.name,
@@ -4033,13 +4416,13 @@ export async function runAlertEngine(options = {}) {
 
     // Techo duro: nunca arriesgar más que Kelly fraccional × multiplicador del Tier de confianza
     const votes = pick.consensus?.votesPassed || 2;
-    const kelly = calculateKellyStake(pick.prob, pick.odds, votes === 3 ? 0.10 : 0.05, isPickProp ? (isPickElite ? 1.5 : 1.0) : 2.0);
-    const tierMultiplier = pick.confidence?.kellyMultiplier ?? 0.5;
-    const kellyCap = Number((kelly.rawUnits * tierMultiplier).toFixed(1));
+    const kellyCap = kellyCapForPick(pick);
     if (kellyCap <= 0) {
-      // Si el cálculo decimal de Kelly dio 0 pero el pick superó el consenso del tribunal, se asigna stake base protegido
-      effectiveStake = 0.5;
-      stakeLabel = '0.5 Unidades (Stake de Confianza Protegido)';
+      // P3b (2026-11-16): Kelly 0 ya no cobra 0.5u fijas ni se despacha.
+      // El veto 'kelly_zero' lo frena en clasificación; esto es defensa en
+      // profundidad: un pick sin ventaja no se envía ni se registra.
+      console.warn(`⛔ Kelly 0 en despacho (${pick.id}): se omite el pick.`);
+      continue;
     } else if (effectiveStake > kellyCap) {
       effectiveStake = kellyCap;
       stakeLabel = `${kellyCap.toFixed(1)} Unidades (Kelly ${votes === 3 ? '1/10' : '1/20'} × ${pick.confidence?.label || 'Tier'})`;
@@ -4112,7 +4495,11 @@ export async function runAlertEngine(options = {}) {
       `📊 *Probabilidad Calibrada:* \`${pick.prob}\``,
       `🏷️ *Nivel de Confianza:* \`${pick.confidence?.label || 'N/D'}\``,
       stabilityLine,
-      `💰 *Cuota de Mercado:* \`${pick.odds}\`${pick.sharpBookmaker ? ` (${pick.sharpBookmaker}${pick.isPinnacle ? ' Sharp' : ''})` : ''}`,
+      // E2 (2026-11-16): el tier se muestra siempre. 'espn' es precio real de
+      // ESPN/DraftKings (segundo nivel, no sharp); 'market' es Pinnacle/Bet365.
+      ...(pick.oddsSource === 'espn'
+        ? [`💰 *Cuota ESPN (2º nivel):* \`${pick.odds}\` (${pick.oddsProvider || 'DraftKings'})`, `  _Precio real de ESPN, no de Pinnacle. EV medido sin vig._`, ``]
+        : [`💰 *Cuota de Mercado:* \`${pick.odds}\`${pick.sharpBookmaker ? ` (${pick.sharpBookmaker}${pick.isPinnacle ? ' Sharp' : ''})` : ''}`]),
       `📈 *Ventaja Cuantitativa:* *${pick.edgeStr}*`,
       ``,
       ...(() => {
@@ -4137,7 +4524,9 @@ export async function runAlertEngine(options = {}) {
     if (ok) {
       sentCount++;
       // PASO 2 AUDITORÍA: Persistencia automática e inmutable en disco
-      recordPickToLedger(pick, effectiveStake);
+      // C4 (2026-11-16): en dry-run (/cheatsheet) NO se registra nada en el
+      // ledger real (ver ruta IA arriba).
+      if (!isDryRun) recordPickToLedger(pick, effectiveStake);
 
       sentCache[pick.id] = {
         ...(sentCache[pick.id] || {}),
@@ -4151,6 +4540,11 @@ export async function runAlertEngine(options = {}) {
         prob: pick.prob,
         rawProb: pick.rawProb,
         odds: pick.odds,
+        ratingsSource: pick.ratingsSource || null,
+        oddsSource: pick.oddsSource || null,
+        oddsProvider: pick.oddsProvider || null,
+        evNoVig: Boolean(pick.evNoVig),
+        fairOdds: pick.fairOdds || null,
         stakeUnits: effectiveStake,
         homeName: pick.match?.home?.name,
         awayName: pick.match?.away?.name,
@@ -4180,6 +4574,9 @@ export async function runAlertEngine(options = {}) {
   if (!isDryRun && (usesLock || sentCount > 0 || auditResult.auditSent || autoSavedUnanimousCount > 0)) {
     await saveCloudLedger(sentCache);
   }
+
+  // C5 (2026-11-16): cada turno deja una línea en el registro de ejecuciones.
+  recordShiftExecution({ outcome: sentCount > 0 ? 'dispatched' : 'empty', reason: sentCount > 0 ? 'ok' : 'no_opportunities', sentCount, totalOpportunities: approvedOpps.length, bankrollSource: bankrollState.source, bankrollUnreliable: bankrollState.unreliable, dryRun: isDryRun });
 
   console.log(`✅ Proceso finalizado con éxito. ${sentCount} alertas enviadas a Telegram y ${autoSavedUnanimousCount} unánimes adicionales en Memoria.`);
   return {

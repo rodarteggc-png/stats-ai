@@ -1,24 +1,24 @@
 {
-  "generatedAt": "2026-11-12T05:25:44.929Z",
-  "source": "data/pick_ledger.jsonl (38 picks publicados por Telegram, calificados con marcador final ESPN)",
-  "totalPicks": 38,
-  "closed": 37,
+  "generatedAt": "2026-11-16T21:23:58.388Z",
+  "source": "data/pick_ledger.jsonl (64 picks publicados por Telegram, calificados con marcador final ESPN)",
+  "totalPicks": 64,
+  "closed": 63,
   "pending": 1,
   "pendingIds": [
     "prop-soc-soccer-401874971-NikolaKrstovic"
   ],
   "overall": {
-    "n": 37,
-    "wins": 17,
-    "losses": 20,
+    "n": 63,
+    "wins": 30,
+    "losses": 33,
     "pushes": 0,
-    "hitRate": 45.95,
-    "netUnits": -7.11,
-    "stakedUnits": 33.3,
-    "roiPct": -21.35,
-    "avgProbPct": 68.83,
+    "hitRate": 47.62,
+    "netUnits": -6.55,
+    "stakedUnits": 51.1,
+    "roiPct": -12.82,
+    "avgProbPct": 60.64,
     "avgImpliedPct": 55.36,
-    "calibrationGapPts": 22.88
+    "calibrationGapPts": 13.02
   },
   "clv": {
     "n": 0,
@@ -27,90 +27,90 @@
     "note": "Sin datos: no hay cuotas de cierre capturadas. El CLV requiere correr scripts/captureClosingOdds.mjs (ESPN/DraftKings, gratis) poco antes del inicio de cada partido."
   },
   "drawdown": {
-    "maxDrawdownUnits": 9.21,
-    "currentDrawdownUnits": 9.12,
+    "maxDrawdownUnits": 10.9,
+    "currentDrawdownUnits": 8.56,
     "peakUnits": 2.01
   },
   "recentForm": [
     {
-      "id": "nba-under-nba-401909838",
-      "date": "2026-11-10",
-      "game": "Memphis Grizzlies vs Utah Jazz",
-      "pick": "UNDER 241.5 Pts",
+      "id": "rec-20261112-04",
+      "date": "",
+      "game": "England vs Croatia",
+      "pick": "OVER 2.5 Goles",
       "result": "WON",
-      "pnlUnits": 0.64
+      "pnlUnits": 0.9
     },
     {
-      "id": "nba-under-nba-401909848",
-      "date": "2026-11-10",
-      "game": "Milwaukee Bucks vs Chicago Bulls",
-      "pick": "UNDER 240.5 Pts",
+      "id": "rec-20261112-05",
+      "date": "",
+      "game": "Barcelona vs Arsenal",
+      "pick": "Barcelona -1.5 (Gana por 2+ goles)",
       "result": "LOST",
-      "pnlUnits": -2
+      "pnlUnits": -0.2
     },
     {
-      "id": "nba-spread-h-nba-401909848",
-      "date": "2026-11-10",
-      "game": "Milwaukee Bucks vs Chicago Bulls",
-      "pick": "Milwaukee Bucks -1.5 (Cubre Línea)",
-      "result": "LOST",
-      "pnlUnits": -2
-    },
-    {
-      "id": "btts-soccer-401916998",
-      "date": "2026-11-10",
-      "game": "Servette vs OH Leuven",
-      "pick": "Ambos Equipos Anotan: Sí (BTTS)",
+      "id": "rec-20261112-06",
+      "date": "",
+      "game": "Aruba vs Martinique",
+      "pick": "UNDER 2.5 Goles",
       "result": "WON",
-      "pnlUnits": 0.66
+      "pnlUnits": 0
     },
     {
-      "id": "nba-spread-a-nba-401909893",
-      "date": "2026-11-10",
-      "game": "Atlanta Hawks vs Cleveland Cavaliers",
-      "pick": "Cleveland Cavaliers +1.5 (Cubre Línea)",
-      "result": "LOST",
-      "pnlUnits": -1.5
-    },
-    {
-      "id": "nba-under-nba-401909893",
-      "date": "2026-11-10",
-      "game": "Atlanta Hawks vs Cleveland Cavaliers",
-      "pick": "UNDER 237.5 Pts",
+      "id": "rec-20261112-07",
+      "date": "",
+      "game": "South Florida Bulls vs Memphis Tigers",
+      "pick": "OVER 49.5 Pts",
       "result": "WON",
-      "pnlUnits": 0.82
+      "pnlUnits": 0
     },
     {
-      "id": "ncaaf-tot-ncaaf-401869963",
-      "date": "2026-11-10",
-      "game": "James Madison Dukes vs Troy Trojans",
-      "pick": "OVER 52.5 Pts",
+      "id": "rec-20261112-08",
+      "date": "",
+      "game": "Antigua and Barbuda vs Trinidad and Tobago",
+      "pick": "Victoria Antigua and Barbuda (1X2)",
       "result": "LOST",
-      "pnlUnits": -0.7
+      "pnlUnits": 0
     },
     {
-      "id": "ncaaf-spread-h-ncaaf-401869963",
-      "date": "2026-11-10",
-      "game": "James Madison Dukes vs Troy Trojans",
-      "pick": "James Madison Dukes -17.5 (Cubre Línea)",
+      "id": "rec-20261113-01",
+      "date": "",
+      "game": "Slovakia vs Faroe Islands",
+      "pick": "Victoria Slovakia (1X2)",
       "result": "LOST",
-      "pnlUnits": -0.3
+      "pnlUnits": -0.5
     },
     {
-      "id": "steam-soccer-401882824",
-      "date": "2026-11-10",
-      "game": "Deportivo vs Osasuna",
-      "pick": "Deportivo o Empate (1X)",
-      "result": "WON",
-      "pnlUnits": 0.19
-    },
-    {
-      "id": "dc-soccer-401876419",
-      "date": "2026-11-10",
-      "game": "Lorient vs Brest",
-      "pick": "Lorient o Empate (1X)",
+      "id": "rec-20261113-02",
+      "date": "",
+      "game": "UCLA Bruins vs Illinois Fighting Illini",
+      "pick": "OVER 48.5 Pts",
       "result": "LOST",
-      "pnlUnits": -0.1
+      "pnlUnits": 0
+    },
+    {
+      "id": "rec-20261113-03",
+      "date": "",
+      "game": "Montserrat vs Nicaragua",
+      "pick": "Victoria Montserrat (1X2)",
+      "result": "LOST",
+      "pnlUnits": 0
+    },
+    {
+      "id": "rec-20261113-04",
+      "date": "",
+      "game": "San Antonio Spurs vs Golden State Warriors",
+      "pick": "OVER 217.5 Pts",
+      "result": "LOST",
+      "pnlUnits": 0
+    },
+    {
+      "id": "rec-20261113-05",
+      "date": "",
+      "game": "St. Martin vs El Salvador",
+      "pick": "Victoria St. Martin (1X2)",
+      "result": "LOST",
+      "pnlUnits": 0
     }
   ],
   "equityCurve": [
@@ -261,58 +261,162 @@
     {
       "date": "2026-11-10",
       "units": -7.11
+    },
+    {
+      "date": "",
+      "units": -8.61
+    },
+    {
+      "date": "",
+      "units": -7.25
+    },
+    {
+      "date": "",
+      "units": -5.89
+    },
+    {
+      "date": "",
+      "units": -7.39
+    },
+    {
+      "date": "",
+      "units": -8.89
+    },
+    {
+      "date": "",
+      "units": -7.53
+    },
+    {
+      "date": "",
+      "units": -6.9
+    },
+    {
+      "date": "",
+      "units": -6.37
+    },
+    {
+      "date": "",
+      "units": -5.02
+    },
+    {
+      "date": "",
+      "units": -4.36
+    },
+    {
+      "date": "",
+      "units": -5.06
+    },
+    {
+      "date": "",
+      "units": -4.98
+    },
+    {
+      "date": "",
+      "units": -4.8
+    },
+    {
+      "date": "",
+      "units": -4.65
+    },
+    {
+      "date": "",
+      "units": -6.05
+    },
+    {
+      "date": "",
+      "units": -6.75
+    },
+    {
+      "date": "",
+      "units": -5.85
+    },
+    {
+      "date": "",
+      "units": -6.05
+    },
+    {
+      "date": "",
+      "units": -6.05
+    },
+    {
+      "date": "",
+      "units": -6.05
+    },
+    {
+      "date": "",
+      "units": -6.05
+    },
+    {
+      "date": "",
+      "units": -6.55
+    },
+    {
+      "date": "",
+      "units": -6.55
+    },
+    {
+      "date": "",
+      "units": -6.55
+    },
+    {
+      "date": "",
+      "units": -6.55
+    },
+    {
+      "date": "",
+      "units": -6.55
     }
   ],
   "streaks": {
     "current": {
       "type": "L",
-      "count": 1
+      "count": 6
     },
-    "longestWin": 3,
-    "longestLoss": 4
+    "longestWin": 5,
+    "longestLoss": 6
   },
   "bySport": [
     {
       "key": "Fútbol",
-      "n": 14,
-      "wins": 8,
-      "losses": 6,
+      "n": 27,
+      "wins": 14,
+      "losses": 13,
       "pushes": 0,
-      "hitRate": 57.14,
-      "netUnits": -0.31,
-      "stakedUnits": 12.5,
-      "roiPct": -2.48,
-      "avgProbPct": 69.01,
+      "hitRate": 51.85,
+      "netUnits": 0,
+      "stakedUnits": 19.1,
+      "roiPct": 0,
+      "avgProbPct": 56.18,
       "avgImpliedPct": 59.88,
-      "calibrationGapPts": 11.87
-    },
-    {
-      "key": "NCAAF",
-      "n": 12,
-      "wins": 5,
-      "losses": 7,
-      "pushes": 0,
-      "hitRate": 41.67,
-      "netUnits": -1.09,
-      "stakedUnits": 9.5,
-      "roiPct": -11.47,
-      "avgProbPct": 62.78,
-      "avgImpliedPct": 52.31,
-      "calibrationGapPts": 21.11
+      "calibrationGapPts": 4.33
     },
     {
       "key": "Baloncesto",
-      "n": 10,
-      "wins": 3,
-      "losses": 7,
+      "n": 19,
+      "wins": 7,
+      "losses": 12,
       "pushes": 0,
-      "hitRate": 30,
-      "netUnits": -6.2,
-      "stakedUnits": 10.6,
-      "roiPct": -58.49,
-      "avgProbPct": 76.35,
+      "hitRate": 36.84,
+      "netUnits": -7.14,
+      "stakedUnits": 20.5,
+      "roiPct": -34.83,
+      "avgProbPct": 71.61,
       "avgImpliedPct": 52.36,
-      "calibrationGapPts": 46.35
+      "calibrationGapPts": 34.77
+    },
+    {
+      "key": "NCAAF",
+      "n": 16,
+      "wins": 8,
+      "losses": 8,
+      "pushes": 0,
+      "hitRate": 50,
+      "netUnits": 0.1,
+      "stakedUnits": 10.8,
+      "roiPct": 0.93,
+      "avgProbPct": 54.94,
+      "avgImpliedPct": 52.31,
+      "calibrationGapPts": 4.94
     },
     {
       "key": "MLB",
@@ -332,17 +436,17 @@
   "byLeague": [
     {
       "key": "NBA",
-      "n": 10,
-      "wins": 3,
-      "losses": 7,
+      "n": 19,
+      "wins": 7,
+      "losses": 12,
       "pushes": 0,
-      "hitRate": 30,
-      "netUnits": -6.2,
-      "stakedUnits": 10.6,
-      "roiPct": -58.49,
-      "avgProbPct": 76.35,
+      "hitRate": 36.84,
+      "netUnits": -7.14,
+      "stakedUnits": 20.5,
+      "roiPct": -34.83,
+      "avgProbPct": 71.61,
       "avgImpliedPct": 52.36,
-      "calibrationGapPts": 46.35
+      "calibrationGapPts": 34.77
     },
     {
       "key": "NCAAF Colegial FBS (Semana 7)",
@@ -359,6 +463,20 @@
       "calibrationGapPts": 13.92
     },
     {
+      "key": "UEFA Women's Champions League",
+      "n": 5,
+      "wins": 3,
+      "losses": 2,
+      "pushes": 0,
+      "hitRate": 60,
+      "netUnits": -0.25,
+      "stakedUnits": 3.2,
+      "roiPct": -7.81,
+      "avgProbPct": 59.48,
+      "avgImpliedPct": 57.96,
+      "calibrationGapPts": -0.52
+    },
+    {
       "key": "Champions League",
       "n": 4,
       "wins": 3,
@@ -371,6 +489,62 @@
       "avgProbPct": 76.13,
       "avgImpliedPct": 57.55,
       "calibrationGapPts": 1.13
+    },
+    {
+      "key": "Liga MX Femenil",
+      "n": 4,
+      "wins": 3,
+      "losses": 1,
+      "pushes": 0,
+      "hitRate": 75,
+      "netUnits": 1.83,
+      "stakedUnits": 5,
+      "roiPct": 36.6,
+      "avgProbPct": 64.73,
+      "avgImpliedPct": 55.05,
+      "calibrationGapPts": -10.27
+    },
+    {
+      "key": "NCAAF Colegial FBS",
+      "n": 4,
+      "wins": 3,
+      "losses": 1,
+      "pushes": 0,
+      "hitRate": 75,
+      "netUnits": 1.19,
+      "stakedUnits": 1.3,
+      "roiPct": 91.54,
+      "avgProbPct": 31.45,
+      "avgImpliedPct": null,
+      "calibrationGapPts": -43.55
+    },
+    {
+      "key": "UEFA Nations League",
+      "n": 4,
+      "wins": 2,
+      "losses": 2,
+      "pushes": 0,
+      "hitRate": 50,
+      "netUnits": -0.15,
+      "stakedUnits": 2.7,
+      "roiPct": -5.56,
+      "avgProbPct": 62.13,
+      "avgImpliedPct": null,
+      "calibrationGapPts": 12.13
+    },
+    {
+      "key": "CONCACAF Nations League",
+      "n": 4,
+      "wins": 1,
+      "losses": 3,
+      "pushes": 0,
+      "hitRate": 25,
+      "netUnits": 0,
+      "stakedUnits": 0,
+      "roiPct": null,
+      "avgProbPct": 0,
+      "avgImpliedPct": null,
+      "calibrationGapPts": -25
     },
     {
       "key": "MLS (EE.UU.)",
@@ -387,20 +561,6 @@
       "calibrationGapPts": 30.27
     },
     {
-      "key": "Liga MX Femenil",
-      "n": 2,
-      "wins": 1,
-      "losses": 1,
-      "pushes": 0,
-      "hitRate": 50,
-      "netUnits": 0.4,
-      "stakedUnits": 3.4,
-      "roiPct": 11.76,
-      "avgProbPct": 67,
-      "avgImpliedPct": 55.05,
-      "calibrationGapPts": 17
-    },
-    {
       "key": "NCAAF Colegial FBS (Semana 8)",
       "n": 2,
       "wins": 1,
@@ -413,20 +573,6 @@
       "avgProbPct": 62.3,
       "avgImpliedPct": 52.36,
       "calibrationGapPts": 12.3
-    },
-    {
-      "key": "UEFA Women's Champions League",
-      "n": 2,
-      "wins": 2,
-      "losses": 0,
-      "pushes": 0,
-      "hitRate": 100,
-      "netUnits": 0.72,
-      "stakedUnits": 0.9,
-      "roiPct": 80,
-      "avgProbPct": 60.1,
-      "avgImpliedPct": 57.96,
-      "calibrationGapPts": -39.9
     },
     {
       "key": "NCAAF Colegial FBS (Semana 9)",
@@ -502,31 +648,45 @@
   "byMarket": [
     {
       "key": "Totales",
-      "n": 17,
-      "wins": 10,
-      "losses": 7,
+      "n": 33,
+      "wins": 21,
+      "losses": 12,
       "pushes": 0,
-      "hitRate": 58.82,
-      "netUnits": -0.56,
-      "stakedUnits": 15,
-      "roiPct": -3.73,
-      "avgProbPct": 66.45,
+      "hitRate": 63.64,
+      "netUnits": 4.97,
+      "stakedUnits": 27,
+      "roiPct": 18.41,
+      "avgProbPct": 58,
       "avgImpliedPct": 52.88,
-      "calibrationGapPts": 7.62
+      "calibrationGapPts": -5.64
     },
     {
       "key": "Spread/Hándicap",
-      "n": 10,
+      "n": 13,
       "wins": 1,
-      "losses": 9,
+      "losses": 12,
       "pushes": 0,
-      "hitRate": 10,
-      "netUnits": -7.51,
-      "stakedUnits": 8.7,
-      "roiPct": -86.32,
-      "avgProbPct": 70.31,
+      "hitRate": 7.69,
+      "netUnits": -12.01,
+      "stakedUnits": 13.2,
+      "roiPct": -90.98,
+      "avgProbPct": 73.14,
       "avgImpliedPct": 53,
-      "calibrationGapPts": 60.31
+      "calibrationGapPts": 65.45
+    },
+    {
+      "key": "Moneyline",
+      "n": 7,
+      "wins": 3,
+      "losses": 4,
+      "pushes": 0,
+      "hitRate": 42.86,
+      "netUnits": 1.51,
+      "stakedUnits": 3.1,
+      "roiPct": 48.71,
+      "avgProbPct": 37.49,
+      "avgImpliedPct": 56.8,
+      "calibrationGapPts": -5.37
     },
     {
       "key": "BTTS",
@@ -557,20 +717,6 @@
       "calibrationGapPts": 38.05
     },
     {
-      "key": "Moneyline",
-      "n": 2,
-      "wins": 2,
-      "losses": 0,
-      "pushes": 0,
-      "hitRate": 100,
-      "netUnits": 1.86,
-      "stakedUnits": 2.1,
-      "roiPct": 88.57,
-      "avgProbPct": 66.1,
-      "avgImpliedPct": 56.8,
-      "calibrationGapPts": -33.9
-    },
-    {
       "key": "Doble oportunidad",
       "n": 2,
       "wins": 1,
@@ -583,69 +729,83 @@
       "avgProbPct": 78.1,
       "avgImpliedPct": 75.34,
       "calibrationGapPts": 28.1
+    },
+    {
+      "key": "Sin clasificar",
+      "n": 2,
+      "wins": 1,
+      "losses": 1,
+      "pushes": 0,
+      "hitRate": 50,
+      "netUnits": -0.12,
+      "stakedUnits": 0.3,
+      "roiPct": -40,
+      "avgProbPct": 55.65,
+      "avgImpliedPct": null,
+      "calibrationGapPts": 5.65
     }
   ],
   "byProbBucket": [
     {
       "key": "60–70%",
-      "n": 20,
-      "wins": 10,
-      "losses": 10,
+      "n": 28,
+      "wins": 16,
+      "losses": 12,
       "pushes": 0,
-      "hitRate": 50,
-      "netUnits": -4.73,
-      "stakedUnits": 17.9,
-      "roiPct": -26.42,
-      "avgProbPct": 63.73,
+      "hitRate": 57.14,
+      "netUnits": -1.95,
+      "stakedUnits": 25.3,
+      "roiPct": -7.71,
+      "avgProbPct": 63.96,
       "avgImpliedPct": 54.65,
-      "calibrationGapPts": 13.73
-    },
-    {
-      "key": "80%+",
-      "n": 8,
-      "wins": 3,
-      "losses": 5,
-      "pushes": 0,
-      "hitRate": 37.5,
-      "netUnits": -2.5,
-      "stakedUnits": 7.2,
-      "roiPct": -34.72,
-      "avgProbPct": 85.65,
-      "avgImpliedPct": 57.72,
-      "calibrationGapPts": 48.15
+      "calibrationGapPts": 6.82
     },
     {
       "key": "50–60%",
-      "n": 5,
-      "wins": 2,
-      "losses": 3,
+      "n": 18,
+      "wins": 7,
+      "losses": 11,
+      "pushes": 0,
+      "hitRate": 38.89,
+      "netUnits": -0.66,
+      "stakedUnits": 6.3,
+      "roiPct": -10.48,
+      "avgProbPct": 35.19,
+      "avgImpliedPct": 52.87,
+      "calibrationGapPts": -3.7
+    },
+    {
+      "key": "80%+",
+      "n": 10,
+      "wins": 4,
+      "losses": 6,
       "pushes": 0,
       "hitRate": 40,
-      "netUnits": -0.22,
-      "stakedUnits": 3.4,
-      "roiPct": -6.47,
-      "avgProbPct": 58.32,
-      "avgImpliedPct": 52.87,
-      "calibrationGapPts": 18.32
+      "netUnits": -2.64,
+      "stakedUnits": 10.2,
+      "roiPct": -25.88,
+      "avgProbPct": 86.77,
+      "avgImpliedPct": 57.72,
+      "calibrationGapPts": 46.77
     },
     {
       "key": "70–80%",
-      "n": 4,
-      "wins": 2,
-      "losses": 2,
+      "n": 7,
+      "wins": 3,
+      "losses": 4,
       "pushes": 0,
-      "hitRate": 50,
-      "netUnits": 0.34,
-      "stakedUnits": 4.8,
-      "roiPct": 7.08,
-      "avgProbPct": 73.85,
+      "hitRate": 42.86,
+      "netUnits": -1.3,
+      "stakedUnits": 9.3,
+      "roiPct": -13.98,
+      "avgProbPct": 75.46,
       "avgImpliedPct": 57.32,
-      "calibrationGapPts": 23.85
+      "calibrationGapPts": 32.6
     }
   ],
   "warnings": [
-    "Muestra insuficiente: 37 picks cerrados. Con menos de ~100 picks no se puede concluir que el modelo tenga edge; el ROI observado puede ser varianza.",
+    "Muestra insuficiente: 63 picks cerrados. Con menos de ~100 picks no se puede concluir que el modelo tenga edge; el ROI observado puede ser varianza.",
     "ROI negativo en la muestra cerrada: el récord publicado pierde dinero. No usar el backtest de 83.9% como argumento comercial.",
-    "El modelo sobreestima: probabilidad promedio 68.83% vs acierto real 45.95%. Revisar calibración antes de subir stakes."
+    "El modelo sobreestima: probabilidad promedio 60.64% vs acierto real 47.62%. Revisar calibración antes de subir stakes."
   ]
 }

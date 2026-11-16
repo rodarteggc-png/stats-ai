@@ -713,9 +713,13 @@ test('las fuentes futuras cargan cinco deportes sin inventar precios ni estadist
   // 14.7) el modelo evalúa el partido NBA pero rechaza los dos picks por EV
   // negativo (spread y ML con EV < 2%): ya no hay candidato NBA en este caso,
   // y es lo correcto (antes el spread salía con EV +4%).
+  // Lote 2026-11-16 (P1): el rechazo llega ANTES por el gate NBA estático
+  // (futureData no carga ratings en vivo, así que ratingsSource es 'static'):
+  // el veto es 'nba_static_ratings' y el EV negativo sigue debajo (spread
+  // EV 1.99%, ML EV -6.48%). La intención no cambia: NBA no sale.
   const nbaVetoed = (direct.vetoedOpps || []).filter(p => p.sport === 'Baloncesto');
   assert.equal(nbaVetoed.length, 2);
-  assert.ok(nbaVetoed.every(p => p.vetoReason === 'ev_below_min'));
+  assert.ok(nbaVetoed.every(p => p.vetoReason === 'nba_static_ratings'));
   assert.equal(modeled.candidates.some(pick => pick.sport === 'Baloncesto'), false);
 });
 
@@ -1457,6 +1461,7 @@ test('modo paper: classifyOpportunity aprueba lo que pasaba y veta con motivo lo
     sport: 'Baloncesto', league: 'NBA', game: 'Boston Celtics vs Washington Wizards',
     pick: 'UNDER 240.5 Pts', type: '🏀 TOTALES NBA (UNDER)', odds: 1.91, prob: '60',
     evPct: 5, match: { isPostponed: false }, oddsSource: 'market',
+    ratingsSource: 'live',
     consensus: { votesPassed: 3 }, tipsterAudit: { isApproved: true },
   };
   assert.equal(classifyOpportunity(base).approved, true);
@@ -1488,6 +1493,7 @@ test('afinación 2026-11-10: los spreads quedan en pausa (veto spread_paused) y 
     sport: 'Baloncesto', league: 'NBA', game: 'Utah Jazz vs Miami Heat',
     pick: 'Utah Jazz +9.5 (Cubre Línea)', type: '🏀 SPREAD NBA', odds: 1.91, prob: '60',
     evPct: 5, match: { isPostponed: false }, oddsSource: 'market',
+    ratingsSource: 'live',
     consensus: { votesPassed: 3 }, tipsterAudit: { isApproved: true },
   };
   // El spread pasa todo lo demás (candados, EV, prob mínima) y solo lo frena la pausa.

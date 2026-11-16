@@ -128,7 +128,7 @@ export function computeLedgerReport(rows) {
   })();
   return {
     generatedAt: new Date().toISOString(),
-    source: 'data/pick_ledger.jsonl (38 picks publicados por Telegram, calificados con marcador final ESPN)',
+    source: `data/pick_ledger.jsonl (${rows.length} picks publicados por Telegram, calificados con marcador final ESPN)`,
     totalPicks: rows.length,
     closed: closed.length,
     pending: pending.length,

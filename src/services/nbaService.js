@@ -6,7 +6,42 @@ import { calculateNbaProbabilities } from '../utils/hoops.js';
 import { ensureLiveNbaRatings } from './nbaRatings.js';
 
 const NBA_CACHE = new Map();
-const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hora
+// E4 (2026-11-16): 15 min, no 1 hora. El caché solo sirve para no re-descargar
+// el scoreboard en llamadas repetidas dentro del mismo escaneo; las cuotas
+// nunca se reutilizan más de 15 min (el gate 'odds_stale' en
+// classifyOpportunity lo exige al despachar).
+const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutos
+
+/**
+ * E1 (2026-11-16): lee los precios REALES de ESPN/DraftKings del objeto odds
+ * del scoreboard. Verificado en vivo 2026-11-16 (curl): los partidos pre-juego
+ * traen moneyline/pointSpread/total con {open, close} y odds americanas por
+ * lado (ej. spread close -113/-107, total close -110/-110); NO existe el
+ * subcampo "current" (solo open/close) y el "close" pre-juego es la línea
+ * vigente. Tras el partido, ESPN retira las odds (0 entradas). El campo plano
+ * homeTeamOdds.moneyLine NO viene poblado en vivo (0/63 eventos 16 nov):
+ * el ML real solo existe en moneyline.{home,away}.close.odds.
+ * Devuelve decimales o null por lado, más el proveedor. Nunca inventa precio.
+ */
+export function parseEspnNbaOdds(oddsObj = {}) {
+  const provider = oddsObj.provider?.displayName || oddsObj.provider?.name || 'DraftKings';
+  const toDec = (am) => {
+    const n = parseFloat(am);
+    if (isNaN(n) || n === 0) return null;
+    if (n > 0) return Number((1 + (n / 100)).toFixed(2));
+    return Number((1 + (100 / Math.abs(n))).toFixed(2));
+  };
+  // "current" no existe en vivo; el orden current→close sigue la convención de
+  // extractEspnSharpMarket por si ESPN lo publica en algún momento.
+  const pick = (node) => node?.current?.odds ?? node?.close?.odds ?? null;
+  const homeMl = toDec(pick(oddsObj.moneyline?.home) ?? oddsObj.homeTeamOdds?.moneyLine ?? null);
+  const awayMl = toDec(pick(oddsObj.moneyline?.away) ?? oddsObj.awayTeamOdds?.moneyLine ?? null);
+  const spreadHomeOdds = toDec(pick(oddsObj.pointSpread?.home));
+  const spreadAwayOdds = toDec(pick(oddsObj.pointSpread?.away));
+  const overOdds = toDec(pick(oddsObj.total?.over));
+  const underOdds = toDec(pick(oddsObj.total?.under));
+  return { provider, homeMl, awayMl, spreadHomeOdds, spreadAwayOdds, overOdds, underOdds };
+}
 
 /**
  * Descarga la programación oficial de la NBA de hoy o fecha especificada
@@ -40,6 +75,9 @@ export async function fetchNbaSchedule(range = 'hoy') {
     if (!res.ok) throw new Error(`ESPN NBA HTTP ${res.status}`);
     const json = await res.json();
     const events = json.events || [];
+    // E4 (2026-11-16): hora de descarga del scoreboard. Cada partido lleva
+    // su fetchedAt; el gate 'odds_stale' exige cuotas del escaneo actual.
+    const oddsFetchedAt = new Date().toISOString();
 
     const matches = events.map(evt => {
       const comp = evt.competitions?.[0] || {};
@@ -52,18 +90,13 @@ export async function fetchNbaSchedule(range = 'hoy') {
       const marketSpread = oddsObj.spread !== undefined ? parseFloat(oddsObj.spread) : null;
       const marketTotal = oddsObj.overUnder !== undefined ? parseFloat(oddsObj.overUnder) : null;
 
-      const homeMl = oddsObj.homeTeamOdds?.moneyLine ?? null;
-      const awayMl = oddsObj.awayTeamOdds?.moneyLine ?? null;
-
-      // Convertir momio americano a decimal; null si el libro no publicó precio
-      function toDecimalOdds(am) {
-        const n = parseFloat(am);
-        if (isNaN(n) || n === 0) return null;
-        if (n > 0) return Number((1 + (n / 100)).toFixed(2));
-        return Number((1 + (100 / Math.abs(n))).toFixed(2));
-      }
-      const homeMlDec = toDecimalOdds(homeMl);
-      const awayMlDec = toDecimalOdds(awayMl);
+      // E1 (2026-11-16): precios reales de ESPN (decimales o null por lado).
+      // Antes el ML se leía del campo plano homeTeamOdds.moneyLine (vacío en
+      // vivo) y spread/total se fijaban a null a mano; ahora vienen del
+      // objeto estructurado y el 1.91 fijo se sobrescribe en applyTwoWay.
+      const espnOdds = parseEspnNbaOdds(oddsObj);
+      const homeMlDec = espnOdds.homeMl;
+      const awayMlDec = espnOdds.awayMl;
       const statusName = evt.status?.type?.name || '';
       const homeScore = homeComp.score !== undefined && homeComp.score !== '' ? parseInt(homeComp.score, 10) : null;
       const awayScore = awayComp.score !== undefined && awayComp.score !== '' ? parseInt(awayComp.score, 10) : null;
@@ -84,20 +117,29 @@ export async function fetchNbaSchedule(range = 'hoy') {
         isPostponed: /POSTPONED|CANCELED|CANCELLED|SUSPENDED/i.test(statusName),
         spread: marketSpread,
         total: marketTotal,
+        oddsFetchedAt,
         vegas: {
           spread: marketSpread,
           overUnder: marketTotal,
-          spreadHomeOdds: null,
-          spreadAwayOdds: null,
-          overOdds: null,
-          underOdds: null
+          spreadHomeOdds: espnOdds.spreadHomeOdds,
+          spreadAwayOdds: espnOdds.spreadAwayOdds,
+          overOdds: espnOdds.overOdds,
+          underOdds: espnOdds.underOdds,
+          provider: espnOdds.provider,
+          oddsOrigin: 'espn'
         },
         market: {
           homeOdds: homeMlDec ? homeMlDec.toString() : null,
           awayOdds: awayMlDec ? awayMlDec.toString() : null,
           spread: marketSpread,
           overUnder: marketTotal,
+          homeSpreadOdds: espnOdds.spreadHomeOdds ? espnOdds.spreadHomeOdds.toString() : null,
+          awaySpreadOdds: espnOdds.spreadAwayOdds ? espnOdds.spreadAwayOdds.toString() : null,
+          overOdds: espnOdds.overOdds ? espnOdds.overOdds.toString() : null,
+          underOdds: espnOdds.underOdds ? espnOdds.underOdds.toString() : null,
           hasRealOdds: Boolean(homeMlDec && awayMlDec),
+          provider: espnOdds.provider,
+          oddsOrigin: 'espn',
           details: `NBA Spread ${marketSpread !== null ? (marketSpread > 0 ? `+${marketSpread}` : marketSpread) : '0'} | Total ${marketTotal || 224.5}`
         },
         odds: {
@@ -105,8 +147,8 @@ export async function fetchNbaSchedule(range = 'hoy') {
           overUnder: marketTotal,
           homeMl: homeMlDec,
           awayMl: awayMlDec,
-          spreadOdds: null,
-          totalOdds: null
+          spreadOdds: espnOdds.spreadHomeOdds,
+          totalOdds: espnOdds.overOdds
         }
       };
 

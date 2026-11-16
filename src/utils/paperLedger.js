@@ -87,6 +87,12 @@ export function buildPaperEntry(pick = {}, opts = {}) {
     evPct: Number.isFinite(pick.evPct) ? Number(pick.evPct.toFixed(2)) : null,
     consensus: `${pick.consensus?.votesPassed ?? 3}/3`,
     oddsSource: pick.oddsSource || 'market',
+    // E2 (2026-11-16): tier y proveedor de la cuota, para que el registro
+    // paper no mezcle picks sharp con picks ESPN.
+    oddsProvider: pick.oddsProvider || null,
+    evNoVig: Boolean(pick.evNoVig),
+    fairOdds: pick.fairOdds || null,
+    ratingsSource: pick.ratingsSource || null,
     stakeUnits: num(opts.wouldStake, 1.0),
     shift,
     vetoReason,

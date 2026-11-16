@@ -856,6 +856,9 @@ export async function fetchLiveMlbStandings() {
  * Obtiene partidos reales de la MLB usando la API oficial de las Grandes Ligas (statsapi.mlb.com)
  */
 async function fetchRealMlbSchedule(dateRange) {
+  // E4 (2026-11-16): hora de descarga del scoreboard; el gate 'odds_stale'
+  // exige cuotas ESPN del escaneo actual (≤15 min).
+  const oddsFetchedAt = new Date().toISOString();
   const { mlbStart, mlbEnd, espnDatesList } = getDateRanges(dateRange);
   const url = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=${mlbStart}&endDate=${mlbEnd}&hydrate=probablePitcher,linescore,team,decisions,lineups`;
   
@@ -1097,7 +1100,7 @@ async function fetchRealMlbSchedule(dateRange) {
     });
   }
 
-  return resolvedGames;
+  return resolvedGames.map(g => ({ ...g, oddsFetchedAt }));
 }
 
 const soccerLiveStatsCache = {};
@@ -1232,6 +1235,9 @@ function getSoccerDaysRest(leagueCode, gameDateStr) {
  * Obtiene partidos reales de Fútbol (Liga MX, Premier League, LaLiga, Serie A, Champions League, Nations League, Femenil, etc.)
  */
 async function fetchRealSoccerSchedule(dateRange) {
+  // E4 (2026-11-16): hora de descarga del scoreboard; el gate 'odds_stale'
+  // exige cuotas ESPN del escaneo actual (≤15 min).
+  const oddsFetchedAt = new Date().toISOString();
   const { espnDatesList } = getDateRanges(dateRange);
   const leagues = [
     { code: 'uefa.champions', name: 'Champions League' },
@@ -1623,7 +1629,7 @@ async function fetchRealSoccerSchedule(dateRange) {
     }
   }
 
-  return games;
+  return games.map(g => ({ ...g, oddsFetchedAt }));
 }
 
 const nflTeamRatings = {
@@ -1868,6 +1874,9 @@ async function fetchRealNflSchedule(dateRange) {
     return {
       ...g,
       sport: 'nfl',
+      // E4 (2026-11-16): la marca de frescura viene del builder de semana;
+      // si faltara, se estampa ahora (la descarga fue segundos atrás).
+      oddsFetchedAt: g.oddsFetchedAt || new Date().toISOString(),
       league: `NFL (Semana ${weekData.weekNumber})`,
       lineupStatus: getMatchLineupStatus(g.gameDate, 'nfl', g.home, g.away),
       home: {
@@ -1960,6 +1969,9 @@ async function fetchLiveNflTeamStats(teamId, fallbackElo, fallbackQb) {
  * @returns {{ weekNumber, seasonYear, games[] }}
  */
 export async function fetchNflWeekSchedule(weekNumber = null) {
+  // E4 (2026-11-16): hora de descarga del scoreboard; el gate 'odds_stale'
+  // exige cuotas ESPN del escaneo actual (≤15 min).
+  const oddsFetchedAt = new Date().toISOString();
   const baseUrl = weekNumber 
     ? `https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?seasontype=2&week=${weekNumber}`
     : `https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard`;
@@ -2126,7 +2138,7 @@ export async function fetchNflWeekSchedule(weekNumber = null) {
     });
   }
 
-  return { weekNumber: actualWeek, seasonYear, games };
+  return { weekNumber: actualWeek, seasonYear, games: games.map(g => ({ ...g, oddsFetchedAt })) };
 }
 
 // ================= STANDINGS Y ESTADÍSTICAS EN VIVO NCAAF (ESPN COLLEGE FOOTBALL API) =================
@@ -2246,6 +2258,9 @@ async function fetchLiveNcaafTeamStats(teamId, fallbackElo, fallbackQb) {
  * @param {object} options - { weekNumber, top25Only }
  */
 export async function fetchNcaafWeekSchedule(options = {}) {
+  // E4 (2026-11-16): hora de descarga del scoreboard; el gate 'odds_stale'
+  // exige cuotas ESPN del escaneo actual (≤15 min).
+  const oddsFetchedAt = new Date().toISOString();
   const { weekNumber = null, top25Only = false } = (typeof options === 'object' && options !== null) ? options : {};
   
   const baseUrl = top25Only
@@ -2445,7 +2460,7 @@ export async function fetchNcaafWeekSchedule(options = {}) {
     console.warn("Aviso obteniendo cuotas TheOdds NCAAF:", e.message);
   }
 
-  return { weekNumber: actualWeek, seasonYear, games };
+  return { weekNumber: actualWeek, seasonYear, games: games.map(g => ({ ...g, oddsFetchedAt })) };
 }
 
 /**
@@ -2476,6 +2491,9 @@ async function fetchRealNcaafSchedule(dateRange = "hoy", options = {}) {
       ...g,
       sport: 'ncaaf',
       isCollege: true,
+      // E4 (2026-11-16): la marca de frescura viene del builder de semana;
+      // si faltara, se estampa ahora (la descarga fue segundos atrás).
+      oddsFetchedAt: g.oddsFetchedAt || new Date().toISOString(),
       league: `NCAAF Colegial FBS (Semana ${weekData.weekNumber})`,
       lineupStatus: getMatchLineupStatus(g.gameDate, 'ncaaf', g.home, g.away),
       home: {

@@ -1,5 +1,5 @@
 // api/scan.js - Vercel Serverless Function
-import { runAlertEngine } from '../scripts/alertEngine.js';
+import { runAlertEngine, sendTelegramMessage } from '../scripts/alertEngine.js';
 import { requireCronAuth } from './_lib/security.js';
 
 export function resolveScanTargetChat(vip, env = process.env) {
@@ -14,8 +14,11 @@ export default async function handler(req, res) {
     const hasToken = Boolean(process.env.TELEGRAM_BOT_TOKEN);
 
     if (!hasToken || !targetChat) {
+      // C5 (2026-11-16): un aborto por configuración es un FALLO del turno,
+      // no un éxito: 503 para que cron-job.org lo registre como fallo y
+      // pueda alertar. Antes devolvía 200 y el turno muerto se veía "OK".
       console.warn('Alerta api/scan: Faltan variables de entorno del bot o del chat de destino en Vercel.');
-      return res.status(200).json({
+      return res.status(503).json({
         success: false,
         warning: 'Faltan configurar TELEGRAM_BOT_TOKEN y el ID del chat de destino en Vercel Dashboard (Settings -> Environment Variables).',
         timestamp: new Date().toISOString()
@@ -50,6 +53,11 @@ export default async function handler(req, res) {
     });
   } catch (error) {
     console.error('Error en api/scan:', error);
+    // C5 (2026-11-16): un turno que muere con excepción no puede pasar en
+    // silencio: aviso best-effort al VIP (nunca rompe el 500).
+    try {
+      await sendTelegramMessage(`⚠️ *TURNO FALLIDO — STATS-AI PRO*\n\nMotivo: \`scan_error\`\n${String(error?.message || error).slice(0, 300)}\n\nEl turno no despachó picks. Revisa el motivo antes del siguiente turno.`, false, resolveScanTargetChat(true));
+    } catch {}
     return res.status(500).json({
       success: false,
       error: 'Fallo interno en el escaneo.'
