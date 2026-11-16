@@ -552,7 +552,7 @@ test('Telegram procesa foto y archivo de imagen hasta el reporte de cuotas', asy
   }
 });
 
-test('el boton de 48 horas solo se muestra y ejecuta en el chat privado VIP', async () => {
+test('el boton de 48 horas muestra el menú por deporte y el callback ejecuta en el chat privado VIP', async () => {
   const originalFetch = globalThis.fetch;
   const variables = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_VIP_CHAT_ID', 'TELEGRAM_WEBHOOK_SECRET', 'APISPORTS_KEY'];
   const previous = Object.fromEntries(variables.map(name => [name, process.env[name]]));
@@ -565,6 +565,9 @@ test('el boton de 48 horas solo se muestra y ejecuta en el chat privado VIP', as
       sent.push(JSON.parse(options.body));
       return Response.json({ ok: true });
     }
+    if (url.hostname === 'api.telegram.org' && url.pathname.endsWith('/answerCallbackQuery')) {
+      return Response.json({ ok: true });
+    }
     if (url.hostname === 'v3.football.api-sports.io') return mock.fetchImpl(url);
     throw new Error('No se permiten escaneos actuales, auditorias ni otras peticiones en esta prueba.');
   };
@@ -573,6 +576,11 @@ test('el boton de 48 horas solo se muestra y ejecuta en el chat privado VIP', as
     const deliver = async (text, chatId = 123, type = 'private', senderId = 123) => {
       const response = { statusCode: 0, status(code) { this.statusCode = code; return this; }, send() { return this; } };
       await handler({ method: 'POST', headers: { 'x-telegram-bot-api-secret-token': 'test-secret' }, body: { message: { text, from: { id: senderId }, chat: { id: chatId, type } } } }, response);
+      assert.equal(response.statusCode, 200);
+    };
+    const deliverCallback = async (data, chatId = 123, senderId = 123) => {
+      const response = { statusCode: 0, status(code) { this.statusCode = code; return this; }, send() { return this; } };
+      await handler({ method: 'POST', headers: { 'x-telegram-bot-api-secret-token': 'test-secret' }, body: { callback_query: { id: 'cb-futuro-1', data, from: { id: senderId }, message: { message_id: 1, chat: { id: chatId, type: 'private' } } } } }, response);
       assert.equal(response.statusCode, 200);
     };
     await deliver('/start');
@@ -584,8 +592,20 @@ test('el boton de 48 horas solo se muestra y ejecuta en el chat privado VIP', as
     assert.match(sent.at(-1).text, /chat privado VIP/);
     await deliver('/futuro', 456, 'private', 456);
     assert.equal(mock.calls.length, 0);
-    const firstReport = sent.length;
+    // El botón ya no corre el escaneo: muestra el menú por deporte.
+    const beforeMenu = sent.length;
     await deliver('🔭 Próximas 48 h');
+    assert.equal(mock.calls.length, 0);
+    const menu = sent.slice(beforeMenu).find((payload) => payload.reply_markup?.inline_keyboard);
+    assert.ok(menu, 'El botón debe mostrar el menú inline de /futuro');
+    assert.ok(menu.reply_markup.inline_keyboard.flat().some((button) => button.callback_data === 'futuro_futbol'));
+    assert.ok(menu.reply_markup.inline_keyboard.flat().some((button) => button.callback_data === 'futuro_nba'));
+    assert.ok(menu.reply_markup.inline_keyboard.flat().some((button) => button.callback_data === 'futuro_nfl'));
+    assert.ok(menu.reply_markup.inline_keyboard.flat().some((button) => button.callback_data === 'futuro_all'));
+    assert.match(menu.text, /48 HORAS/);
+    // El callback futuro_all corre el escaneo (futbol + NFL + NBA) y entrega el reporte.
+    const firstReport = sent.length;
+    await deliverCallback('futuro_all');
     assert.ok(mock.calls.length > 0 && mock.calls.length <= 30);
     const privateReports = sent.slice(firstReport);
     assert.ok(privateReports.every(payload => payload.chat_id === 123 && payload.text.length < 4096));
@@ -735,6 +755,130 @@ test('las fuentes futuras cargan cinco deportes sin inventar precios ni estadist
   assert.equal(nbaVetoed.length, 2);
   assert.ok(nbaVetoed.every(p => p.vetoReason === 'nba_static_ratings'));
   assert.equal(modeled.candidates.some(pick => pick.sport === 'Baloncesto'), false);
+});
+
+test('el futuro carga solo los deportes pedidos y marca los demas como no solicitados', async () => {
+  const requested = [];
+  const emptyFetch = async (input) => {
+    const url = new URL(input);
+    requested.push(`${url.hostname}${url.pathname}`);
+    if (url.hostname === 'v3.football.api-sports.io') {
+      if (url.pathname === '/status') return Response.json({ response: { requests: { current: 1, limit_day: 100 } } });
+      return Response.json({ response: [] });
+    }
+    if (url.hostname === 'site.api.espn.com') return Response.json({ events: [] });
+    if (url.hostname === 'api.the-odds-api.com') return Response.json([]);
+    if (url.hostname === 'statsapi.mlb.com') return Response.json({ dates: [] });
+    throw new Error(`Host no esperado en la prueba: ${url.hostname}`);
+  };
+  const data = await loadFutureModelData({
+    now: () => Date.parse('2026-11-03T18:00:00Z'),
+    sports: ['futbol', 'nfl'],
+    oddsKeys: [],
+    fetchImpl: emptyFetch
+  });
+  assert.deepEqual(data.sports, ['futbol', 'nfl']);
+  assert.equal(data.matches.soccerMatches.length, 0);
+  assert.equal(data.matches.nflMatches.length, 0);
+  assert.equal(data.matches.nbaMatches.length, 0);
+  assert.equal(data.coverage.futbol.notRequested, undefined);
+  assert.equal(data.coverage.nfl.notRequested, undefined);
+  assert.equal(data.coverage.nba.notRequested, true);
+  assert.equal(data.coverage.ncaaf.notRequested, true);
+  assert.equal(data.coverage.mlb.notRequested, true);
+  assert.ok(!requested.some((u) => u.includes('basketball') || u.includes('college-football') || u.includes('baseball_mlb') || u.includes('americanfootball_ncaaf')));
+  assert.ok(requested.some((u) => u.includes('football/nfl/scoreboard')));
+});
+
+test('futuro_all carga futbol, NFL y NBA y excluye NCAAF y MLB', async () => {
+  const requested = [];
+  const emptyFetch = async (input) => {
+    const url = new URL(input);
+    requested.push(`${url.hostname}${url.pathname}`);
+    if (url.hostname === 'v3.football.api-sports.io') {
+      if (url.pathname === '/status') return Response.json({ response: { requests: { current: 1, limit_day: 100 } } });
+      return Response.json({ response: [] });
+    }
+    if (url.hostname === 'site.api.espn.com') return Response.json({ events: [] });
+    if (url.hostname === 'api.the-odds-api.com') return Response.json([]);
+    if (url.hostname === 'statsapi.mlb.com') return Response.json({ dates: [] });
+    throw new Error(`Host no esperado en la prueba: ${url.hostname}`);
+  };
+  const data = await loadFutureModelData({
+    now: () => Date.parse('2026-11-06T18:00:00Z'),
+    sports: ['futbol', 'nfl', 'nba'],
+    oddsKeys: [],
+    fetchImpl: emptyFetch
+  });
+  assert.deepEqual(data.sports, ['futbol', 'nfl', 'nba']);
+  assert.equal(data.coverage.ncaaf.notRequested, true);
+  assert.equal(data.coverage.mlb.notRequested, true);
+  assert.equal(data.coverage.futbol.notRequested, undefined);
+  assert.equal(data.coverage.nfl.notRequested, undefined);
+  assert.equal(data.coverage.nba.notRequested, undefined);
+  assert.ok(!requested.some((u) => u.includes('college-football') || u.includes('baseball_mlb') || u.includes('americanfootball_ncaaf')));
+  assert.ok(requested.some((u) => u.includes('basketball/nba/scoreboard')));
+  assert.ok(requested.some((u) => u.includes('football/nfl/scoreboard')));
+  // Sin standings útiles el rating en vivo no se carga: queda anotado y se sigue con estático.
+  assert.ok(data.notices.some((n) => n.includes('ratings en vivo')));
+});
+
+test('el futuro carga ratings NBA en vivo y ya no veta por nba_static_ratings', async () => {
+  clearNbaRatingsCache();
+  clearLiveNbaRatings();
+  try {
+    const timestamp = Date.parse('2026-11-05T18:00:00Z');
+    const kickoff = '2026-11-06T18:00:00Z';
+    const data = await loadFutureModelData({
+      now: () => timestamp,
+      sports: ['nba'],
+      oddsKeys: ['test-nba-live-odds'],
+      fetchImpl: async (input) => {
+        const url = new URL(input);
+        if (url.hostname === 'site.api.espn.com') {
+          if (url.pathname.endsWith('/standings')) {
+            return Response.json({ children: [{ standings: { entries: [
+              { team: { id: 2, displayName: 'Boston Celtics' }, stats: [{ name: 'avgPointsFor', value: 118 }, { name: 'avgPointsAgainst', value: 110 }] },
+              { team: { id: 30, displayName: 'Washington Wizards' }, stats: [{ name: 'avgPointsFor', value: 108 }, { name: 'avgPointsAgainst', value: 118 }] }
+            ] } }] });
+          }
+          if (url.pathname.endsWith('/statistics')) {
+            const id = url.pathname.split('/teams/')[1].split('/')[0];
+            const pts = id === '2' ? 118 : 108;
+            return Response.json({ results: { stats: { categories: [{ name: 'Averages', stats: [
+              { name: 'avgFieldGoalsAttempted', value: 88 }, { name: 'avgFreeThrowsAttempted', value: 22 },
+              { name: 'avgOffensiveRebounds', value: 10 }, { name: 'avgTurnovers', value: 13 },
+              { name: 'avgPoints', value: pts }, { name: 'gamesPlayed', value: 10 }
+            ] }] } } });
+          }
+          return Response.json({ events: [{ id: 'nba-live', date: kickoff, status: { type: { state: 'pre' } }, competitions: [{ competitors: [
+            { homeAway: 'home', team: { id: 2, displayName: 'Boston Celtics' } },
+            { homeAway: 'away', team: { id: 30, displayName: 'Washington Wizards' } }
+          ] }] }] });
+        }
+        if (url.hostname === 'api.the-odds-api.com') {
+          return Response.json([{ id: 'basketball_nba', home_team: 'Boston Celtics', away_team: 'Washington Wizards', commence_time: kickoff, bookmakers: [{
+            key: 'pinnacle', title: 'Pinnacle', last_update: new Date(timestamp).toISOString(), markets: [
+              { key: 'h2h', outcomes: [{ name: 'Boston Celtics', price: 1.12 }, { name: 'Washington Wizards', price: 8 }] },
+              { key: 'spreads', outcomes: [{ name: 'Boston Celtics', point: -18.5, price: 1.91 }, { name: 'Washington Wizards', point: 18.5, price: 1.91 }] },
+              { key: 'totals', outcomes: [{ name: 'Over', point: 236.5, price: 1.91 }, { name: 'Under', point: 236.5, price: 1.91 }] }
+            ]
+          }] }], { headers: { 'x-requests-last': '3' } });
+        }
+        throw new Error('Fuente no autorizada en la prueba.');
+      }
+    });
+    assert.deepEqual(data.sports, ['nba']);
+    assert.equal(data.matches.nbaMatches.length, 1);
+    const direct = buildOpportunitiesAndTopSlate({ ...data.matches, isForce: true, sentCache: {}, maxPicksToSend: 100 });
+    const nbaPicks = [...(direct.approvedOpps || []), ...(direct.vetoedOpps || [])].filter((p) => p.sport === 'Baloncesto');
+    assert.ok(nbaPicks.length > 0);
+    assert.ok(nbaPicks.every((p) => p.ratingsSource === 'live'));
+    assert.ok(!(direct.vetoedOpps || []).some((p) => p.sport === 'Baloncesto' && p.vetoReason === 'nba_static_ratings'));
+  } finally {
+    clearNbaRatingsCache();
+    clearLiveNbaRatings();
+  }
 });
 
 test('el analisis multideporte ordena candidatos sin enviar alertas ni forzar una combinada', async () => {

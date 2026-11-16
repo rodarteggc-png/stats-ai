@@ -1,6 +1,7 @@
 import { getOddsApiKeys, inMemoryExhaustedKeys } from '../../src/services/sportsApi.js';
 import { getDynamicElo } from '../../src/services/history.js';
 import { createTicketClient } from './parlayLive.js';
+import { ensureLiveNbaRatings } from '../../src/services/nbaRatings.js';
 
 const cache = new Map();
 const sports = {
@@ -83,6 +84,14 @@ export async function loadFutureModelData(options = {}) {
   const now = options.now || Date.now;
   const start = now();
   const end = start + 48 * 3600000;
+  // Filtro por deporte (menú /futuro, 2026-11-16): el webhook siempre pasa la
+  // lista explícita. Sin options.sports se cargan los 5 deportes de siempre
+  // (compatibilidad con las pruebas existentes).
+  const ALL_SPORTS = ['futbol', 'nba', 'nfl', 'ncaaf', 'mlb'];
+  const requested = Array.isArray(options.sports) && options.sports.length
+    ? options.sports.filter((sport) => ALL_SPORTS.includes(sport))
+    : [...ALL_SPORTS];
+  const sportsRequested = requested.length ? requested : [...ALL_SPORTS];
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 40000);
   const fetchImpl = options.fetchImpl || fetch;
@@ -426,16 +435,42 @@ export async function loadFutureModelData(options = {}) {
       }
     }
   }
+  // Ratings NBA en vivo (mismo mecanismo que fetchNbaSchedule): se activan
+  // en hoops.js ANTES de que buildOpportunitiesAndTopSlate evalúe, así
+  // calculateNbaProbabilities reporta ratingsSource 'live' y el veto P1
+  // (nba_static_ratings) no dispara en /futuro. Si ESPN falla, se sigue con
+  // la tabla estática y queda anotado: el escaneo nunca se rompe por esto.
+  async function loadNbaRatings() {
+    try {
+      const live = await ensureLiveNbaRatings({ fetchImpl });
+      if (live) {
+        console.log(`[futuro] Ratings NBA en vivo cargados: ${live.teams} equipos.`);
+      } else {
+        notices.push('NBA: ratings en vivo no disponibles; se usa la tabla estática.');
+      }
+    } catch (error) {
+      notices.push(`NBA: no se pudieron cargar ratings en vivo (${error.message}); se usa la tabla estática.`);
+    }
+  }
   try {
-    const jobs = [loadSoccer(), ...Object.keys(sports).map(loadAmericanSport)];
-    const outcomes = await Promise.allSettled(jobs);
+    const jobEntries = [];
+    if (sportsRequested.includes('futbol')) jobEntries.push({ name: 'futbol', job: loadSoccer(), isRatings: false });
+    if (sportsRequested.includes('nba')) jobEntries.push({ name: 'nba', job: loadNbaRatings(), isRatings: true });
+    for (const sport of Object.keys(sports)) {
+      if (sportsRequested.includes(sport)) jobEntries.push({ name: sport, job: loadAmericanSport(sport), isRatings: false });
+    }
+    const outcomes = await Promise.allSettled(jobEntries.map((entry) => entry.job));
     outcomes.forEach((outcome, index) => {
-      const sport = ['futbol', ...Object.keys(sports)][index];
-      if (outcome.status === 'rejected') notices.push(`${sport.toUpperCase()}: ${outcome.reason.message}`);
-      coverage[sport] ||= { scheduled: null, evaluated: 0, skipped: 0 };
+      const entry = jobEntries[index];
+      if (entry.isRatings) return; // el job de ratings no es un deporte: no toca coverage
+      if (outcome.status === 'rejected') notices.push(`${entry.name.toUpperCase()}: ${outcome.reason.message}`);
+      coverage[entry.name] ||= { scheduled: null, evaluated: 0, skipped: 0 };
     });
+    for (const sport of ALL_SPORTS) {
+      if (!sportsRequested.includes(sport)) coverage[sport] = { scheduled: 0, evaluated: 0, skipped: 0, notRequested: true };
+    }
     usage.apiFootball = footballClient?.usage();
-    return { matches: result, coverage, notices, usage };
+    return { matches: result, coverage, notices, usage, sports: sportsRequested };
   } finally {
     controller.abort();
     clearTimeout(timer);

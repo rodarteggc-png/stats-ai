@@ -81,15 +81,20 @@ function safeText(value, length = 160) {
   return String(value ?? '').replace(/[_*`[\]<>\r\n]/g, ' ').slice(0, length);
 }
 
+export const FUTURE_SPORT_LABELS = { futbol: 'Futbol', nba: 'NBA', nfl: 'NFL', ncaaf: 'NCAAF', mlb: 'MLB' };
+const FUTURE_ALL_SPORTS = ['futbol', 'nba', 'nfl', 'ncaaf', 'mlb'];
+
 export function formatFutureMultiSport(report) {
+  const sportsShown = Array.isArray(report.sports) && report.sports.length ? report.sports : FUTURE_ALL_SPORTS;
+  const title = sportsShown.length === 1 ? FUTURE_SPORT_LABELS[sportsShown[0]].toUpperCase() : 'MULTIDEPORTE';
   const lines = [
-    '*VIP | PROXIMAS 48 HORAS | MULTIDEPORTE*',
-    'Futbol | NBA | NFL | NCAAF | MLB',
+    `*VIP | PROXIMAS 48 HORAS | ${title}*`,
+    sportsShown.map((sport) => FUTURE_SPORT_LABELS[sport]).join(' | '),
     `${report.start} a ${report.end} (UTC)`,
     'Muestra acotada; candidatos preliminares con probabilidad calibrada >=65%, cuota real (Pinnacle/Bet365 o ESPN/DraftKings 2º nivel) y consenso del modelo existente.',
     ''
   ];
-  for (const sport of ['futbol', 'nba', 'nfl', 'ncaaf', 'mlb']) {
+  for (const sport of sportsShown) {
     const status = report.coverage[sport];
     lines.push(`${sport.toUpperCase()}: ${status?.scheduled ?? '?'} programados, ${status?.evaluated || 0} con datos para evaluar, ${status?.skipped || 0} omitidos.`);
   }

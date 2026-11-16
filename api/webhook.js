@@ -40,6 +40,22 @@ const INLINE_SPORT_MENU = {
   ]
 };
 
+// Menú de /futuro (2026-11-16): un deporte por escaneo para no gastar el
+// presupuesto en cinco deportes a la vez. 'Todos' = fútbol + NFL + NBA
+// (sin NCAAF ni MLB: MLB fuera de temporada).
+const INLINE_FUTURE_MENU = {
+  inline_keyboard: [
+    [
+      { text: '⚽ Fútbol', callback_data: 'futuro_futbol' },
+      { text: '🏀 NBA', callback_data: 'futuro_nba' }
+    ],
+    [
+      { text: '🏈 NFL', callback_data: 'futuro_nfl' },
+      { text: '🌐 Todos (Fútbol + NFL + NBA)', callback_data: 'futuro_all' }
+    ]
+  ]
+};
+
 async function respondWithLiveTicket(input, chatId, keyboard) {
   const selections = await extractTicketSelections(input, process.env.GEMINI_API_KEY || FALLBACK_GEMINI_KEY);
   const audit = await auditTicketLive(selections);
@@ -121,10 +137,39 @@ export default async function handler(req, res) {
         await sendTelegramMessage('Ya hay un analisis de 48 horas en curso. No se iniciaron nuevas consultas.', false, chatId, KEYBOARD_MENU);
         return res.status(200).send('OK');
       }
+      const menuMsg = [
+        `🔭 *PRÓXIMAS 48 HORAS — STATS-AI PRO*`,
+        `Candidatos preliminares de alta probabilidad (calibrada >=65%, cuota real, consenso 2/3).`,
+        ``,
+        `_¿Qué deporte quieres explorar?_`
+      ].join('\n');
+      await sendTelegramMessage(menuMsg, false, chatId, INLINE_FUTURE_MENU);
+      return res.status(200).send('OK');
+    }
+
+    // ==========================================
+    // /futuro POR DEPORTE (callbacks futuro_*)
+    // ==========================================
+    let futureSports = null;
+    let futureLabel = '';
+    if (command === 'futuro_futbol') { futureSports = ['futbol']; futureLabel = '⚽ Fútbol'; }
+    else if (command === 'futuro_nba') { futureSports = ['nba']; futureLabel = '🏀 NBA'; }
+    else if (command === 'futuro_nfl') { futureSports = ['nfl']; futureLabel = '🏈 NFL'; }
+    else if (command === 'futuro_all') { futureSports = ['futbol', 'nfl', 'nba']; futureLabel = '🌐 Todos (Fútbol + NFL + NBA)'; }
+
+    if (futureSports) {
+      if (!isPrivateVip) {
+        await sendTelegramMessage('El analisis de 48 horas solo esta disponible en tu chat privado VIP.', false, chatId);
+        return res.status(200).send('OK');
+      }
+      if (futureScanRunning) {
+        await sendTelegramMessage('Ya hay un analisis de 48 horas en curso. No se iniciaron nuevas consultas.', false, chatId, KEYBOARD_MENU);
+        return res.status(200).send('OK');
+      }
       futureScanRunning = true;
       try {
-        await sendTelegramMessage('Explorando las proximas 48 horas de futbol, NBA, NFL, NCAAF y MLB. Buscando probabilidad calibrada >=65% y combinacion opcional de dos partidos. Presupuesto ampliado: 60 peticiones de red, hasta 30 API-Football y reserva observada de 10; sin cambiar alertas ni registrar picks.', false, chatId, KEYBOARD_MENU);
-        const result = await scanFutureMultiSport();
+        await sendTelegramMessage(`Explorando las proximas 48 horas de ${futureLabel}. Buscando probabilidad calibrada >=65% y combinacion opcional de dos partidos. Presupuesto ampliado: 60 peticiones de red, hasta 30 API-Football y reserva observada de 10; sin cambiar alertas ni registrar picks.`, false, chatId, KEYBOARD_MENU);
+        const result = await scanFutureMultiSport({ sports: futureSports });
         await sendReport(formatFutureMultiSport(result), chatId, KEYBOARD_MENU);
       } catch (error) {
         await sendTelegramMessage(`No se completo el analisis de 48 horas: ${error.message}`, false, chatId, KEYBOARD_MENU);
