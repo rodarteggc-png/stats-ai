@@ -8,7 +8,7 @@ export function selectHighProbabilityCandidates(opportunities, start, end) {
   return opportunities.filter(pick => {
     const kickoff = Date.parse(pick.gameDate);
     return kickoff > start && kickoff < end && parseFloat(pick.prob) >= 65 && parseFloat(pick.prob) < 100
-      && Number.isFinite(Number(pick.odds)) && Number(pick.odds) > 1 && pick.oddsSource === 'market' && Number.isFinite(pick.evPct) && pick.evPct > 0
+      && Number.isFinite(Number(pick.odds)) && Number(pick.odds) > 1 && ['market', 'espn'].includes(pick.oddsSource) && Number.isFinite(pick.evPct) && pick.evPct > 0
       && pick.consensus?.votesPassed >= 2 && !pick.marketOutlier && !pick.match?.isPostponed
       && !pick.consensus?.rlmInfo?.isTrapForPick && !pick.consensus?.rlmInfo?.isVetoedByMarket
       && !(['NFL', 'NCAAF'].includes(pick.sport) && /OVER|UNDER|TOTALES/i.test(`${pick.type} ${pick.pick}`) && !pick.match?.weather?.verified)
@@ -46,7 +46,7 @@ export function evaluateFutureModels(matches, start, end, evaluate = buildOpport
 
 export async function scanFutureMultiSport(options = {}) {
   const start = options.now ? options.now() : Date.now();
-  const end = start + 72 * 3600000;
+  const end = start + 48 * 3600000;
   const data = await (options.loadData || loadFutureModelData)(options);
   const approved = [];
   for (const [group, matches] of Object.entries(data.matches)) {
@@ -83,10 +83,10 @@ function safeText(value, length = 160) {
 
 export function formatFutureMultiSport(report) {
   const lines = [
-    '*VIP | PROXIMAS 72 HORAS | MULTIDEPORTE*',
+    '*VIP | PROXIMAS 48 HORAS | MULTIDEPORTE*',
     'Futbol | NBA | NFL | NCAAF | MLB',
     `${report.start} a ${report.end} (UTC)`,
-    'Muestra acotada; candidatos preliminares con probabilidad calibrada >=65%, cuota real y consenso del modelo existente.',
+    'Muestra acotada; candidatos preliminares con probabilidad calibrada >=65%, cuota real (Pinnacle/Bet365 o ESPN/DraftKings 2º nivel) y consenso del modelo existente.',
     ''
   ];
   for (const sport of ['futbol', 'nba', 'nfl', 'ncaaf', 'mlb']) {
@@ -97,9 +97,10 @@ export function formatFutureMultiSport(report) {
   for (const [index, pick] of report.candidates.entries()) {
     lines.push(
       `*${index + 1}. ${safeText(pick.game)}* (${safeText(pick.sport)})`,
-      `${safeText(pick.pick)} @ *${Number(pick.odds).toFixed(2)}*`,
+      `${safeText(pick.pick)} @ *${Number(pick.odds).toFixed(2)}*${pick.oddsSource === 'espn' ? ' (ESPN 2º nivel)' : ''}`,
       `Probabilidad calibrada: *${parseFloat(pick.prob).toFixed(1)}%* | EV estimado: ${Number(pick.evPct).toFixed(1)}% | Consenso: ${pick.consensus.votesPassed}/3`,
-      `Inicio: ${safeText(pick.gameDate)} | Casa: ${safeText(pick.match?.market?.sharpBookmaker)}`,
+      ...(pick.oddsSource === 'espn' ? ['Cuota ESPN (2º nivel): precio de DraftKings, no Pinnacle. EV medido sin vig.'] : []),
+      `Inicio: ${safeText(pick.gameDate)} | Casa: ${safeText(pick.oddsSource === 'espn' ? (pick.oddsProvider || 'DraftKings') : pick.match?.market?.sharpBookmaker)}`,
       `Cuota actualizada: ${safeText(pick.match?.market?.updatedAt)}`,
       pick.previous ? `Primera observacion: ${pick.previous.odds.toFixed(2)} (${safeText(pick.previous.at)}); cambio ${((Number(pick.odds) / pick.previous.odds - 1) * 100).toFixed(1)}%.` : 'Sin observacion previa de esta seleccion.',
       `Base: ${safeText(pick.match?.inputBasis)}`,
@@ -118,7 +119,8 @@ export function formatFutureMultiSport(report) {
   lines.push(
     `Red: ${report.usage.requests}/60 peticiones. API-Football: ${report.usage.apiFootball?.requests ?? 0}/30; saldo ${report.usage.apiFootball?.remaining ?? '?'}; reserva observada 10.`,
     `The Odds API: ${report.usage.oddsCalls} peticiones; creditos reportados ${report.usage.oddsCredits} (si el proveedor informa consumo). Cada peticion puede costar varios creditos.`,
-    'Cobertura parcial: hasta 6 partidos de futbol y 4 por cada otro deporte. Datos faltantes y mercados sin precio se omiten; en futbol a 72h se aceptan cuotas actualizadas en las ultimas 12 h (las de hoy exigen 15 min).',
+    'Cobertura parcial: hasta 6 partidos de futbol y 4 por cada otro deporte. Datos faltantes y mercados sin precio se omiten; en futbol a 48h se aceptan cuotas actualizadas en las ultimas 12 h (las de hoy exigen 15 min).',
+    'Cuotas ESPN (2º nivel): precio de DraftKings, no Pinnacle; su EV se mide sin vig y no es el pago realizable.',
     'Son candidatos, no picks oficiales: no se publican al canal, no se registran en el ledger y requieren revisar alineaciones y cuotas cerca del inicio.',
     'No se confirma RLM, no se garantiza acierto y no se aumenta el limite contratado ni se compra cuota adicional.'
   );

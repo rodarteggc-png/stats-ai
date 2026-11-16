@@ -36,10 +36,10 @@ function markets(book) {
   return result;
 }
 
-export async function scanFuture72Hours(options = {}) {
+export async function scanFuture48Hours(options = {}) {
   const now = options.now || Date.now;
   const start = now();
-  const end = start + 72 * HOUR_MS;
+  const end = start + 48 * HOUR_MS;
   const client = createTicketClient({ ...options, now, maxRequests: 13, reserveRequests: 30, budgetMs: 35000 });
   const history = options.snapshots || snapshots;
   const dates = [];
@@ -154,7 +154,7 @@ export async function scanFuture72Hours(options = {}) {
 
 export function formatFutureScan(report) {
   const lines = [
-    '*VIP | PROXIMAS 72 HORAS*',
+    '*VIP | PROXIMAS 48 HORAS*',
     'Candidatos preliminares de precio | Solo futbol',
     `${report.start} a ${report.end} (UTC)`,
     '',

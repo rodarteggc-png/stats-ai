@@ -35,7 +35,7 @@ function recent(value, now) {
   return Number.isFinite(age) && age >= -60000 && age <= 15 * 60000;
 }
 
-// Para el escaneo a 72h las cuotas de partidos de manana o pasado no se
+// Para el escaneo a 48h las cuotas de partidos de manana o pasado no se
 // actualizan cada 15 minutos como las de hoy: se aceptan hasta 12h. Solo se
 // usa en la ruta de futbol del futuro; las alertas del dia siguen con 15 min.
 function recentFuture(value, now) {
@@ -82,7 +82,7 @@ function applyBook(match, book) {
 export async function loadFutureModelData(options = {}) {
   const now = options.now || Date.now;
   const start = now();
-  const end = start + 72 * 3600000;
+  const end = start + 48 * 3600000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 40000);
   const fetchImpl = options.fetchImpl || fetch;
@@ -173,7 +173,8 @@ export async function loadFutureModelData(options = {}) {
         // NCAAF. Fallback consultando fecha por fecha (antes solo existia para NBA):
         if (err.message && err.message.includes('400')) {
           const days = [];
-          for (let d = new Date(start); d < new Date(end); d.setDate(d.getDate() + 1)) {
+          const endDate = new Date(end).toISOString().slice(0, 10);
+          for (let d = new Date(start); d.toISOString().slice(0, 10) <= endDate; d.setDate(d.getDate() + 1)) {
             days.push(d.toISOString().slice(0, 10).replaceAll('-', ''));
           }
           const daysData = await Promise.all(days.map(dt =>
@@ -323,7 +324,8 @@ export async function loadFutureModelData(options = {}) {
 
   async function loadSoccerFallback(reason) {
     const days = [];
-    for (let d = new Date(start); d < new Date(end); d.setDate(d.getDate() + 1)) {
+    const endDate = new Date(end).toISOString().slice(0, 10);
+    for (let d = new Date(start); d.toISOString().slice(0, 10) <= endDate; d.setDate(d.getDate() + 1)) {
       days.push(d.toISOString().slice(0, 10).replaceAll('-', ''));
     }
     const fixtures = [];

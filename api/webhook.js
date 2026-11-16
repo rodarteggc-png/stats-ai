@@ -91,7 +91,7 @@ export default async function handler(req, res) {
       ...BASE_KEYBOARD_MENU,
       keyboard: [
         ...BASE_KEYBOARD_MENU.keyboard.slice(0, 2),
-        [{ text: '/cuota' }, { text: '🔭 Próximas 72 h' }]
+        [{ text: '/cuota' }, { text: '🔭 Próximas 48 h' }]
       ]
     } : BASE_KEYBOARD_MENU;
 
@@ -112,22 +112,22 @@ export default async function handler(req, res) {
       await answerTelegramCallback(callback.id);
     }
 
-    if (['/futuro', '/72h', '🔭 próximas 72 h', 'próximas 72 h', 'proximas 72 h'].includes(command)) {
+    if (['/futuro', '/48h', '/72h', '🔭 próximas 48 h', 'próximas 48 h', 'proximas 48 h', '🔭 próximas 72 h', 'próximas 72 h', 'proximas 72 h'].includes(command)) {
       if (!isPrivateVip) {
-        await sendTelegramMessage('El analisis de 72 horas solo esta disponible en tu chat privado VIP.', false, chatId);
+        await sendTelegramMessage('El analisis de 48 horas solo esta disponible en tu chat privado VIP.', false, chatId);
         return res.status(200).send('OK');
       }
       if (futureScanRunning) {
-        await sendTelegramMessage('Ya hay un analisis de 72 horas en curso. No se iniciaron nuevas consultas.', false, chatId, KEYBOARD_MENU);
+        await sendTelegramMessage('Ya hay un analisis de 48 horas en curso. No se iniciaron nuevas consultas.', false, chatId, KEYBOARD_MENU);
         return res.status(200).send('OK');
       }
       futureScanRunning = true;
       try {
-        await sendTelegramMessage('Explorando las proximas 72 horas de futbol, NBA, NFL, NCAAF y MLB. Buscando probabilidad calibrada >=65% y combinacion opcional de dos partidos. Presupuesto ampliado: 60 peticiones de red, hasta 30 API-Football y reserva observada de 10; sin cambiar alertas ni registrar picks.', false, chatId, KEYBOARD_MENU);
+        await sendTelegramMessage('Explorando las proximas 48 horas de futbol, NBA, NFL, NCAAF y MLB. Buscando probabilidad calibrada >=65% y combinacion opcional de dos partidos. Presupuesto ampliado: 60 peticiones de red, hasta 30 API-Football y reserva observada de 10; sin cambiar alertas ni registrar picks.', false, chatId, KEYBOARD_MENU);
         const result = await scanFutureMultiSport();
         await sendReport(formatFutureMultiSport(result), chatId, KEYBOARD_MENU);
       } catch (error) {
-        await sendTelegramMessage(`No se completo el analisis de 72 horas: ${error.message}`, false, chatId, KEYBOARD_MENU);
+        await sendTelegramMessage(`No se completo el analisis de 48 horas: ${error.message}`, false, chatId, KEYBOARD_MENU);
       } finally {
         futureScanRunning = false;
       }
@@ -252,7 +252,7 @@ export default async function handler(req, res) {
           `• *Llaves configuradas:* \`${keys.length} llaves activas\``,
           `• *Capacidad total:* \`2,000 req/mes\``,
           ``,
-          `🛡️ _Los boletos y el analisis de 72 horas bajo pedido comparten el saldo diario con las alertas._`
+          `🛡️ _Los boletos y el analisis de 48 horas bajo pedido comparten el saldo diario con las alertas._`
         ].join('\n');
 
         await sendTelegramMessage(msg, false, chatId, KEYBOARD_MENU);
@@ -357,7 +357,7 @@ export default async function handler(req, res) {
       `3️⃣ */parlay* — Contrastar tu boleto con cuotas prepartido (futbol, NBA, NFL, NCAAF, MLB)`,
       `4️⃣ */corte* — Ver Corte de Caja y Rendimiento de las últimas 24h`,
       `5️⃣ */cuota* — Consultar saldo de requests (API-Sports y The Odds API)`,
-      ...(isPrivateVip ? ['6. */futuro* — Explorar 72 horas multideporte y candidatos de alta probabilidad'] : []),
+      ...(isPrivateVip ? ['6. */futuro* — Explorar 48 horas multideporte y candidatos de alta probabilidad'] : []),
       ``,
       `👉 *Toca cualquiera de los botones táctiles abajo en tu pantalla o manda foto de tu boleto.*`
     ].join('\n');

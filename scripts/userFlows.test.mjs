@@ -5,7 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { getContextForPrompt } from '../src/services/history.js';
 import { createTicketClient, auditTicketLive, formatLiveTicketReport, extractTicketSelections } from '../api/_lib/parlayLive.js';
-import { scanFuture72Hours, formatFutureScan } from '../api/_lib/futureScan.js';
+import { scanFuture48Hours, formatFutureScan } from '../api/_lib/futureScan.js';
 import { fetchNbaSchedule } from '../src/services/nbaService.js';
 import { selectHighProbabilityCandidates, buildConservativeCombination, scanFutureMultiSport, formatFutureMultiSport, evaluateFutureModels } from '../api/_lib/futureMultiSport.js';
 import { loadFutureModelData, pickSoccerFixtures } from '../api/_lib/futureData.js';
@@ -419,15 +419,15 @@ function futureFetch({ old = false, paginated = false, used = 5, fixtures = null
   return { calls, fetchImpl };
 }
 
-test('el escaner VIP cubre 72 horas exactas sin registrar picks y declara paginacion', async () => {
+test('el escaner VIP cubre 48 horas exactas sin registrar picks y declara paginacion', async () => {
   const mock = futureFetch({ paginated: true });
-  const report = await scanFuture72Hours({ apiKey: 'test-future-window', now: () => futureNow, fetchImpl: mock.fetchImpl, snapshots: new Map() });
-  assert.equal(report.dates, 4);
-  assert.equal(report.datesLoaded, 4);
-  assert.equal(Date.parse(report.end) - Date.parse(report.start), 72 * 60 * 60 * 1000);
-  assert.equal(report.fixtures, 3);
-  assert.equal(report.compared, 3);
-  assert.equal(report.candidates.length, 3);
+  const report = await scanFuture48Hours({ apiKey: 'test-future-window', now: () => futureNow, fetchImpl: mock.fetchImpl, snapshots: new Map() });
+  assert.equal(report.dates, 3);
+  assert.equal(report.datesLoaded, 3);
+  assert.equal(Date.parse(report.end) - Date.parse(report.start), 48 * 60 * 60 * 1000);
+  assert.equal(report.fixtures, 2);
+  assert.equal(report.compared, 2);
+  assert.equal(report.candidates.length, 2);
   assert.ok(report.candidates.every(candidate => Date.parse(candidate.kickoff) < Date.parse(report.end)));
   assert.ok(mock.calls.length <= 13);
   assert.ok(report.partial);
@@ -439,31 +439,31 @@ test('el escaner VIP cubre 72 horas exactas sin registrar picks y declara pagina
 
 test('el escaner futuro conserva saldo y descarta pares de cuotas antiguas', async () => {
   const limited = futureFetch({ used: 70 });
-  const blocked = await scanFuture72Hours({ apiKey: 'test-future-low', now: () => futureNow, fetchImpl: limited.fetchImpl });
+  const blocked = await scanFuture48Hours({ apiKey: 'test-future-low', now: () => futureNow, fetchImpl: limited.fetchImpl });
   assert.equal(limited.calls.length, 1);
   assert.equal(blocked.candidates.length, 0);
   assert.ok(blocked.partial);
   const old = futureFetch({ old: true });
-  const stale = await scanFuture72Hours({ apiKey: 'test-future-old', now: () => futureNow, fetchImpl: old.fetchImpl });
+  const stale = await scanFuture48Hours({ apiKey: 'test-future-old', now: () => futureNow, fetchImpl: old.fetchImpl });
   assert.equal(stale.candidates.length, 0);
-  assert.equal(stale.stale, 3);
+  assert.equal(stale.stale, 2);
 });
 
 test('los movimientos futuros requieren una observacion anterior y no se confunden con apertura', async () => {
   const observations = new Map();
   const mock = futureFetch();
   const options = { apiKey: 'test-future-history', now: () => futureNow, fetchImpl: mock.fetchImpl, snapshots: observations };
-  const first = await scanFuture72Hours(options);
+  const first = await scanFuture48Hours(options);
   assert.equal(first.candidates[0].previous, null);
-  const second = await scanFuture72Hours(options);
+  const second = await scanFuture48Hours(options);
   assert.equal(second.candidates[0].previous.odds, 2.4);
   assert.equal(second.candidates[0].previous.changePct, 0);
 });
 
-test('el peor caso de cuatro fechas UTC no supera 13 consultas', async () => {
+test('el peor caso de tres fechas UTC no supera 13 consultas', async () => {
   const mock = futureFetch();
   const requests = [];
-  const report = await scanFuture72Hours({
+  const report = await scanFuture48Hours({
     apiKey: 'test-future-cap', now: () => futureNow, snapshots: new Map(), fetchImpl: async url => {
       requests.push(url);
       if (url.pathname !== '/fixtures') return mock.fetchImpl(url);
@@ -476,16 +476,16 @@ test('el peor caso de cuatro fechas UTC no supera 13 consultas', async () => {
       });
     }
   });
-  assert.equal(report.fixtures, 4);
-  assert.equal(report.compared, 4);
-  assert.equal(report.usage.requests, 13);
-  assert.equal(requests.length, 13);
-  assert.equal(report.candidates.length, 4);
+  assert.equal(report.fixtures, 3);
+  assert.equal(report.compared, 3);
+  assert.equal(report.usage.requests, 10);
+  assert.equal(requests.length, 10);
+  assert.equal(report.candidates.length, 3);
 });
 
 test('el escaner no compara cuotas de totales con lineas distintas', async () => {
   const mock = futureFetch();
-  const report = await scanFuture72Hours({
+  const report = await scanFuture48Hours({
     apiKey: 'test-future-different-lines', now: () => futureNow, snapshots: new Map(), fetchImpl: async url => {
       const response = await mock.fetchImpl(url);
       if (url.pathname !== '/odds') return response;
@@ -499,7 +499,7 @@ test('el escaner no compara cuotas de totales con lineas distintas', async () =>
       return Response.json(data);
     }
   });
-  assert.equal(report.compared, 3);
+  assert.equal(report.compared, 2);
   assert.equal(report.candidates.length, 0);
 });
 
@@ -552,7 +552,7 @@ test('Telegram procesa foto y archivo de imagen hasta el reporte de cuotas', asy
   }
 });
 
-test('el boton de 72 horas solo se muestra y ejecuta en el chat privado VIP', async () => {
+test('el boton de 48 horas solo se muestra y ejecuta en el chat privado VIP', async () => {
   const originalFetch = globalThis.fetch;
   const variables = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_VIP_CHAT_ID', 'TELEGRAM_WEBHOOK_SECRET', 'APISPORTS_KEY'];
   const previous = Object.fromEntries(variables.map(name => [name, process.env[name]]));
@@ -576,20 +576,20 @@ test('el boton de 72 horas solo se muestra y ejecuta en el chat privado VIP', as
       assert.equal(response.statusCode, 200);
     };
     await deliver('/start');
-    assert.ok(sent.at(-1).reply_markup.keyboard.flat().some(button => button.text === '🔭 Próximas 72 h'));
+    assert.ok(sent.at(-1).reply_markup.keyboard.flat().some(button => button.text === '🔭 Próximas 48 h'));
     await deliver('/start', -100, 'group');
-    assert.ok(!sent.at(-1).reply_markup.keyboard.flat().some(button => button.text === '🔭 Próximas 72 h'));
+    assert.ok(!sent.at(-1).reply_markup.keyboard.flat().some(button => button.text === '🔭 Próximas 48 h'));
     await deliver('/futuro', -100, 'group');
     assert.equal(mock.calls.length, 0);
     assert.match(sent.at(-1).text, /chat privado VIP/);
     await deliver('/futuro', 456, 'private', 456);
     assert.equal(mock.calls.length, 0);
     const firstReport = sent.length;
-    await deliver('🔭 Próximas 72 h');
+    await deliver('🔭 Próximas 48 h');
     assert.ok(mock.calls.length > 0 && mock.calls.length <= 30);
     const privateReports = sent.slice(firstReport);
     assert.ok(privateReports.every(payload => payload.chat_id === 123 && payload.text.length < 4096));
-    assert.ok(privateReports.some(payload => payload.text.includes('VIP | PROXIMAS 72 HORAS')));
+    assert.ok(privateReports.some(payload => payload.text.includes('VIP | PROXIMAS 48 HORAS')));
     assert.ok(privateReports.some(payload => payload.text.includes('MULTIDEPORTE')));
     assert.ok(privateReports.some(payload => payload.text.includes('no picks oficiales')));
   } finally {
@@ -604,14 +604,28 @@ test('el boton de 72 horas solo se muestra y ejecuta en el chat privado VIP', as
 test('el futuro multideporte exige probabilidad calibrada, cuota real y un candidato por partido', () => {
   const start = Date.parse('2026-11-02T18:00:00Z');
   const good = { sport: 'NFL', game: 'A vs B', gameDate: '2026-11-03T18:00:00Z', prob: '82%', odds: 1.5, oddsSource: 'market', evPct: 20, consensus: { votesPassed: 3 }, match: { home: { name: 'A' }, away: { name: 'B' } } };
-  const candidates = selectHighProbabilityCandidates([good, { ...good, prob: '80%' }, { ...good, game: 'C vs D', prob: '64%' }, { ...good, game: 'E vs F', oddsSource: 'model' }], start, start + 72 * 3600000);
-  assert.equal(candidates.length, 1);
+  const espn = { ...good, game: 'G vs H', oddsSource: 'espn', oddsProvider: 'DraftKings', evNoVig: true, fairOdds: 1.62, match: { home: { name: 'G' }, away: { name: 'H' } } };
+  const candidates = selectHighProbabilityCandidates([good, { ...good, prob: '80%' }, { ...good, game: 'C vs D', prob: '64%' }, { ...good, game: 'E vs F', oddsSource: 'model' }, espn], start, start + 48 * 3600000);
+  assert.equal(candidates.length, 2);
   assert.equal(candidates[0].prob, '82%');
+  assert.ok(candidates.some(pick => pick.oddsSource === 'espn'));
   const second = { ...good, game: 'C vs D', prob: '80%', match: { home: { name: 'C' }, away: { name: 'D' } } };
   const combo = buildConservativeCombination([good, second]);
   assert.equal(combo.legs.length, 2);
   assert.ok(Math.abs(combo.probability - 65.6) < 0.001);
   assert.equal(buildConservativeCombination([good, { ...second, prob: '65%' }, { ...good, prob: '90%' }]), null);
+});
+
+test('el futuro multideporte etiqueta la cuota ESPN de segundo nivel en el reporte', () => {
+  const start = Date.parse('2026-11-02T18:00:00Z');
+  const espn = { sport: 'NBA', game: 'A vs B', gameDate: '2026-11-03T18:00:00Z', pick: 'Victoria A', prob: '78%', odds: 1.8, oddsSource: 'espn', oddsProvider: 'DraftKings', evPct: 12, evNoVig: true, fairOdds: 1.95, consensus: { votesPassed: 3 }, match: { home: { name: 'A' }, away: { name: 'B' } } };
+  const candidates = selectHighProbabilityCandidates([espn], start, start + 48 * 3600000);
+  assert.equal(candidates.length, 1);
+  const text = formatFutureMultiSport({ start: new Date(start).toISOString(), end: new Date(start + 48 * 3600000).toISOString(), coverage: { futbol: {}, nba: {}, nfl: {}, ncaaf: {}, mlb: {} }, candidates, combination: null, notices: [], usage: { requests: 0, oddsCalls: 0, oddsCredits: 0 } });
+  assert.match(text, /PROXIMAS 48 HORAS/);
+  assert.match(text, /ESPN \(2º nivel\)/);
+  assert.match(text, /DraftKings/);
+  assert.match(text, /no Pinnacle/);
 });
 
 test('las fuentes futuras cargan cinco deportes sin inventar precios ni estadisticas', async () => {
@@ -706,8 +720,8 @@ test('las fuentes futuras cargan cinco deportes sin inventar precios ni estadist
   assert.equal(data.usage.oddsCredits, 12);
   assert.equal(data.matches.mlbMatches[0].home.pitcher.whip, 1.1);
   assert.equal(data.matches.nflMatches[0].home.ypp, 6.25);
-  assert.ok(requests.filter(url => url.pathname.endsWith('/scoreboard')).every(url => url.searchParams.get('dates') === '20261102-20261105'));
-  const modeled = evaluateFutureModels(data.matches, timestamp, timestamp + 72 * 3600000);
+  assert.ok(requests.filter(url => url.pathname.endsWith('/scoreboard')).every(url => url.searchParams.get('dates') === '20261102-20261104'));
+  const modeled = evaluateFutureModels(data.matches, timestamp, timestamp + 48 * 3600000);
   const direct = buildOpportunitiesAndTopSlate({ ...data.matches, isForce: true, sentCache: {}, maxPicksToSend: 100 });
   // Afinación 2026-11-10: con la calibración nueva (Platt A=0.65/B=-0.20, σ NBA
   // 14.7) el modelo evalúa el partido NBA pero rechaza los dos picks por EV
@@ -917,7 +931,7 @@ test('el escaneo futuro usa el fallback dia por dia de ESPN para NFL y no tumba 
   assert.ok(!data.notices.some(notice => notice.includes('NFL: Fuente HTTP 400')), 'El rango 400 de ESPN ya no debe tumbar a la NFL.');
 });
 
-test('el futbol de 72h completa con ligas de segundo nivel cuando las principales no juegan', () => {
+test('el futbol de 48h completa con ligas de segundo nivel cuando las principales no juegan', () => {
   const fixtures = [
     { fixture: { id: 1, date: '2026-11-10T20:00:00Z' }, league: { id: 143, name: 'Copa del Rey' } },
     { fixture: { id: 2, date: '2026-11-10T18:00:00Z' }, league: { id: 999, name: 'Liga Oscura' } },
