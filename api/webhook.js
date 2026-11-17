@@ -291,11 +291,10 @@ export default async function handler(req, res) {
           `• *Usadas hoy:* \`${apiSports.requestsUsedToday} / ${apiSports.dailyLimit}\``,
           `• *Margen libre:* \`${apiSports.remainingToday} requests disponibles\``,
           `• *Estatus:* \`${apiSports.status}\``,
-          `• *Caché en memoria:* \`${apiSports.cachedOddsCount} partidos indexados\``,
           ``,
           `⚡ *The Odds API:*`,
           `• *Llaves configuradas:* \`${keys.length} llaves activas\``,
-          `• *Capacidad total:* \`2,000 req/mes\``,
+          `• *Capacidad total:* \`${(keys.length * 500).toLocaleString('en-US')} req/mes\``,
           ``,
           `🛡️ _Los boletos y el analisis de 48 horas bajo pedido comparten el saldo diario con las alertas._`
         ].join('\n');

@@ -1,0 +1,52 @@
+{
+ "hits": {
+  "n": 6,
+  "closed": 6,
+  "wins": 4,
+  "losses": 2,
+  "hitRatePct": 66.67,
+  "bySport": [
+   {
+    "key": "Fútbol",
+    "n": 6,
+    "wins": 4,
+    "losses": 2,
+    "hitRatePct": 66.67
+   }
+  ],
+  "byMarket": [
+   {
+    "key": "moneyline",
+    "n": 2,
+    "wins": 2,
+    "losses": 0,
+    "hitRatePct": 100
+   },
+   {
+    "key": "total",
+    "n": 4,
+    "wins": 2,
+    "losses": 2,
+    "hitRatePct": 50
+   }
+  ]
+ },
+ "ledger": {
+  "n": 64,
+  "closed": 63,
+  "wins": 30,
+  "losses": 33,
+  "hitRatePct": 47.62,
+  "netUnits": -6.55,
+  "stakedUnits": 51.1,
+  "roiPct": -12.82
+ },
+ "combined": {
+  "n": 70,
+  "closed": 69,
+  "wins": 34,
+  "losses": 35,
+  "hitRatePct": 49.28
+ },
+ "note": "ROI solo del ledger (precio real). Los aciertos sin precio no entran en ROI."
+}
