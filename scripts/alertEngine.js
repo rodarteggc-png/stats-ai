@@ -30,7 +30,7 @@ import { getGameWeather } from '../src/services/weatherService.js';
 import { getMatchXgProjection } from '../src/services/fotmobService.js';
 import { detectAndAlertSteamMoves } from '../src/services/steamDetector.js';
 import { fetchNbaSchedule } from '../src/services/nbaService.js';
-import { calculateNbaProbabilities } from '../src/utils/hoops.js';
+import { calculateNbaProbabilities, getLiveNbaRatings, getNbaTeamBaseline, getNbaBaselineSource } from '../src/utils/hoops.js';
 import { enrichMatchWithInjuries } from '../src/services/sleeperService.js';
 import { getRefereeProfile } from '../src/services/refereeService.js';
 import { analyzeLineMovement } from '../src/services/lineMovementService.js';
@@ -735,69 +735,140 @@ function pruneCache(cache) {
   return clean;
 }
 
+// Racha real del sistema (2026-11-17, Tavo): los últimos picks cerrados del
+// ledger (pick_ledger.jsonl + hits_ledger.jsonl), en orden cronológico.
+// La racha fabricada anterior (tabla fija por probabilidad) se eliminó:
+// un "7/10 L10 (70%)" que no viene de ningún resultado es dato inventado.
+const PICK_LEDGER_PATH = path.join(__dirname, '..', 'data', 'pick_ledger.jsonl');
+const HITS_LEDGER_PATH = path.join(__dirname, '..', 'data', 'hits_ledger.jsonl');
+
+function readJsonlRows(p) {
+  try {
+    if (!fs.existsSync(p)) return [];
+    return fs.readFileSync(p, 'utf-8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Últimos `n` picks cerrados (WON/LOST) del ledger, en orden cronológico
+ * (el más antiguo primero, el más reciente al final). Devuelve un arreglo
+ * de 'WON'/'LOST'. Sin picks cerrados devuelve [].
+ * Orden por fecha de juego (gameDate, luego closedAt/timestamp); el sort
+ * es estable, así que a igualdad de fecha se conserva el orden del archivo.
+ */
+export function loadRecentLedgerResults(n = 10, { ledgerPath = PICK_LEDGER_PATH, hitsPath = HITS_LEDGER_PATH } = {}) {
+  const rows = [];
+  for (const r of readJsonlRows(ledgerPath)) {
+    if (r.result === 'WON' || r.result === 'LOST') {
+      rows.push({ result: r.result, key: r.gameDate || r.closedAt || r.timestamp || '' });
+    }
+  }
+  for (const r of readJsonlRows(hitsPath)) {
+    if (r.result === 'WON' || r.result === 'LOST') {
+      rows.push({ result: r.result, key: r.gameDate || r.date || '' });
+    }
+  }
+  rows.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  return rows.slice(-n).map((r) => r.result);
+}
+
+// Caché por proceso: el ledger solo cambia con un push, así que leerlo una
+// vez por corrida basta. Los tests la limpian con clearRecentResultsCache().
+let cachedRecentResults = null;
+export function clearRecentResultsCache() { cachedRecentResults = null; }
+function getRecentResultsCached(n = 10) {
+  if (!cachedRecentResults) cachedRecentResults = loadRecentLedgerResults(10);
+  return cachedRecentResults.slice(-n);
+}
+
+/**
+ * ¿La defensa del rival está entre las 5 peores de la NBA (DRtg en vivo)?
+ * Solo con ratings en vivo cargados; sin dato real, false (fail-closed).
+ * Para spread/ML el rival es el otro equipo; para OVER, cualquiera de los
+ * dos; para UNDER nunca (una defensa permisiva no ayuda a un UNDER).
+ */
+function nbaOpponentIsBottom5Defense(pick) {
+  const live = getLiveNbaRatings();
+  if (!live || typeof live !== 'object') return false;
+  const m = pick?.match || {};
+  const homeName = m.home?.name || '';
+  const awayName = m.away?.name || '';
+  if (!homeName || !awayName) return false;
+  const id = pick?.id || '';
+  const type = (pick?.type || '').toUpperCase();
+  const isOver = id.includes('-over-') || type.includes('OVER');
+  const isUnder = id.includes('-under-') || type.includes('UNDER');
+  if (isUnder) return false;
+  let candidates;
+  if (isOver) {
+    candidates = [homeName, awayName];
+  } else {
+    const isHomeSide = id.includes('-h-');
+    const isAwaySide = id.includes('-a-');
+    if (!isHomeSide && !isAwaySide) return false;
+    candidates = [isHomeSide ? awayName : homeName];
+  }
+  // Mayor DRtg = peor defensa. Bottom 5 = menos de 5 equipos con DRtg mayor.
+  const drtgs = Object.values(live).map((v) => Number(v?.drtg)).filter(Number.isFinite);
+  if (drtgs.length < 20) return false;
+  for (const name of candidates) {
+    if (getNbaBaselineSource(name) !== 'live') continue;
+    const drtg = Number(getNbaTeamBaseline(name)?.drtg);
+    if (!Number.isFinite(drtg)) continue;
+    if (drtgs.filter((d) => d > drtg).length < 5) return true;
+  }
+  return false;
+}
+
 /**
  * Genera el Récord Visual de Hit Rate (L5/L10) y el Matchup Defensivo (Top/Bottom 5)
  * Inspirado en la heurística analítica de Linemate adaptada al motor cuantitativo de Stats-AI Pro.
  */
-export function generateHitRateAndMatchup(pick) {
-  const probNum = parseFloat(pick?.prob) || 55.0;
-  
-  // 1. HIT RATE EMPÍRICO BASADO EN PROBABILIDAD CUANTITATIVA CALIBRADA
-  let hitsL10, hitsL5;
-  if (probNum >= 75) {
-    hitsL10 = 9;
-    hitsL5 = 5;
-  } else if (probNum >= 66) {
-    hitsL10 = 8;
-    hitsL5 = 4;
-  } else if (probNum >= 58) {
-    hitsL10 = 7;
-    hitsL5 = 4;
-  } else if (probNum >= 53) {
-    hitsL10 = 6;
-    hitsL5 = 3;
-  } else {
-    hitsL10 = 5;
-    hitsL5 = 3;
+export function generateHitRateAndMatchup(pick, recentResults = null) {
+  // 1. RACHA REAL del sistema (ledger). Sin datos reales, NO se muestra racha
+  // (fail-closed): antes era una tabla fija por probabilidad, dato inventado.
+  const recent = Array.isArray(recentResults) ? recentResults : getRecentResultsCached(10);
+  const settled = recent.filter((r) => r === 'WON' || r === 'LOST');
+  const last10 = settled.slice(-10);
+  const last5 = last10.slice(-5);
+  let hitsL10 = null;
+  let hitsL5 = null;
+  let hitRateStr = null;
+  let hitRateDots = '';
+  let hitRateSummary = null;
+  if (last10.length > 0) {
+    hitsL10 = last10.filter((r) => r === 'WON').length;
+    hitsL5 = last5.filter((r) => r === 'WON').length;
+    const pct = Math.round((hitsL10 / last10.length) * 100);
+    hitRateStr = `${hitsL10}/${last10.length} L${last10.length} (${pct}%)`;
+    // Puntos en orden cronológico (la secuencia real): pueden salir mezclados.
+    hitRateDots = last5.map((r) => (r === 'WON' ? '🟢' : '🔴')).join('');
+    hitRateSummary = `El sistema acertó ${hitsL5} de sus últimos ${last5.length} picks.`;
   }
 
-  // Generar barra visual de emojis (Verde = Acierto, Rojo = Fallo)
-  const dots = [];
-  for (let i = 0; i < 5; i++) {
-    dots.push(i < hitsL5 ? '🟢' : '🔴');
-  }
-  const hitRateDots = dots.join('');
-  const hitRatePct = hitsL10 * 10;
-  const hitRateStr = `${hitsL10}/10 L10 (${hitRatePct}%)`;
-  const hitRateSummary = `Superó la línea en ${hitsL5} de sus últimos 5 compromisos.`;
-
-  // 2. DETECTOR DE MATCHUP SMASH (TOP 5 / BOTTOM 5 DEFENSIVO - HEURÍSTICA LINEMATE)
+  // 2. DETECTOR DE MATCHUP (solo con dato real; sin dato, no hay sello).
+  // Fútbol: solo si el rival concede xG alto o su Elo es bajo (dato real del
+  // partido). El atajo por tipo (OVER/BTTS siempre con sello) se eliminó.
+  // NBA: solo si el rival es Bottom 5 real por DRtg en vivo.
+  // MLB/NFL/NCAAF: sin dato real en esta función, no hay sello.
   let matchupBadge = null;
   let matchupDetail = null;
 
   const m = pick?.match || {};
   const sport = (pick?.sport || '').toLowerCase();
-  const typeUpper = (pick?.type || '').toUpperCase();
-  
+
   if (sport.includes('fútbol') || sport.includes('futbol') || sport.includes('soccer')) {
     const oppXg = parseFloat(m.away?.defXg || m.home?.defXg || 0);
     const oppElo = parseFloat(m.away?.elo || m.home?.elo || 1500);
-    if (oppXg >= 1.40 || oppElo <= 1450 || typeUpper.includes('OVER') || typeUpper.includes('AMBOS ANOTAN')) {
+    if (oppXg >= 1.40 || oppElo <= 1450) {
       matchupBadge = '🎯 *Matchup Smash:* `Defensa Rival Permisiva (Bottom 5)`';
       matchupDetail = 'El rival concede un promedio elevado de xG y llegadas claras a su arco.';
-    } else if (typeUpper.includes('HÁNDICAP') || typeUpper.includes('HANDICAP') || typeUpper.includes('DOMINIO')) {
-      matchupBadge = '🎯 *Matchup Smash:* `Disparidad Ofensiva Élite (Top 5)`';
-      matchupDetail = 'Diferencial xG superior a 1.25 goles proyectados sobre el rival.';
     }
-  } else if (sport.includes('nba') || sport.includes('baloncesto')) {
+  } else if ((sport.includes('nba') || sport.includes('baloncesto')) && nbaOpponentIsBottom5Defense(pick)) {
     matchupBadge = '🎯 *Matchup Smash:* `Defensa Rival en Zona Baja (Bottom 5)`';
-    matchupDetail = 'El rival permite alto porcentaje de tiro efectivo y ritmo de posesión acelerado.';
-  } else if (sport.includes('mlb') || sport.includes('béisbol') || sport.includes('beisbol')) {
-    matchupBadge = '🎯 *Matchup Smash:* `Lanzador / Parque Favorable (Top 5)`';
-    matchupDetail = 'Factores de parque y matchup contra el abridor impulsan la micro-ventaja.';
-  } else if (sport.includes('nfl') || sport.includes('ncaaf')) {
-    matchupBadge = '🎯 *Matchup Smash:* `Disparidad de Trincheras (Top 5)`';
-    matchupDetail = 'Ventaja contundente en yardas por jugada y control de posesión.';
+    matchupDetail = 'El rival está entre las 5 peores defensas de la NBA por DRtg en vivo.';
   }
 
   return {
@@ -838,7 +909,7 @@ export function generateCheatsheetReport(picks = [], dateStr = '') {
       `${numIcon} ${sportIcon} *${pick.game}*`,
       `   👉 \`${pick.pick}\` @ \`${pick.odds}\``,
       `   📊 *Ventaja:* \`${pick.edgeStr}\` | *Prob:* \`${pick.prob}\``,
-      `   🔥 *Racha:* \`${hr.hitRateStr}\` ${hr.hitRateDots}`,
+      hr.hitRateStr ? `   🔥 *Racha:* \`${hr.hitRateStr}\` ${hr.hitRateDots}` : null,
       hr.matchupBadge ? `   ${hr.matchupBadge}` : null,
       ``
     ].filter(Boolean).join('\n');
@@ -4522,9 +4593,11 @@ export async function runAlertEngine(options = {}) {
       ...(() => {
         const hr = generateHitRateAndMatchup(pick);
         return [
-          `🔥 *Racha Reciente (Hit Rate):* \`${hr.hitRateStr}\` ${hr.hitRateDots}`,
-          `  _${hr.hitRateSummary}_`,
-          ``,
+          ...(hr.hitRateStr ? [
+            `🔥 *Racha Reciente (Hit Rate):* \`${hr.hitRateStr}\` ${hr.hitRateDots}`,
+            `  _${hr.hitRateSummary}_`,
+            ``,
+          ] : []),
           ...(hr.matchupBadge ? [hr.matchupBadge, `  _${hr.matchupDetail}_`, ``] : [])
         ];
       })(),
