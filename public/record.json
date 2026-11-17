@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-17T22:00:07.724Z",
+  "generatedAt": "2026-11-17T22:43:35.089Z",
   "source": "data/pick_ledger.jsonl (64 picks publicados por Telegram, calificados con marcador final ESPN)",
   "totalPicks": 64,
   "closed": 63,
@@ -7,21 +7,59 @@
   "pendingIds": [
     "prop-soc-soccer-401874971-NikolaKrstovic"
   ],
+  "resultCorrections": [
+    {
+      "pickId": "mlb-rl-mlb-849811",
+      "kind": "verified-result-correction",
+      "verifiedOn": "2026-11-17",
+      "source": "MLB Stats API",
+      "eventId": "849811",
+      "evidenceUrl": "https://statsapi.mlb.com/api/v1.1/game/849811/feed/live",
+      "previousScore": "4-6",
+      "previousResult": "WON",
+      "score": "2-6",
+      "result": "WON"
+    },
+    {
+      "pickId": "ev-home-soccer-401924374",
+      "kind": "verified-result-correction",
+      "verifiedOn": "2026-11-17",
+      "source": "ESPN",
+      "eventId": "401924374",
+      "evidenceUrl": "https://site.api.espn.com/apis/site/v2/sports/soccer/mex.w.1/summary?event=401924374",
+      "previousScore": "1-0",
+      "previousResult": "WON",
+      "score": "7-0",
+      "result": "WON"
+    },
+    {
+      "pickId": "tot-o-soccer-401924374",
+      "kind": "verified-result-correction",
+      "verifiedOn": "2026-11-17",
+      "source": "ESPN",
+      "eventId": "401924374",
+      "evidenceUrl": "https://site.api.espn.com/apis/site/v2/sports/soccer/mex.w.1/summary?event=401924374",
+      "previousScore": "1-0",
+      "previousResult": "LOST",
+      "score": "7-0",
+      "result": "WON"
+    }
+  ],
   "overall": {
     "n": 63,
-    "wins": 30,
-    "losses": 33,
+    "wins": 31,
+    "losses": 32,
     "pushes": 0,
-    "hitRate": 47.62,
+    "hitRate": 49.21,
     "financialN": 37,
-    "netUnits": -7.11,
+    "netUnits": -4.67,
     "stakedUnits": 33.3,
-    "roiPct": -21.35,
+    "roiPct": -14.02,
     "calibrationN": 56,
-    "calibrationHitRatePct": 50,
+    "calibrationHitRatePct": 51.79,
     "avgProbPct": 68.22,
     "avgImpliedPct": 55.36,
-    "calibrationGapPts": 18.22
+    "calibrationGapPts": 16.43
   },
   "clv": {
     "n": 0,
@@ -32,7 +70,7 @@
   "drawdown": {
     "maxDrawdownUnits": 9.21,
     "currentDrawdownUnits": 9.12,
-    "peakUnits": 2.01
+    "peakUnits": 4.45
   },
   "recentForm": [
     {
@@ -119,151 +157,151 @@
   "equityCurve": [
     {
       "date": "2026-10-21",
-      "units": -1.4
-    },
-    {
-      "date": "2026-10-21",
-      "units": -0.76
-    },
-    {
-      "date": "2026-10-21",
       "units": 1.04
     },
     {
       "date": "2026-10-21",
-      "units": 2.01
+      "units": 1.68
     },
     {
       "date": "2026-10-21",
-      "units": 0.51
+      "units": 3.48
+    },
+    {
+      "date": "2026-10-21",
+      "units": 4.45
+    },
+    {
+      "date": "2026-10-21",
+      "units": 2.95
     },
     {
       "date": "2026-10-29",
-      "units": -0.19
+      "units": 2.25
     },
     {
       "date": "2026-10-29",
-      "units": -0.13
+      "units": 2.31
     },
     {
       "date": "2026-11-10",
-      "units": 0.55
+      "units": 2.99
     },
     {
       "date": "2026-11-10",
-      "units": 1.04
+      "units": 3.48
     },
     {
       "date": "2026-11-10",
-      "units": 0.14
+      "units": 2.58
     },
     {
       "date": "2026-11-10",
-      "units": -0.56
+      "units": 1.88
     },
     {
       "date": "2026-11-10",
-      "units": 0.08
+      "units": 2.52
     },
     {
       "date": "2026-11-10",
-      "units": -0.82
+      "units": 1.62
     },
     {
       "date": "2026-11-10",
-      "units": -1.52
+      "units": 0.92
     },
     {
       "date": "2026-11-10",
-      "units": -2.52
+      "units": -0.08
     },
     {
       "date": "2026-11-10",
-      "units": -1.61
+      "units": 0.83
     },
     {
       "date": "2026-11-10",
-      "units": -0.7
+      "units": 1.74
     },
     {
       "date": "2026-11-10",
-      "units": -1.7
+      "units": 0.74
     },
     {
       "date": "2026-11-10",
-      "units": -0.79
+      "units": 1.65
     },
     {
       "date": "2026-11-10",
-      "units": -0.02
+      "units": 2.42
     },
     {
       "date": "2026-11-10",
-      "units": 0.04
+      "units": 2.48
     },
     {
       "date": "2026-11-10",
-      "units": -0.66
+      "units": 1.78
     },
     {
       "date": "2026-11-10",
-      "units": -0.02
+      "units": 2.42
     },
     {
       "date": "2026-11-10",
-      "units": -0.72
+      "units": 1.72
     },
     {
       "date": "2026-11-10",
-      "units": -1.42
+      "units": 1.02
     },
     {
       "date": "2026-11-10",
-      "units": -2.12
+      "units": 0.32
     },
     {
       "date": "2026-11-10",
-      "units": -2.82
+      "units": -0.38
     },
     {
       "date": "2026-11-10",
-      "units": -2.18
+      "units": 0.26
     },
     {
       "date": "2026-11-10",
-      "units": -4.18
+      "units": -1.74
     },
     {
       "date": "2026-11-10",
-      "units": -6.18
+      "units": -3.74
     },
     {
       "date": "2026-11-10",
-      "units": -5.52
+      "units": -3.08
     },
     {
       "date": "2026-11-10",
-      "units": -7.02
+      "units": -4.58
     },
     {
       "date": "2026-11-10",
-      "units": -6.2
+      "units": -3.76
     },
     {
       "date": "2026-11-10",
-      "units": -6.9
+      "units": -4.46
     },
     {
       "date": "2026-11-10",
-      "units": -7.2
+      "units": -4.76
     },
     {
       "date": "2026-11-10",
-      "units": -7.01
+      "units": -4.57
     },
     {
       "date": "2026-11-10",
-      "units": -7.11
+      "units": -4.67
     }
   ],
   "streaks": {
@@ -278,19 +316,19 @@
     {
       "key": "Fútbol",
       "n": 27,
-      "wins": 14,
-      "losses": 13,
+      "wins": 15,
+      "losses": 12,
       "pushes": 0,
-      "hitRate": 51.85,
+      "hitRate": 55.56,
       "financialN": 14,
-      "netUnits": -0.31,
+      "netUnits": 2.13,
       "stakedUnits": 12.5,
-      "roiPct": -2.48,
+      "roiPct": 17.04,
       "calibrationN": 23,
-      "calibrationHitRatePct": 56.52,
+      "calibrationHitRatePct": 60.87,
       "avgProbPct": 65.95,
       "avgImpliedPct": 59.88,
-      "calibrationGapPts": 9.43
+      "calibrationGapPts": 5.08
     },
     {
       "key": "Baloncesto",
@@ -416,19 +454,19 @@
     {
       "key": "Liga MX Femenil",
       "n": 4,
-      "wins": 3,
-      "losses": 1,
+      "wins": 4,
+      "losses": 0,
       "pushes": 0,
-      "hitRate": 75,
+      "hitRate": 100,
       "financialN": 2,
-      "netUnits": 0.4,
+      "netUnits": 2.84,
       "stakedUnits": 3.4,
-      "roiPct": 11.76,
+      "roiPct": 83.53,
       "calibrationN": 4,
-      "calibrationHitRatePct": 75,
+      "calibrationHitRatePct": 100,
       "avgProbPct": 64.73,
       "avgImpliedPct": 55.05,
-      "calibrationGapPts": -10.27
+      "calibrationGapPts": -35.27
     },
     {
       "key": "NCAAF Colegial FBS",
@@ -605,19 +643,19 @@
     {
       "key": "Totales",
       "n": 33,
-      "wins": 21,
-      "losses": 12,
+      "wins": 22,
+      "losses": 11,
       "pushes": 0,
-      "hitRate": 63.64,
+      "hitRate": 66.67,
       "financialN": 17,
-      "netUnits": -0.56,
+      "netUnits": 1.88,
       "stakedUnits": 15,
-      "roiPct": -3.73,
+      "roiPct": 12.53,
       "calibrationN": 29,
-      "calibrationHitRatePct": 65.52,
+      "calibrationHitRatePct": 68.97,
       "avgProbPct": 66,
       "avgImpliedPct": 52.88,
-      "calibrationGapPts": 0.48
+      "calibrationGapPts": -2.97
     },
     {
       "key": "Spread/Hándicap",
@@ -726,19 +764,19 @@
     {
       "key": "60–70%",
       "n": 28,
-      "wins": 16,
-      "losses": 12,
+      "wins": 17,
+      "losses": 11,
       "pushes": 0,
-      "hitRate": 57.14,
+      "hitRate": 60.71,
       "financialN": 20,
-      "netUnits": -4.73,
+      "netUnits": -2.29,
       "stakedUnits": 17.9,
-      "roiPct": -26.42,
+      "roiPct": -12.79,
       "calibrationN": 28,
-      "calibrationHitRatePct": 57.14,
+      "calibrationHitRatePct": 60.71,
       "avgProbPct": 63.96,
       "avgImpliedPct": 54.65,
-      "calibrationGapPts": 6.82
+      "calibrationGapPts": 3.25
     },
     {
       "key": "50–60%",
@@ -813,6 +851,6 @@
     "Muestra insuficiente: 63 picks cerrados. Con menos de ~100 picks no se puede concluir que el modelo tenga edge; el ROI observado puede ser varianza.",
     "Cobertura financiera: 37 de 63 cierres tienen cuota, stake y P&L válidos. El ROI y la curva solo cubren esa muestra.",
     "ROI negativo en la muestra con datos financieros. No usar el backtest de 83.9% como argumento comercial.",
-    "El modelo sobreestima en 56 picks con pronóstico registrado: probabilidad promedio 68.22% vs acierto 50%. Revisar calibración antes de subir stakes."
+    "El modelo sobreestima en 56 picks con pronóstico registrado: probabilidad promedio 68.22% vs acierto 51.79%. Revisar calibración antes de subir stakes."
   ]
 }

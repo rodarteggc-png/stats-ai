@@ -23,6 +23,7 @@ import { computePnl, parsePickMarket } from './gradeLedger.mjs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const LEDGER_PATH = path.join(__dirname, '..', 'data', 'pick_ledger.jsonl');
+const CLOSURES_PATH = path.join(__dirname, '..', 'data', 'pick_ledger_closures.jsonl');
 const RECORD_DATA_PATH = path.join(__dirname, '..', 'data', 'record.json');
 const RECORD_PUBLIC_PATH = path.join(__dirname, '..', 'public', 'record.json');
 
@@ -153,6 +154,7 @@ export function computeLedgerReport(rows) {
     closed: closed.length,
     pending: pending.length,
     pendingIds: pending.map(r => r.id),
+    resultCorrections: closed.flatMap(row => row.resultCorrection ? [{ pickId: row.id, ...row.resultCorrection }] : []),
     overall,
     clv: withClv.length
       ? {
@@ -182,9 +184,28 @@ export function computeLedgerReport(rows) {
   };
 }
 
+export function applyVerifiedResultCorrections(rows, closures) {
+  const byId = new Map(rows.map(row => [row.id, row]));
+  for (const correction of closures) {
+    if (correction.kind !== 'verified-result-correction') continue;
+    const row = byId.get(correction.pickId);
+    if (row?.status !== 'CLOSED' || row.score !== correction.previousScore || row.result !== correction.previousResult) continue;
+    if (!/^\d+-\d+$/.test(correction.score) || !['WON', 'LOST', 'PUSH', 'VOID'].includes(correction.result) || !correction.evidenceUrl) continue;
+    const { score, result } = correction;
+    byId.set(row.id, {
+      ...row,
+      score,
+      result,
+      pnlUnits: result === row.result ? row.pnlUnits : computePnl(result, row.placedOdds, row.stakeUnits),
+      resultCorrection: { ...correction },
+    });
+  }
+  return rows.map(row => byId.get(row.id));
+}
+
 export function readLedgerRows() {
-  if (!fs.existsSync(LEDGER_PATH)) return [];
-  return fs.readFileSync(LEDGER_PATH, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+  const readJsonLines = file => fs.existsSync(file) ? fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(JSON.parse) : [];
+  return applyVerifiedResultCorrections(readJsonLines(LEDGER_PATH), readJsonLines(CLOSURES_PATH));
 }
 
 function printReport(report) {

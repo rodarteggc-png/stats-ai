@@ -1193,7 +1193,19 @@ test('gradeLedger: del espejo Telegram al record con ESPN simulado, sin tocar el
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-import { computeLedgerReport } from './ledgerReport.mjs';
+import { applyVerifiedResultCorrections, computeLedgerReport } from './ledgerReport.mjs';
+
+test('ledgerReport: aplica correcciones verificadas sin reescribir el cierre original', () => {
+  const rows = [{ id: 'over', status: 'CLOSED', score: '1-0', result: 'LOST', placedOdds: 1.74, stakeUnits: 1.4, pnlUnits: -1.4 }];
+  const correction = { kind: 'verified-result-correction', pickId: 'over', previousScore: '1-0', previousResult: 'LOST', score: '7-0', result: 'WON', evidenceUrl: 'https://example.test/event' };
+  const adjusted = applyVerifiedResultCorrections(rows, [{ ...correction, kind: undefined }, correction]);
+  assert.equal(rows[0].result, 'LOST');
+  assert.equal(adjusted[0].score, '7-0');
+  assert.equal(adjusted[0].pnlUnits, 1.04);
+  assert.equal(computeLedgerReport(adjusted).overall.wins, 1);
+  assert.equal(computeLedgerReport(adjusted).resultCorrections.length, 1);
+  assert.deepEqual(applyVerifiedResultCorrections(rows, [{ ...correction, previousScore: '0-0' }]), rows);
+});
 
 test('ledgerReport: el ROI excluye cierres sin datos financieros sin perder su resultado', () => {
   const report = computeLedgerReport([

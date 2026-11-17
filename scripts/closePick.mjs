@@ -10,7 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { computePnl } from './gradeLedger.mjs';
-import { computeLedgerReport } from './ledgerReport.mjs';
+import { computeLedgerReport, readLedgerRows } from './ledgerReport.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -51,7 +51,7 @@ const closingOdds = closeOddsIdx !== -1 ? parseFloat(args[closeOddsIdx + 1]) : n
 const picks = readLedger();
 
 if (isSummary) {
-  const closed = picks.filter(p => p.status === 'CLOSED');
+  const closed = readLedgerRows().filter(p => p.status === 'CLOSED');
   const wins = closed.filter(p => p.result === 'WON').length;
   const losses = closed.filter(p => p.result === 'LOST').length;
   const pushes = closed.filter(p => p.result === 'PUSH').length;
