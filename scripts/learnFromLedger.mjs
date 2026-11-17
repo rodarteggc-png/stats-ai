@@ -62,7 +62,7 @@ function readCurrentTuning() {
  * Pura y testeable.
  */
 export function summarizeForAi(report) {
-  const row = (g) => `${g.key}: ${g.n} picks, ${g.wins}W-${g.losses}L, acierto ${g.hitRate}%, ROI ${g.roiPct}%, prob. modelo ${g.avgProbPct}%, brecha ${g.calibrationGapPts} pts`;
+  const row = (g) => `${g.key}: ${g.n} picks, ${g.wins}W-${g.losses}L, acierto ${g.hitRate}%, ROI ${g.roiPct}%, calibración: ${g.calibrationN ?? 'N/D'} pares, acierto ${g.calibrationHitRatePct ?? 'N/D'}%, prob. modelo ${g.avgProbPct ?? 'N/D'}%, brecha ${g.calibrationGapPts ?? 'N/D'} pts`;
   return {
     overall: report.overall,
     clv: report.clv,
@@ -105,6 +105,7 @@ export function buildLearningPrompt(summary, tuning) {
     '',
     '## Reglas',
     '- Con menos de 20 picks en un segmento, di que la muestra es insuficiente y propón SEGUIR MIDIENDO, no cambiar nada.',
+    '- Para calibración, toma el tamaño y el acierto de los pares con pronóstico observado, no el acierto global. Con menos de 20 pares, no propongas ajustes de calibración.',
     '- Nunca propongas tocar los 5 candados de veto ni la matemática base del modelo; solo calibración, umbrales, pausas por segmento y gestión de banca.',
     '- Cada propuesta debe citar su evidencia numérica. Sin evidencia, no hay propuesta.',
     '- Sé escéptico con rachas cortas: 2-3 picks no prueban nada.'

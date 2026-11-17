@@ -57,8 +57,6 @@ export function parseMirrorLine(rawLine) {
   if (entry.paper === true) return { invalid: true, reason: 'paper:true, va a paperImport' };
   if (!entry.id || typeof entry.id !== 'string') return { invalid: true, reason: 'sin id' };
   if (!entry.game || !entry.pick) return { invalid: true, reason: 'sin juego o pick' };
-  const odds = Number(entry.placedOdds);
-  if (!Number.isFinite(odds) || odds <= 1) return { invalid: true, reason: 'sin cuota válida' };
   if (entry.status && entry.status !== 'PENDING') {
     return { invalid: true, reason: `status ${entry.status}, solo se importan PENDING` };
   }
@@ -72,6 +70,17 @@ export function parseMirrorLine(rawLine) {
  * valores neutros, nunca inventados como dato real.
  */
 export function normalizeRealEntry(entry) {
+  const optionalNumber = (value) => {
+    if (typeof value !== 'number' && (typeof value !== 'string' || !value.trim())) return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const probability = (value) => {
+    const parsed = optionalNumber(value);
+    return parsed > 0 && parsed <= 100 ? parsed : null;
+  };
+  const stake = optionalNumber(entry.stakeUnits);
+  const odds = optionalNumber(entry.placedOdds);
   return {
     id: entry.id,
     timestamp: entry.timestamp || new Date().toISOString(),
@@ -82,16 +91,16 @@ export function normalizeRealEntry(entry) {
     pick: entry.pick,
     tier: entry.tier || 'TIER_2_ACTION',
     type: entry.type || 'Apuesta',
-    placedOdds: Number(entry.placedOdds),
+    placedOdds: odds > 1 ? odds : null,
     closingOdds: null,
     clvPct: null,
-    prob: Number.isFinite(Number(entry.prob)) ? Number(entry.prob) : 60,
-    rawProb: Number.isFinite(Number(entry.rawProb)) ? Number(entry.rawProb) : null,
-    evPct: Number.isFinite(Number(entry.evPct)) ? Number(entry.evPct) : null,
+    prob: probability(entry.prob),
+    rawProb: probability(entry.rawProb),
+    evPct: optionalNumber(entry.evPct),
     confidenceTier: entry.confidenceTier || null,
-    oddsSource: entry.oddsSource || 'market',
-    stakeUnits: Number.isFinite(Number(entry.stakeUnits)) ? Number(entry.stakeUnits) : 1.0,
-    consensus: entry.consensus || '3/3',
+    oddsSource: entry.oddsSource || null,
+    stakeUnits: stake > 0 ? stake : null,
+    consensus: entry.consensus || null,
     sharpBook: entry.sharpBook || null,
     isPinnacle: Boolean(entry.isPinnacle),
     source: 'telegram_mirror',

@@ -43,10 +43,13 @@ test('realImport: rechaza líneas paper (prefijo y paper:true)', () => {
   assert.equal(byFlag.invalid, true);
 });
 
-test('realImport: rechaza sin id, sin pick o sin cuota válida', () => {
+test('realImport: rechaza sin id o sin pick, pero conserva selecciones sin cuota', () => {
   assert.equal(parseMirrorLine(mirrorLine({ ...realEntry(), id: undefined })).invalid, true);
   assert.equal(parseMirrorLine(mirrorLine({ ...realEntry(), pick: '' })).invalid, true);
-  assert.equal(parseMirrorLine(mirrorLine({ ...realEntry(), placedOdds: 0.5 })).invalid, true);
+  for (const placedOdds of [undefined, null, 0.5, 'sin datos']) {
+    const { entry } = parseMirrorLine(mirrorLine({ ...realEntry(), placedOdds }));
+    assert.equal(normalizeRealEntry(entry).placedOdds, null);
+  }
   assert.equal(parseMirrorLine('no es json').invalid, true);
 });
 
@@ -64,6 +67,15 @@ test('realImport: normaliza el espejo reducido de Vercel sin inventar datos', ()
   assert.equal(norm.result, null);
   assert.equal(norm.closingOdds, null);
   assert.equal(norm.source, 'telegram_mirror');
+  assert.equal(norm.prob, null);
+  assert.equal(norm.rawProb, null);
+  assert.equal(norm.evPct, null);
+  assert.equal(norm.oddsSource, null);
+  assert.equal(norm.consensus, null);
+  assert.equal(norm.stakeUnits, null);
+  assert.equal(normalizeRealEntry({ ...reduced, stakeUnits: '0.5' }).stakeUnits, 0.5);
+  assert.equal(normalizeRealEntry({ ...reduced, prob: 57.2, rawProb: 62, evPct: 0 }).prob, 57.2);
+  assert.equal(normalizeRealEntry({ ...reduced, evPct: 0 }).evPct, 0);
 });
 
 test('realImport: agrega solo ids nuevos y jamás toca los existentes', () => {
@@ -74,7 +86,7 @@ test('realImport: agrega solo ids nuevos y jamás toca los existentes', () => {
 
   const lines = [
     mirrorLine(realEntry({ id: 'old-1', pick: 'OTRO PICK' })),
-    mirrorLine(realEntry({ id: 'new-1' })),
+    mirrorLine(realEntry({ id: 'new-1', placedOdds: null, stakeUnits: null })),
     mirrorLine(realEntry({ id: 'new-1' })),
     'PAPER_LEDGER {"id":"paper-1","paper":true}'
   ];
@@ -90,6 +102,8 @@ test('realImport: agrega solo ids nuevos y jamás toca los existentes', () => {
   assert.equal(rows[0].pnlUnits, 0.91);
   assert.equal(rows[1].id, 'new-1');
   assert.equal(rows[1].status, 'PENDING');
+  assert.equal(rows[1].placedOdds, null);
+  assert.equal(rows[1].stakeUnits, null);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

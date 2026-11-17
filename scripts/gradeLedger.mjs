@@ -101,7 +101,11 @@ export function parsePickMarket(pick, type = '') {
     return { kind: 'spread', team: spread[1].trim(), line: Number(spread[2]) };
   }
   const ml = raw.match(/^victoria\s+(.+)$/i) || raw.match(/^(.+?)\s+(moneyline|ml)\b/i);
-  if (ml) return { kind: 'moneyline', team: ml[1].trim() };
+  if (ml) {
+    const isThreeWay = /\b1x2\b/i.test(`${raw} ${type}`);
+    const team = ml[1].replace(/\s*\(1x2\)\s*$/i, '').trim();
+    return { kind: 'moneyline', team, ...(isThreeWay ? { isThreeWay } : {}) };
+  }
   return { kind: 'unknown', reason: `Mercado no reconocido en: "${raw}"` };
 }
 
@@ -145,7 +149,7 @@ export function gradePick(market, homeName, awayName, homeScore, awayScore) {
       const mine = teamScore(market.team);
       if (mine === null) return null;
       const opp = isTeamMatch(market.team, homeName) ? as : hs;
-      if (mine === opp) return 'PUSH';
+      if (mine === opp) return market.isThreeWay ? 'LOST' : 'PUSH';
       return mine > opp ? 'WON' : 'LOST';
     }
     default:
@@ -155,10 +159,12 @@ export function gradePick(market, homeName, awayName, homeScore, awayScore) {
 
 export function computePnl(result, placedOdds, stake) {
   const odds = Number(placedOdds);
-  const st = Number(stake) || 1.0;
+  const st = Number(stake);
+  if (!Number.isFinite(odds) || odds <= 1 || !Number.isFinite(st) || st <= 0) return null;
   if (result === 'WON') return Number(((odds - 1) * st).toFixed(2));
   if (result === 'LOST') return -st;
-  return 0;
+  if (result === 'PUSH' || result === 'VOID') return 0;
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -392,7 +398,8 @@ if (isMain) {
   console.log(`\n${apply ? '✅ CIERRES APLICADOS' : '🔍 DRY-RUN (sin escribir, usa --apply para guardar)'}`);
   console.log(`Pendientes revisados: ${total} | Calificables: ${graded.length} (${wins}W-${losses}L-${pushes}P, ${net >= 0 ? '+' : ''}${net.toFixed(2)}u) | Sin calificar: ${skipped.length}`);
   for (const g of graded) {
-    console.log(` • [${g.id}] ${g.result} ${g.score} (${g.pnlUnits >= 0 ? '+' : ''}${g.pnlUnits}u) — ${g.pick.game} → ${g.pick.pick}`);
+    const pnl = g.pnlUnits === null ? 'P&L sin datos' : `${g.pnlUnits >= 0 ? '+' : ''}${g.pnlUnits}u`;
+    console.log(` • [${g.id}] ${g.result} ${g.score} (${pnl}) — ${g.pick.game} → ${g.pick.pick}`);
   }
   for (const s of skipped) {
     console.log(` • [${s.id}] SIN CALIFICAR: ${s.reason}`);

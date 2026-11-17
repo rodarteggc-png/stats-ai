@@ -9,6 +9,8 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { computePnl } from './gradeLedger.mjs';
+import { computeLedgerReport } from './ledgerReport.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -55,9 +57,7 @@ if (isSummary) {
   const pushes = closed.filter(p => p.result === 'PUSH').length;
   const total = wins + losses;
   const winRate = total > 0 ? ((wins / total) * 100).toFixed(1) : '0.0';
-  const netUnits = closed.reduce((acc, p) => acc + (parseFloat(p.pnlUnits) || 0), 0);
-  const totalStaked = closed.reduce((acc, p) => acc + (parseFloat(p.stakeUnits) || 1.0), 0);
-  const roi = totalStaked > 0 ? ((netUnits / totalStaked) * 100).toFixed(1) : '0.0';
+  const { netUnits, roiPct, financialN } = computeLedgerReport(closed).overall;
   const beatClvCount = closed.filter(p => (parseFloat(p.clvPct) || 0) > 0).length;
   const withClv = closed.filter(p => p.clvPct !== null && p.clvPct !== undefined);
   const clvRate = withClv.length > 0 ? ((beatClvCount / withClv.length) * 100).toFixed(1) : null;
@@ -72,7 +72,7 @@ if (isSummary) {
   console.log(`Aciertos / Fallos / Push: ${wins}W - ${losses}L - ${pushes}P`);
   console.log(`Hit Rate (Win %):        ${winRate}%`);
   console.log(`P&L Neto Acumulado:      ${netUnits >= 0 ? '+' : ''}${netUnits.toFixed(2)} Unidades`);
-  console.log(`ROI Real:                ${roi}%`);
+  console.log(`ROI con datos:           ${roiPct === null ? 'sin datos' : `${roiPct}%`} (${financialN}/${closed.length} cierres)`);
   console.log(`Beat Closing Line (CLV): ${clvRate === null ? 'sin datos (no hay cierres capturados)' : `${clvRate}% (Promedio CLV: ${avgClv}%)`}`);
   console.log(`======================================================\n`);
   process.exit(0);
@@ -105,24 +105,16 @@ if (pickId && result) {
   }
 
   const p = picks[idx];
-  const placedOdds = parseFloat(p.placedOdds) || 1.90;
-  const stake = parseFloat(p.stakeUnits) || 1.0;
+  const placedOdds = Number(p.placedOdds);
   // Sin cuota de cierre capturada no hay CLV: null, nunca se copia la cuota
   // publicada (ese bug dejaba clvPct 0 en todos los cierres; ver gradeLedger.mjs).
-  const finalCloseOdds = closingOdds || null;
+  const finalCloseOdds = Number.isFinite(closingOdds) && closingOdds > 1 ? closingOdds : null;
 
   // Cálculo CLV: ((placed / close) - 1) * 100; null si no hay cierre real.
-  const clvPct = finalCloseOdds ? Number((((placedOdds / finalCloseOdds) - 1) * 100).toFixed(2)) : null;
+  const clvPct = finalCloseOdds && Number.isFinite(placedOdds) && placedOdds > 1 ? Number((((placedOdds / finalCloseOdds) - 1) * 100).toFixed(2)) : null;
 
   // Cálculo PnL
-  let pnlUnits = 0;
-  if (result === 'WON') {
-    pnlUnits = Number(((placedOdds - 1) * stake).toFixed(2));
-  } else if (result === 'LOST') {
-    pnlUnits = -stake;
-  } else {
-    pnlUnits = 0;
-  }
+  const pnlUnits = computePnl(result, p.placedOdds, p.stakeUnits);
 
   p.status = 'CLOSED';
   p.result = result;
@@ -139,8 +131,8 @@ if (pickId && result) {
   console.log(` • Juego:       ${p.game}`);
   console.log(` • Selección:   ${p.pick}`);
   console.log(` • Marcador:    ${p.score}`);
-  console.log(` • Resultado:   ${result} (${pnlUnits >= 0 ? '+' : ''}${pnlUnits}u)`);
-  console.log(` • Cuota Inicial vs Cierre: ${placedOdds} vs ${finalCloseOdds} (CLV: ${clvPct >= 0 ? '+' : ''}${clvPct}%)`);
+  console.log(` • Resultado:   ${result} (${pnlUnits === null ? 'P&L sin datos' : `${pnlUnits >= 0 ? '+' : ''}${pnlUnits}u`})`);
+  console.log(` • Cuota Inicial vs Cierre: ${placedOdds > 1 ? placedOdds : 'sin datos'} vs ${finalCloseOdds ?? 'sin datos'} (CLV: ${clvPct === null ? 'sin datos' : `${clvPct}%`})`);
   console.log(`\nLedger actualizado en: data/pick_ledger.jsonl\n`);
   process.exit(0);
 }

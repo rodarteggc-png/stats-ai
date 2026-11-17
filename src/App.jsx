@@ -3872,10 +3872,13 @@ export default function App() {
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 28px", marginTop: 8, fontSize: 15, fontWeight: 800, color: "#f8fafc" }}>
                   <span>{verifiedRecord.overall.wins}W - {verifiedRecord.overall.losses}L - {verifiedRecord.overall.pushes}P ({verifiedRecord.overall.hitRate}% acierto)</span>
                   <span style={{ color: verifiedRecord.overall.roiPct >= 0 ? "#10b981" : "#ef4444" }}>
-                    ROI {verifiedRecord.overall.roiPct >= 0 ? "+" : ""}{verifiedRecord.overall.roiPct}% ({verifiedRecord.overall.netUnits >= 0 ? "+" : ""}{verifiedRecord.overall.netUnits}u)
+                    {verifiedRecord.overall.roiPct == null ? "ROI: sin datos" : `ROI ${verifiedRecord.overall.roiPct >= 0 ? "+" : ""}${verifiedRecord.overall.roiPct}% (${verifiedRecord.overall.netUnits >= 0 ? "+" : ""}${verifiedRecord.overall.netUnits}u)`}
+                    {verifiedRecord.overall.financialN != null && ` · ${verifiedRecord.overall.financialN}/${verifiedRecord.closed} cierres con datos financieros`}
                   </span>
                   <span style={{ color: "#94a3b8", fontWeight: 700 }}>
-                    Modelo decía {verifiedRecord.overall.avgProbPct}% · CLV: {verifiedRecord.clv.n === 0 ? "sin datos" : `${verifiedRecord.clv.beatRatePct}%`}
+                    {verifiedRecord.overall.calibrationN > 0
+                      ? `Calibración: ${verifiedRecord.overall.avgProbPct}% previsto vs. ${verifiedRecord.overall.calibrationHitRatePct}% observado (${verifiedRecord.overall.calibrationN} picks)`
+                      : "Calibración: sin datos comparables"} · CLV: {verifiedRecord.clv.n === 0 ? "sin datos" : `${verifiedRecord.clv.beatRatePct}%`}
                   </span>
                   <span style={{ color: "#94a3b8", fontWeight: 700 }}>
                     Drawdown máx. {verifiedRecord.drawdown.maxDrawdownUnits}u
@@ -3894,12 +3897,12 @@ export default function App() {
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                       {verifiedRecord.bySport.map((g) => (
                         <span key={`s-${g.key}`} style={{ fontSize: 12, fontWeight: 700, color: "#f8fafc", background: "#1e293b", border: "1px solid #334155", borderRadius: 6, padding: "4px 8px" }}>
-                          {g.key}: {g.wins}W-{g.losses}L ({g.roiPct >= 0 ? "+" : ""}{g.roiPct}%)
+                          {g.key}: {g.wins}W-{g.losses}L ({g.roiPct == null ? "ROI sin datos" : `${g.roiPct >= 0 ? "+" : ""}${g.roiPct}%`})
                         </span>
                       ))}
                       {verifiedRecord.byMarket && verifiedRecord.byMarket.map((g) => (
                         <span key={`m-${g.key}`} style={{ fontSize: 12, fontWeight: 700, color: "#f8fafc", background: "#1e293b", border: "1px solid #334155", borderRadius: 6, padding: "4px 8px" }}>
-                          {g.key}: {g.wins}W-{g.losses}L ({g.roiPct >= 0 ? "+" : ""}{g.roiPct}%)
+                          {g.key}: {g.wins}W-{g.losses}L ({g.roiPct == null ? "ROI sin datos" : `${g.roiPct >= 0 ? "+" : ""}${g.roiPct}%`})
                         </span>
                       ))}
                     </div>
@@ -3907,7 +3910,8 @@ export default function App() {
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
                         {verifiedRecord.byProbBucket.map((g) => (
                           <span key={`b-${g.key}`} style={{ fontSize: 12, fontWeight: 700, color: "#f8fafc", background: "#1e293b", border: "1px solid #334155", borderRadius: 6, padding: "4px 8px" }}>
-                            {g.key}: acierto {g.hitRate}% (modelo {g.avgProbPct}%)
+                            {g.key}: acierto {g.hitRate == null ? "sin datos" : `${g.hitRate}%`}
+                            {g.calibrationN > 0 && ` (modelo ${g.avgProbPct}% sobre ${g.calibrationN})`}
                           </span>
                         ))}
                       </div>

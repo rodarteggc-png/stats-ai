@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-16T21:23:58.388Z",
+  "generatedAt": "2026-11-17T22:00:07.724Z",
   "source": "data/pick_ledger.jsonl (64 picks publicados por Telegram, calificados con marcador final ESPN)",
   "totalPicks": 64,
   "closed": 63,
@@ -13,12 +13,15 @@
     "losses": 33,
     "pushes": 0,
     "hitRate": 47.62,
-    "netUnits": -6.55,
-    "stakedUnits": 51.1,
-    "roiPct": -12.82,
-    "avgProbPct": 60.64,
+    "financialN": 37,
+    "netUnits": -7.11,
+    "stakedUnits": 33.3,
+    "roiPct": -21.35,
+    "calibrationN": 56,
+    "calibrationHitRatePct": 50,
+    "avgProbPct": 68.22,
     "avgImpliedPct": 55.36,
-    "calibrationGapPts": 13.02
+    "calibrationGapPts": 18.22
   },
   "clv": {
     "n": 0,
@@ -27,8 +30,8 @@
     "note": "Sin datos: no hay cuotas de cierre capturadas. El CLV requiere correr scripts/captureClosingOdds.mjs (ESPN/DraftKings, gratis) poco antes del inicio de cada partido."
   },
   "drawdown": {
-    "maxDrawdownUnits": 10.9,
-    "currentDrawdownUnits": 8.56,
+    "maxDrawdownUnits": 9.21,
+    "currentDrawdownUnits": 9.12,
     "peakUnits": 2.01
   },
   "recentForm": [
@@ -38,7 +41,7 @@
       "game": "England vs Croatia",
       "pick": "OVER 2.5 Goles",
       "result": "WON",
-      "pnlUnits": 0.9
+      "pnlUnits": null
     },
     {
       "id": "rec-20261112-05",
@@ -46,7 +49,7 @@
       "game": "Barcelona vs Arsenal",
       "pick": "Barcelona -1.5 (Gana por 2+ goles)",
       "result": "LOST",
-      "pnlUnits": -0.2
+      "pnlUnits": null
     },
     {
       "id": "rec-20261112-06",
@@ -54,7 +57,7 @@
       "game": "Aruba vs Martinique",
       "pick": "UNDER 2.5 Goles",
       "result": "WON",
-      "pnlUnits": 0
+      "pnlUnits": null
     },
     {
       "id": "rec-20261112-07",
@@ -62,7 +65,7 @@
       "game": "South Florida Bulls vs Memphis Tigers",
       "pick": "OVER 49.5 Pts",
       "result": "WON",
-      "pnlUnits": 0
+      "pnlUnits": null
     },
     {
       "id": "rec-20261112-08",
@@ -70,7 +73,7 @@
       "game": "Antigua and Barbuda vs Trinidad and Tobago",
       "pick": "Victoria Antigua and Barbuda (1X2)",
       "result": "LOST",
-      "pnlUnits": 0
+      "pnlUnits": null
     },
     {
       "id": "rec-20261113-01",
@@ -78,7 +81,7 @@
       "game": "Slovakia vs Faroe Islands",
       "pick": "Victoria Slovakia (1X2)",
       "result": "LOST",
-      "pnlUnits": -0.5
+      "pnlUnits": null
     },
     {
       "id": "rec-20261113-02",
@@ -86,7 +89,7 @@
       "game": "UCLA Bruins vs Illinois Fighting Illini",
       "pick": "OVER 48.5 Pts",
       "result": "LOST",
-      "pnlUnits": 0
+      "pnlUnits": null
     },
     {
       "id": "rec-20261113-03",
@@ -94,7 +97,7 @@
       "game": "Montserrat vs Nicaragua",
       "pick": "Victoria Montserrat (1X2)",
       "result": "LOST",
-      "pnlUnits": 0
+      "pnlUnits": null
     },
     {
       "id": "rec-20261113-04",
@@ -102,7 +105,7 @@
       "game": "San Antonio Spurs vs Golden State Warriors",
       "pick": "OVER 217.5 Pts",
       "result": "LOST",
-      "pnlUnits": 0
+      "pnlUnits": null
     },
     {
       "id": "rec-20261113-05",
@@ -110,7 +113,7 @@
       "game": "St. Martin vs El Salvador",
       "pick": "Victoria St. Martin (1X2)",
       "result": "LOST",
-      "pnlUnits": 0
+      "pnlUnits": null
     }
   ],
   "equityCurve": [
@@ -261,110 +264,6 @@
     {
       "date": "2026-11-10",
       "units": -7.11
-    },
-    {
-      "date": "",
-      "units": -8.61
-    },
-    {
-      "date": "",
-      "units": -7.25
-    },
-    {
-      "date": "",
-      "units": -5.89
-    },
-    {
-      "date": "",
-      "units": -7.39
-    },
-    {
-      "date": "",
-      "units": -8.89
-    },
-    {
-      "date": "",
-      "units": -7.53
-    },
-    {
-      "date": "",
-      "units": -6.9
-    },
-    {
-      "date": "",
-      "units": -6.37
-    },
-    {
-      "date": "",
-      "units": -5.02
-    },
-    {
-      "date": "",
-      "units": -4.36
-    },
-    {
-      "date": "",
-      "units": -5.06
-    },
-    {
-      "date": "",
-      "units": -4.98
-    },
-    {
-      "date": "",
-      "units": -4.8
-    },
-    {
-      "date": "",
-      "units": -4.65
-    },
-    {
-      "date": "",
-      "units": -6.05
-    },
-    {
-      "date": "",
-      "units": -6.75
-    },
-    {
-      "date": "",
-      "units": -5.85
-    },
-    {
-      "date": "",
-      "units": -6.05
-    },
-    {
-      "date": "",
-      "units": -6.05
-    },
-    {
-      "date": "",
-      "units": -6.05
-    },
-    {
-      "date": "",
-      "units": -6.05
-    },
-    {
-      "date": "",
-      "units": -6.55
-    },
-    {
-      "date": "",
-      "units": -6.55
-    },
-    {
-      "date": "",
-      "units": -6.55
-    },
-    {
-      "date": "",
-      "units": -6.55
-    },
-    {
-      "date": "",
-      "units": -6.55
     }
   ],
   "streaks": {
@@ -383,12 +282,15 @@
       "losses": 13,
       "pushes": 0,
       "hitRate": 51.85,
-      "netUnits": 0,
-      "stakedUnits": 19.1,
-      "roiPct": 0,
-      "avgProbPct": 56.18,
+      "financialN": 14,
+      "netUnits": -0.31,
+      "stakedUnits": 12.5,
+      "roiPct": -2.48,
+      "calibrationN": 23,
+      "calibrationHitRatePct": 56.52,
+      "avgProbPct": 65.95,
       "avgImpliedPct": 59.88,
-      "calibrationGapPts": 4.33
+      "calibrationGapPts": 9.43
     },
     {
       "key": "Baloncesto",
@@ -397,12 +299,15 @@
       "losses": 12,
       "pushes": 0,
       "hitRate": 36.84,
-      "netUnits": -7.14,
-      "stakedUnits": 20.5,
-      "roiPct": -34.83,
-      "avgProbPct": 71.61,
+      "financialN": 10,
+      "netUnits": -6.2,
+      "stakedUnits": 10.6,
+      "roiPct": -58.49,
+      "calibrationN": 18,
+      "calibrationHitRatePct": 38.89,
+      "avgProbPct": 75.59,
       "avgImpliedPct": 52.36,
-      "calibrationGapPts": 34.77
+      "calibrationGapPts": 36.7
     },
     {
       "key": "NCAAF",
@@ -411,12 +316,15 @@
       "losses": 8,
       "pushes": 0,
       "hitRate": 50,
-      "netUnits": 0.1,
-      "stakedUnits": 10.8,
-      "roiPct": 0.93,
-      "avgProbPct": 54.94,
+      "financialN": 12,
+      "netUnits": -1.09,
+      "stakedUnits": 9.5,
+      "roiPct": -11.47,
+      "calibrationN": 14,
+      "calibrationHitRatePct": 50,
+      "avgProbPct": 62.79,
       "avgImpliedPct": 52.31,
-      "calibrationGapPts": 4.94
+      "calibrationGapPts": 12.79
     },
     {
       "key": "MLB",
@@ -425,9 +333,12 @@
       "losses": 0,
       "pushes": 0,
       "hitRate": 100,
+      "financialN": 1,
       "netUnits": 0.49,
       "stakedUnits": 0.7,
       "roiPct": 70,
+      "calibrationN": 1,
+      "calibrationHitRatePct": 100,
       "avgProbPct": 63.7,
       "avgImpliedPct": 58.82,
       "calibrationGapPts": -36.3
@@ -441,12 +352,15 @@
       "losses": 12,
       "pushes": 0,
       "hitRate": 36.84,
-      "netUnits": -7.14,
-      "stakedUnits": 20.5,
-      "roiPct": -34.83,
-      "avgProbPct": 71.61,
+      "financialN": 10,
+      "netUnits": -6.2,
+      "stakedUnits": 10.6,
+      "roiPct": -58.49,
+      "calibrationN": 18,
+      "calibrationHitRatePct": 38.89,
+      "avgProbPct": 75.59,
       "avgImpliedPct": 52.36,
-      "calibrationGapPts": 34.77
+      "calibrationGapPts": 36.7
     },
     {
       "key": "NCAAF Colegial FBS (Semana 7)",
@@ -455,9 +369,12 @@
       "losses": 4,
       "pushes": 0,
       "hitRate": 50,
+      "financialN": 8,
       "netUnits": -0.03,
       "stakedUnits": 7.1,
       "roiPct": -0.42,
+      "calibrationN": 8,
+      "calibrationHitRatePct": 50,
       "avgProbPct": 63.93,
       "avgImpliedPct": 52.36,
       "calibrationGapPts": 13.92
@@ -469,9 +386,12 @@
       "losses": 2,
       "pushes": 0,
       "hitRate": 60,
-      "netUnits": -0.25,
-      "stakedUnits": 3.2,
-      "roiPct": -7.81,
+      "financialN": 2,
+      "netUnits": 0.72,
+      "stakedUnits": 0.9,
+      "roiPct": 80,
+      "calibrationN": 5,
+      "calibrationHitRatePct": 60,
       "avgProbPct": 59.48,
       "avgImpliedPct": 57.96,
       "calibrationGapPts": -0.52
@@ -483,9 +403,12 @@
       "losses": 1,
       "pushes": 0,
       "hitRate": 75,
+      "financialN": 4,
       "netUnits": 0.3,
       "stakedUnits": 3.8,
       "roiPct": 7.89,
+      "calibrationN": 4,
+      "calibrationHitRatePct": 75,
       "avgProbPct": 76.13,
       "avgImpliedPct": 57.55,
       "calibrationGapPts": 1.13
@@ -497,9 +420,12 @@
       "losses": 1,
       "pushes": 0,
       "hitRate": 75,
-      "netUnits": 1.83,
-      "stakedUnits": 5,
-      "roiPct": 36.6,
+      "financialN": 2,
+      "netUnits": 0.4,
+      "stakedUnits": 3.4,
+      "roiPct": 11.76,
+      "calibrationN": 4,
+      "calibrationHitRatePct": 75,
       "avgProbPct": 64.73,
       "avgImpliedPct": 55.05,
       "calibrationGapPts": -10.27
@@ -511,12 +437,15 @@
       "losses": 1,
       "pushes": 0,
       "hitRate": 75,
-      "netUnits": 1.19,
-      "stakedUnits": 1.3,
-      "roiPct": 91.54,
-      "avgProbPct": 31.45,
+      "financialN": 0,
+      "netUnits": 0,
+      "stakedUnits": 0,
+      "roiPct": null,
+      "calibrationN": 2,
+      "calibrationHitRatePct": 100,
+      "avgProbPct": 62.9,
       "avgImpliedPct": null,
-      "calibrationGapPts": -43.55
+      "calibrationGapPts": -37.1
     },
     {
       "key": "UEFA Nations League",
@@ -525,9 +454,12 @@
       "losses": 2,
       "pushes": 0,
       "hitRate": 50,
-      "netUnits": -0.15,
-      "stakedUnits": 2.7,
-      "roiPct": -5.56,
+      "financialN": 0,
+      "netUnits": 0,
+      "stakedUnits": 0,
+      "roiPct": null,
+      "calibrationN": 4,
+      "calibrationHitRatePct": 50,
       "avgProbPct": 62.13,
       "avgImpliedPct": null,
       "calibrationGapPts": 12.13
@@ -539,12 +471,15 @@
       "losses": 3,
       "pushes": 0,
       "hitRate": 25,
+      "financialN": 0,
       "netUnits": 0,
       "stakedUnits": 0,
       "roiPct": null,
-      "avgProbPct": 0,
+      "calibrationN": 0,
+      "calibrationHitRatePct": null,
+      "avgProbPct": null,
       "avgImpliedPct": null,
-      "calibrationGapPts": -25
+      "calibrationGapPts": null
     },
     {
       "key": "MLS (EE.UU.)",
@@ -553,9 +488,12 @@
       "losses": 2,
       "pushes": 0,
       "hitRate": 33.33,
+      "financialN": 3,
       "netUnits": -1.12,
       "stakedUnits": 2.9,
       "roiPct": -38.62,
+      "calibrationN": 3,
+      "calibrationHitRatePct": 33.33,
       "avgProbPct": 63.6,
       "avgImpliedPct": 59.69,
       "calibrationGapPts": 30.27
@@ -567,9 +505,12 @@
       "losses": 1,
       "pushes": 0,
       "hitRate": 50,
+      "financialN": 2,
       "netUnits": -0.06,
       "stakedUnits": 1.4,
       "roiPct": -4.29,
+      "calibrationN": 2,
+      "calibrationHitRatePct": 50,
       "avgProbPct": 62.3,
       "avgImpliedPct": 52.36,
       "calibrationGapPts": 12.3
@@ -581,9 +522,12 @@
       "losses": 2,
       "pushes": 0,
       "hitRate": 0,
+      "financialN": 2,
       "netUnits": -1,
       "stakedUnits": 1,
       "roiPct": -100,
+      "calibrationN": 2,
+      "calibrationHitRatePct": 0,
       "avgProbPct": 58.65,
       "avgImpliedPct": 52.08,
       "calibrationGapPts": 58.65
@@ -595,9 +539,12 @@
       "losses": 0,
       "pushes": 0,
       "hitRate": 100,
+      "financialN": 1,
       "netUnits": 0.49,
       "stakedUnits": 0.7,
       "roiPct": 70,
+      "calibrationN": 1,
+      "calibrationHitRatePct": 100,
       "avgProbPct": 63.7,
       "avgImpliedPct": 58.82,
       "calibrationGapPts": -36.3
@@ -609,9 +556,12 @@
       "losses": 1,
       "pushes": 0,
       "hitRate": 0,
+      "financialN": 1,
       "netUnits": -0.7,
       "stakedUnits": 0.7,
       "roiPct": -100,
+      "calibrationN": 1,
+      "calibrationHitRatePct": 0,
       "avgProbPct": 60.5,
       "avgImpliedPct": 52.36,
       "calibrationGapPts": 60.5
@@ -623,9 +573,12 @@
       "losses": 0,
       "pushes": 0,
       "hitRate": 100,
+      "financialN": 1,
       "netUnits": 0.19,
       "stakedUnits": 0.7,
       "roiPct": 27.14,
+      "calibrationN": 1,
+      "calibrationHitRatePct": 100,
       "avgProbPct": 82.8,
       "avgImpliedPct": 78.74,
       "calibrationGapPts": -17.2
@@ -637,9 +590,12 @@
       "losses": 1,
       "pushes": 0,
       "hitRate": 0,
+      "financialN": 1,
       "netUnits": -0.1,
       "stakedUnits": 0.1,
       "roiPct": -100,
+      "calibrationN": 1,
+      "calibrationHitRatePct": 0,
       "avgProbPct": 73.4,
       "avgImpliedPct": 71.94,
       "calibrationGapPts": 73.4
@@ -653,12 +609,15 @@
       "losses": 12,
       "pushes": 0,
       "hitRate": 63.64,
-      "netUnits": 4.97,
-      "stakedUnits": 27,
-      "roiPct": 18.41,
-      "avgProbPct": 58,
+      "financialN": 17,
+      "netUnits": -0.56,
+      "stakedUnits": 15,
+      "roiPct": -3.73,
+      "calibrationN": 29,
+      "calibrationHitRatePct": 65.52,
+      "avgProbPct": 66,
       "avgImpliedPct": 52.88,
-      "calibrationGapPts": -5.64
+      "calibrationGapPts": 0.48
     },
     {
       "key": "Spread/Hándicap",
@@ -667,9 +626,12 @@
       "losses": 12,
       "pushes": 0,
       "hitRate": 7.69,
-      "netUnits": -12.01,
-      "stakedUnits": 13.2,
-      "roiPct": -90.98,
+      "financialN": 10,
+      "netUnits": -7.51,
+      "stakedUnits": 8.7,
+      "roiPct": -86.32,
+      "calibrationN": 13,
+      "calibrationHitRatePct": 7.69,
       "avgProbPct": 73.14,
       "avgImpliedPct": 53,
       "calibrationGapPts": 65.45
@@ -681,12 +643,15 @@
       "losses": 4,
       "pushes": 0,
       "hitRate": 42.86,
-      "netUnits": 1.51,
-      "stakedUnits": 3.1,
-      "roiPct": 48.71,
-      "avgProbPct": 37.49,
+      "financialN": 2,
+      "netUnits": 1.86,
+      "stakedUnits": 2.1,
+      "roiPct": 88.57,
+      "calibrationN": 4,
+      "calibrationHitRatePct": 75,
+      "avgProbPct": 65.6,
       "avgImpliedPct": 56.8,
-      "calibrationGapPts": -5.37
+      "calibrationGapPts": -9.4
     },
     {
       "key": "BTTS",
@@ -695,9 +660,12 @@
       "losses": 2,
       "pushes": 0,
       "hitRate": 50,
+      "financialN": 4,
       "netUnits": -0.46,
       "stakedUnits": 3.7,
       "roiPct": -12.43,
+      "calibrationN": 4,
+      "calibrationHitRatePct": 50,
       "avgProbPct": 62.38,
       "avgImpliedPct": 58.5,
       "calibrationGapPts": 12.38
@@ -709,9 +677,12 @@
       "losses": 1,
       "pushes": 0,
       "hitRate": 50,
+      "financialN": 2,
       "netUnits": -0.53,
       "stakedUnits": 3,
       "roiPct": -17.67,
+      "calibrationN": 2,
+      "calibrationHitRatePct": 50,
       "avgProbPct": 88.05,
       "avgImpliedPct": 60.61,
       "calibrationGapPts": 38.05
@@ -723,9 +694,12 @@
       "losses": 1,
       "pushes": 0,
       "hitRate": 50,
+      "financialN": 2,
       "netUnits": 0.09,
       "stakedUnits": 0.8,
       "roiPct": 11.25,
+      "calibrationN": 2,
+      "calibrationHitRatePct": 50,
       "avgProbPct": 78.1,
       "avgImpliedPct": 75.34,
       "calibrationGapPts": 28.1
@@ -737,9 +711,12 @@
       "losses": 1,
       "pushes": 0,
       "hitRate": 50,
-      "netUnits": -0.12,
-      "stakedUnits": 0.3,
-      "roiPct": -40,
+      "financialN": 0,
+      "netUnits": 0,
+      "stakedUnits": 0,
+      "roiPct": null,
+      "calibrationN": 2,
+      "calibrationHitRatePct": 50,
       "avgProbPct": 55.65,
       "avgImpliedPct": null,
       "calibrationGapPts": 5.65
@@ -753,26 +730,32 @@
       "losses": 12,
       "pushes": 0,
       "hitRate": 57.14,
-      "netUnits": -1.95,
-      "stakedUnits": 25.3,
-      "roiPct": -7.71,
+      "financialN": 20,
+      "netUnits": -4.73,
+      "stakedUnits": 17.9,
+      "roiPct": -26.42,
+      "calibrationN": 28,
+      "calibrationHitRatePct": 57.14,
       "avgProbPct": 63.96,
       "avgImpliedPct": 54.65,
       "calibrationGapPts": 6.82
     },
     {
       "key": "50–60%",
-      "n": 18,
-      "wins": 7,
-      "losses": 11,
+      "n": 11,
+      "wins": 5,
+      "losses": 6,
       "pushes": 0,
-      "hitRate": 38.89,
-      "netUnits": -0.66,
-      "stakedUnits": 6.3,
-      "roiPct": -10.48,
-      "avgProbPct": 35.19,
+      "hitRate": 45.45,
+      "financialN": 5,
+      "netUnits": -0.22,
+      "stakedUnits": 3.4,
+      "roiPct": -6.47,
+      "calibrationN": 11,
+      "calibrationHitRatePct": 45.45,
+      "avgProbPct": 57.58,
       "avgImpliedPct": 52.87,
-      "calibrationGapPts": -3.7
+      "calibrationGapPts": 12.13
     },
     {
       "key": "80%+",
@@ -781,9 +764,12 @@
       "losses": 6,
       "pushes": 0,
       "hitRate": 40,
-      "netUnits": -2.64,
-      "stakedUnits": 10.2,
-      "roiPct": -25.88,
+      "financialN": 8,
+      "netUnits": -2.5,
+      "stakedUnits": 7.2,
+      "roiPct": -34.72,
+      "calibrationN": 10,
+      "calibrationHitRatePct": 40,
       "avgProbPct": 86.77,
       "avgImpliedPct": 57.72,
       "calibrationGapPts": 46.77
@@ -795,17 +781,38 @@
       "losses": 4,
       "pushes": 0,
       "hitRate": 42.86,
-      "netUnits": -1.3,
-      "stakedUnits": 9.3,
-      "roiPct": -13.98,
+      "financialN": 4,
+      "netUnits": 0.34,
+      "stakedUnits": 4.8,
+      "roiPct": 7.08,
+      "calibrationN": 7,
+      "calibrationHitRatePct": 42.86,
       "avgProbPct": 75.46,
       "avgImpliedPct": 57.32,
       "calibrationGapPts": 32.6
+    },
+    {
+      "key": "Sin probabilidad",
+      "n": 7,
+      "wins": 2,
+      "losses": 5,
+      "pushes": 0,
+      "hitRate": 28.57,
+      "financialN": 0,
+      "netUnits": 0,
+      "stakedUnits": 0,
+      "roiPct": null,
+      "calibrationN": 0,
+      "calibrationHitRatePct": null,
+      "avgProbPct": null,
+      "avgImpliedPct": null,
+      "calibrationGapPts": null
     }
   ],
   "warnings": [
     "Muestra insuficiente: 63 picks cerrados. Con menos de ~100 picks no se puede concluir que el modelo tenga edge; el ROI observado puede ser varianza.",
-    "ROI negativo en la muestra cerrada: el récord publicado pierde dinero. No usar el backtest de 83.9% como argumento comercial.",
-    "El modelo sobreestima: probabilidad promedio 60.64% vs acierto real 47.62%. Revisar calibración antes de subir stakes."
+    "Cobertura financiera: 37 de 63 cierres tienen cuota, stake y P&L válidos. El ROI y la curva solo cubren esa muestra.",
+    "ROI negativo en la muestra con datos financieros. No usar el backtest de 83.9% como argumento comercial.",
+    "El modelo sobreestima en 56 picks con pronóstico registrado: probabilidad promedio 68.22% vs acierto 50%. Revisar calibración antes de subir stakes."
   ]
 }

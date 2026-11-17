@@ -18,7 +18,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { parsePickMarket } from './gradeLedger.mjs';
+import { computePnl, parsePickMarket } from './gradeLedger.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,28 +28,46 @@ const RECORD_PUBLIC_PATH = path.join(__dirname, '..', 'public', 'record.json');
 
 const r2 = (n) => Math.round(n * 100) / 100;
 
+function readProbability(value) {
+  if (typeof value !== 'number' && typeof value !== 'string') return null;
+  const probability = Number(value);
+  return Number.isFinite(probability) && probability > 0 && probability <= 100 ? probability : null;
+}
+
+function hasFinancialData(row) {
+  return (typeof row.pnlUnits === 'number' || (typeof row.pnlUnits === 'string' && row.pnlUnits.trim() !== ''))
+    && Number.isFinite(Number(row.pnlUnits)) && computePnl(row.result, row.placedOdds, row.stakeUnits) !== null;
+}
+
 function summarize(rows) {
   const settled = rows.filter(r => r.result === 'WON' || r.result === 'LOST');
   const wins = rows.filter(r => r.result === 'WON').length;
   const losses = rows.filter(r => r.result === 'LOST').length;
   const pushes = rows.filter(r => r.result === 'PUSH').length;
-  const staked = rows.reduce((a, r) => a + (Number(r.stakeUnits) || 0), 0);
-  const net = rows.reduce((a, r) => a + (Number(r.pnlUnits) || 0), 0);
-  const probs = rows.map(r => Number(r.prob)).filter(Number.isFinite);
-  const implied = rows.map(r => 1 / Number(r.placedOdds)).filter(Number.isFinite);
+  const financialRows = rows.filter(hasFinancialData);
+  const staked = financialRows.reduce((sum, row) => sum + Number(row.stakeUnits), 0);
+  const net = financialRows.reduce((sum, row) => sum + Number(row.pnlUnits), 0);
+  const predictions = settled.filter(row => readProbability(row.prob) !== null);
+  const probs = predictions.map(row => readProbability(row.prob));
+  const implied = rows.map(r => Number(r.placedOdds)).filter(odds => Number.isFinite(odds) && odds > 1).map(odds => 1 / odds);
   const avg = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
   const hitRate = settled.length ? wins / settled.length : null;
+  const avgProb = avg(probs);
+  const calibrationHitRate = avg(predictions.map(row => Number(row.result === 'WON')));
   return {
     n: rows.length,
     wins, losses, pushes,
     hitRate: hitRate === null ? null : r2(hitRate * 100),
+    financialN: financialRows.length,
     netUnits: r2(net),
     stakedUnits: r2(staked),
     roiPct: staked > 0 ? r2((net / staked) * 100) : null,
-    avgProbPct: avg(probs) === null ? null : r2(avg(probs)),
+    calibrationN: predictions.length,
+    calibrationHitRatePct: calibrationHitRate === null ? null : r2(calibrationHitRate * 100),
+    avgProbPct: avgProb === null ? null : r2(avgProb),
     avgImpliedPct: avg(implied) === null ? null : r2(avg(implied) * 100),
     // Brecha de calibración: positiva = el modelo cree ganar más de lo que gana.
-    calibrationGapPts: (avg(probs) !== null && hitRate !== null) ? r2(avg(probs) - hitRate * 100) : null,
+    calibrationGapPts: avgProb === null ? null : r2(avgProb - calibrationHitRate * 100),
   };
 }
 
@@ -72,11 +90,12 @@ export function computeLedgerReport(rows) {
   // Drawdown en orden cronológico de cierre (o de publicación si falta).
   const ordered = [...closed].sort((a, b) =>
     Date.parse(a.closedAt || a.timestamp) - Date.parse(b.closedAt || b.timestamp));
+  const financialRows = ordered.filter(hasFinancialData);
   let peak = 0;
   let running = 0;
   let maxDrawdown = 0;
-  for (const r of ordered) {
-    running += Number(r.pnlUnits) || 0;
+  for (const r of financialRows) {
+    running += Number(r.pnlUnits);
     if (running > peak) peak = running;
     maxDrawdown = Math.max(maxDrawdown, peak - running);
   }
@@ -86,8 +105,9 @@ export function computeLedgerReport(rows) {
     return { btts: 'BTTS', total: 'Totales', spread: 'Spread/Hándicap', doubleChance: 'Doble oportunidad', moneyline: 'Moneyline', prop: 'Player prop', unknown: 'Sin clasificar' }[m.kind] || 'Sin clasificar';
   };
   const bucketOf = (r) => {
-    const p = Number(r.prob);
-    if (!Number.isFinite(p)) return 'Sin probabilidad';
+    const p = readProbability(r.prob);
+    if (p === null) return 'Sin probabilidad';
+    if (p < 50) return 'Menos de 50%';
     if (p < 60) return '50–60%';
     if (p < 70) return '60–70%';
     if (p < 80) return '70–80%';
@@ -102,11 +122,11 @@ export function computeLedgerReport(rows) {
     game: r.game,
     pick: r.pick,
     result: r.result,
-    pnlUnits: r2(Number(r.pnlUnits) || 0)
+    pnlUnits: hasFinancialData(r) ? r2(Number(r.pnlUnits)) : null
   }));
   let runningUnits = 0;
-  const equityCurve = ordered.map((r) => {
-    runningUnits += Number(r.pnlUnits) || 0;
+  const equityCurve = financialRows.map((r) => {
+    runningUnits += Number(r.pnlUnits);
     return { date: (r.closedAt || r.timestamp || '').slice(0, 10), units: r2(runningUnits) };
   });
   const streaks = (() => {
@@ -155,8 +175,9 @@ export function computeLedgerReport(rows) {
     byProbBucket: groupBy(closed, bucketOf),
     warnings: [
       ...(closed.length < 100 ? [`Muestra insuficiente: ${closed.length} picks cerrados. Con menos de ~100 picks no se puede concluir que el modelo tenga edge; el ROI observado puede ser varianza.`] : []),
-      ...(overall.roiPct !== null && overall.roiPct < 0 ? ['ROI negativo en la muestra cerrada: el récord publicado pierde dinero. No usar el backtest de 83.9% como argumento comercial.'] : []),
-      ...(overall.calibrationGapPts !== null && overall.calibrationGapPts > 5 ? [`El modelo sobreestima: probabilidad promedio ${overall.avgProbPct}% vs acierto real ${overall.hitRate}%. Revisar calibración antes de subir stakes.`] : []),
+      ...(overall.financialN < closed.length ? [`Cobertura financiera: ${overall.financialN} de ${closed.length} cierres tienen cuota, stake y P&L válidos. El ROI y la curva solo cubren esa muestra.`] : []),
+      ...(overall.roiPct !== null && overall.roiPct < 0 ? ['ROI negativo en la muestra con datos financieros. No usar el backtest de 83.9% como argumento comercial.'] : []),
+      ...(overall.calibrationGapPts !== null && overall.calibrationGapPts > 5 ? [`El modelo sobreestima en ${overall.calibrationN} picks con pronóstico registrado: probabilidad promedio ${overall.avgProbPct}% vs acierto ${overall.calibrationHitRatePct}%. Revisar calibración antes de subir stakes.`] : []),
     ],
   };
 }

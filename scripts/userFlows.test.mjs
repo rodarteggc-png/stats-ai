@@ -1091,6 +1091,7 @@ test('el futbol de 48h completa con ligas de segundo nivel cuando las principale
 });
 
 import { parsePickMarket, gradePick, computePnl, findGame, gradePendingPicks } from './gradeLedger.mjs';
+import { importRealEntries } from './realImport.mjs';
 
 test('gradeLedger: interpreta BTTS, totales, spreads, doble oportunidad y runline', () => {
   assert.deepEqual(parsePickMarket('Ambos Equipos Anotan: Sí (BTTS)'), { kind: 'btts', value: 'yes' });
@@ -1122,6 +1123,17 @@ test('gradeLedger: califica con el marcador real y nunca califica props', () => 
   assert.equal(computePnl('WON', 1.62, 1.1), 0.68);
   assert.equal(computePnl('LOST', 1.7, 0.7), -0.7);
   assert.equal(computePnl('PUSH', 1.9, 1.0), 0);
+  assert.equal(computePnl('WON', 1.9, null), null);
+  assert.equal(computePnl('LOST', 1.9, 0), null);
+  assert.equal(computePnl('WON', null, 1), null);
+});
+
+test('gradeLedger: un empate pierde para una victoria 1X2, sin cambiar el moneyline de dos vias', () => {
+  const threeWay = parsePickMarket('Victoria Tigres (1X2)');
+  assert.equal(gradePick(threeWay, 'Tigres', 'Monterrey', 1, 1), 'LOST');
+  assert.equal(gradePick(threeWay, 'Tigres', 'Monterrey', 1, 0), 'WON');
+  assert.equal(gradePick(parsePickMarket('Tigres ML'), 'Tigres', 'Monterrey', 1, 1), 'PUSH');
+  assert.equal(gradePick(parsePickMarket('OVER Goles'), 'Tigres', 'Monterrey', 2, 1), null);
 });
 
 test('gradeLedger: empareja equipos por nombre aunque ESPN abrevie o añada sufijos', () => {
@@ -1138,15 +1150,17 @@ test('gradeLedger: empareja equipos por nombre aunque ESPN abrevie o añada sufi
   assert.equal(findGame(games, 'Real Madrid', 'Barcelona'), null);
 });
 
-test('gradeLedger: califica picks de un ledger temporal con ESPN simulado, sin tocar el real', async () => {
+test('gradeLedger: del espejo Telegram al record con ESPN simulado, sin tocar el ledger real', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'grade-ledger-'));
   const tmpLedger = path.join(tmpDir, 'pick_ledger.jsonl');
   const picks = [
-    { id: 'test-nba-under', status: 'PENDING', sport: 'Baloncesto', league: 'NBA', game: 'Miami Heat vs Minnesota Timberwolves', gameDate: '2026-10-21T23:30Z', pick: 'UNDER 240.5 Pts', type: '🏀 TOTALES NBA (UNDER)', placedOdds: 1.91, stakeUnits: 1, result: null, score: null, pnlUnits: null, closingOdds: null, clvPct: null },
+    { id: 'test-nba-under', status: 'PENDING', sport: 'Baloncesto', league: 'NBA', game: 'Miami Heat vs Minnesota Timberwolves', gameDate: '2026-10-21T23:30Z', pick: 'UNDER 240.5 Pts', type: '🏀 TOTALES NBA (UNDER)', placedOdds: null, stakeUnits: null, result: null, score: null, pnlUnits: null, closingOdds: null, clvPct: null },
     { id: 'test-btts', status: 'PENDING', sport: 'Fútbol', league: 'MLS (EE.UU.)', game: 'Chicago Fire FC vs Philadelphia Union', gameDate: '2026-10-15T00:30Z', pick: 'Ambos Equipos Anotan: Sí (BTTS)', type: '⚽ AMBOS EQUIPOS ANOTAN (TIER 1 ÉLITE)', placedOdds: 1.62, stakeUnits: 1.1, result: null, score: null, pnlUnits: null, closingOdds: null, clvPct: null },
     { id: 'test-prop', status: 'PENDING', sport: 'Fútbol', league: 'Serie A', game: 'Atalanta vs Parma', gameDate: '2026-11-02T19:45Z', pick: 'Nikola Krstovic Más de 1.5 Tiros a Puerta', type: '⚽ PLAYER PROP (TIROS A PUERTA)', placedOdds: 1.85, stakeUnits: 1, result: null, score: null, pnlUnits: null, closingOdds: null, clvPct: null },
   ];
-  fs.writeFileSync(tmpLedger, picks.map(p => JSON.stringify(p)).join('\n') + '\n', 'utf-8');
+  fs.writeFileSync(tmpLedger, picks.slice(1).map(p => JSON.stringify(p)).join('\n') + '\n', 'utf-8');
+  const mirrorLine = `LEDGER ${JSON.stringify(picks[0])}`;
+  assert.equal(importRealEntries([mirrorLine, mirrorLine], tmpLedger).added, 1);
   const mockFetch = async (url) => {
     const body = String(url).includes('basketball/nba')
       ? { events: [{ competitions: [{ status: { type: { state: 'post' } }, competitors: [
@@ -1167,12 +1181,53 @@ test('gradeLedger: califica picks de un ledger temporal con ESPN simulado, sin t
   assert.equal(applied.graded.length, 2);
   const after = fs.readFileSync(tmpLedger, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
   assert.equal(after.find(p => p.id === 'test-nba-under').status, 'CLOSED');
+  assert.equal(after.find(p => p.id === 'test-nba-under').result, 'WON');
+  assert.equal(after.find(p => p.id === 'test-nba-under').pnlUnits, null);
   assert.equal(after.find(p => p.id === 'test-nba-under').clvPct, null);
   assert.equal(after.find(p => p.id === 'test-prop').status, 'PENDING');
+  const report = computeLedgerReport(after);
+  assert.equal(report.overall.wins, 2);
+  assert.equal(report.pending, 1);
+  assert.equal(report.overall.financialN, 1);
+  assert.equal(report.overall.netUnits, 0.68);
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 import { computeLedgerReport } from './ledgerReport.mjs';
+
+test('ledgerReport: el ROI excluye cierres sin datos financieros sin perder su resultado', () => {
+  const report = computeLedgerReport([
+    { status: 'CLOSED', result: 'WON', placedOdds: 1.8, stakeUnits: 2, pnlUnits: 1.6 },
+    { status: 'CLOSED', result: 'LOST', placedOdds: null, stakeUnits: 1, pnlUnits: -1 },
+    { status: 'CLOSED', result: 'WON', placedOdds: 2, stakeUnits: 1, pnlUnits: null },
+  ]);
+  assert.equal(report.overall.losses, 1);
+  assert.equal(report.overall.financialN, 1);
+  assert.equal(report.overall.roiPct, 80);
+  assert.equal(report.drawdown.maxDrawdownUnits, 0);
+  assert.equal(report.equityCurve.length, 1);
+  assert.equal(report.recentForm[2].pnlUnits, null);
+});
+
+test('ledgerReport: calibra solo pares de pronostico y resultado validos', () => {
+  const rows = [
+    { status: 'CLOSED', result: 'WON', prob: 55, placedOdds: 2 },
+    { status: 'CLOSED', result: 'LOST', prob: null, placedOdds: null },
+    { status: 'CLOSED', result: 'LOST', prob: 45, placedOdds: 0.5 },
+    { status: 'CLOSED', result: 'PUSH', prob: 95 },
+    { status: 'CLOSED', result: 'LOST', prob: 0 },
+  ];
+  const report = computeLedgerReport(rows);
+  assert.equal(report.overall.hitRate, 25);
+  assert.equal(report.overall.calibrationHitRatePct, 50);
+  assert.equal(report.overall.avgProbPct, 50);
+  assert.equal(report.overall.avgImpliedPct, 50);
+  assert.equal(report.overall.calibrationGapPts, 0);
+  assert.equal(report.overall.calibrationN, 2);
+  assert.equal(report.byProbBucket.find(group => group.key === '50–60%').avgProbPct, 55);
+  assert.equal(report.byProbBucket.find(group => group.key === 'Menos de 50%').n, 1);
+  assert.equal(report.byProbBucket.find(group => group.key === 'Sin probabilidad').n, 2);
+});
 
 test('ledgerReport: ROI, calibración y drawdown salen del ledger, sin inventar CLV', () => {
   const rows = [
