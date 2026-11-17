@@ -1646,7 +1646,7 @@ test('modo paper: classifyOpportunity aprueba lo que pasaba y veta con motivo lo
 
 import { applyPlattCalibration } from '../src/utils/calibration.js';
 
-test('afinación 2026-11-10: los spreads quedan en pausa (veto spread_paused) y los totales siguen', () => {
+test('afinación 2026-11-10 + excepción NBA 2026-11-16: los spreads quedan en pausa salvo NBA con ratings en vivo', () => {
   const base = {
     sport: 'Baloncesto', league: 'NBA', game: 'Utah Jazz vs Miami Heat',
     pick: 'Utah Jazz +9.5 (Cubre Línea)', type: '🏀 SPREAD NBA', odds: 1.91, prob: '60',
@@ -1654,13 +1654,21 @@ test('afinación 2026-11-10: los spreads quedan en pausa (veto spread_paused) y 
     ratingsSource: 'live',
     consensus: { votesPassed: 3 }, tipsterAudit: { isApproved: true },
   };
-  // El spread pasa todo lo demás (candados, EV, prob mínima) y solo lo frena la pausa.
-  assert.equal(classifyOpportunity(base).vetoReason, 'spread_paused');
-  assert.equal(classifyOpportunity(base).approved, false);
+  // Excepción 2026-11-16 (decisión de Tavo): el spread NBA con ratings en vivo
+  // pasa la pausa (pasa todo lo demás y se aprueba).
+  assert.equal(classifyOpportunity(base).approved, true);
+  assert.equal(classifyOpportunity(base).vetoReason, null);
   // El mismo perfil en total sí se aprueba: la pausa es solo para spreads.
   assert.equal(classifyOpportunity({ ...base, pick: 'UNDER 240.5 Pts', type: '🏀 TOTALES NBA (UNDER)' }).approved, true);
-  // También por el texto del pick aunque el type no diga SPREAD.
-  assert.equal(classifyOpportunity({ ...base, type: '🏀 NBA' }).vetoReason, 'spread_paused');
+  // NBA con ratings estáticos o sin dato sigue en pausa (fail-closed: el gate
+  // P1 lo veta antes como nba_static_ratings, así que aquí nunca llega).
+  assert.equal(classifyOpportunity({ ...base, ratingsSource: 'static' }).vetoReason, 'nba_static_ratings');
+  const { ratingsSource: _ratingsSource, ...noRatings } = base;
+  assert.equal(classifyOpportunity(noRatings).vetoReason, 'nba_static_ratings');
+  // Un spread de otro deporte, aunque traiga ratings en vivo, sigue en pausa.
+  assert.equal(classifyOpportunity({ ...base, sport: 'Fútbol Americano', league: 'NFL', ratingsSource: 'live' }).vetoReason, 'spread_paused');
+  // También por el texto del pick aunque el type no diga SPREAD (no-NBA).
+  assert.equal(classifyOpportunity({ ...base, sport: 'Fútbol Americano', league: 'NFL', type: '🏈 NFL', pick: 'Kansas City -3.5 (Cubre Línea)' }).vetoReason, 'spread_paused');
 });
 
 test('afinación 2026-11-10: Platt usa el ajuste del ledger (A=0.65, B=-0.20)', () => {

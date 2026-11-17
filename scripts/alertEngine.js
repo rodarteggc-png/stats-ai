@@ -42,12 +42,14 @@ import { removeVig, noVigFromSingleSide, expectedValuePct, edgePp, deriveDoubleC
 const MIN_EV_PCT = 2.0;
 // Pausa de spreads (2026-11-10, decisión de Tavo): los spreads son TODA la
 // pérdida del ledger real (1W-9L, -7.51u; NBA 0W-6L, -6.30u; resto +0.40u).
-// Mientras esté en true, ningún spread se despacha como pick real: se veta
-// con motivo 'spread_paused' al final de classifyOpportunity (después de
-// todos los demás filtros, así el motivo solo cubre spreads que habrían
-// salido) y el modo paper los sigue registrando y calificando contra
-// resultados reales. Re-activar solo cuando el reporte paper muestre que
-// los spreads ganan con muestra suficiente (20+ picks paper).
+// Mientras esté en true, ningún spread se despacha como pick real, SALVO los
+// spreads de NBA con ratings en vivo (excepción 2026-11-16, decisión de
+// Tavo: esos picks ya pasaban el gate P1 con ratingsSource 'live', precio
+// real ESPN y consenso 3/3; el resto —NFL, NCAAF, fútbol, NBA estático o
+// sin dato— sigue en pausa). El veto es 'spread_paused' al final de
+// classifyOpportunity (después de todos los demás filtros, así el motivo
+// solo cubre spreads que habrían salido) y el modo paper los sigue
+// registrando y calificando contra resultados reales.
 const SPREADS_PAUSED = true;
 // Brecha máxima tolerada entre el modelo y la probabilidad sin vig del mercado sharp
 const MAX_MODEL_MARKET_GAP_PP = 12;
@@ -1708,7 +1710,12 @@ export function classifyOpportunity(opp = {}) {
   if (SPREADS_PAUSED) {
     const isSpread = (opp.type || '').toUpperCase().includes('SPREAD')
       || pickStr.includes('cubre') || pickStr.includes('hándicap') || pickStr.includes('handicap');
-    if (isSpread) return deny('spread_paused', 'Spreads en pausa: mercado en medición (1W-9L en el ledger)');
+    // Excepción NBA en vivo (2026-11-16, decisión de Tavo): un spread de NBA
+    // con ratingsSource 'live' no se veta — el gate P1 ya lo exige en vivo
+    // (fail-closed: sin dato o 'static' cae en nba_static_ratings antes).
+    // El resto de spreads sigue en pausa.
+    const isNbaLive = (opp.sport === 'Baloncesto' || opp.league === 'NBA') && opp.ratingsSource === 'live';
+    if (isSpread && !isNbaLive) return deny('spread_paused', 'Spreads en pausa: mercado en medición (1W-9L en el ledger)');
   }
 
   // P3b (2026-11-16): si el Kelly fraccionado da 0, el pick no tiene ventaja
