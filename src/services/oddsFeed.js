@@ -43,8 +43,15 @@ export async function fetchPinnacleOdds(sport = 'nfl') {
   const keys = getOddsApiKeys();
   let theOddsApiSuccess = false;
 
+  // Regla 2026-11-17 (Tavo): API-Sports (Pinnacle) es la primera fuente para
+  // TODO el fútbol; ESPN queda como respaldo. La clave genérica 'soccer' es
+  // el comodín para enriquecer todas las ligas vía API-Sports: NO es una
+  // clave válida de The Odds API (sería 404 y quemaría cuota), así que se
+  // salta ese paso y se va directo al respaldo.
+  const isGenericSoccer = sportKey === 'soccer';
+
   // 3. Probar llaves secuencialmente (rotación automática) si hay disponibles
-  if (keys && keys.length > 0) {
+  if (!isGenericSoccer && keys && keys.length > 0) {
     for (let i = 0; i < keys.length; i++) {
       const apiKey = keys[i];
       if (inMemoryExhaustedKeys.has(apiKey)) continue;
@@ -72,7 +79,8 @@ export async function fetchPinnacleOdds(sport = 'nfl') {
   }
 
   // 4. Respaldo de Alta Capacidad: API-Sports (solo fútbol; no mezclar eventos de otro deporte)
-  if (!sportKey.startsWith('soccer_')) return null;
+  // Acepta 'soccer_*' y la clave genérica 'soccer' (comodín para todas las ligas).
+  if (!sportKey.startsWith('soccer')) return null;
   try {
     const apiSportsMatches = await fetchApiSportsPinnacleOdds();
     if (apiSportsMatches && apiSportsMatches.length > 0) {

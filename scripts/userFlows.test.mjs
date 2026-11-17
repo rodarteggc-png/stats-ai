@@ -11,7 +11,8 @@ import { selectHighProbabilityCandidates, buildConservativeCombination, scanFutu
 import { loadFutureModelData, pickSoccerFixtures } from '../api/_lib/futureData.js';
 import { resolveScanTargetChat } from '../api/scan.js';
 import { fetchClosingOddsForPick } from '../src/services/sportsApi.js';
-import { calculatePickEffectiveStake, collectScheduleBatches, generateAiExecutiveReport, parseValidDecimalOdds } from './alertEngine.js';
+import { calculatePickEffectiveStake, collectScheduleBatches, enrichSoccerWithSharpOdds, generateAiExecutiveReport, parseValidDecimalOdds } from './alertEngine.js';
+import { fetchPinnacleOdds } from '../src/services/oddsFeed.js';
 
 test('una cuota decimal ausente o invalida no se reemplaza por una cuota supuesta', () => {
   assert.equal(parseValidDecimalOdds('1.91'), 1.91);
@@ -1805,5 +1806,151 @@ test('modo paper: recordPaperPick escribe solo en el ledger paper y nunca en el 
     if (prevLedgerChat !== undefined) process.env.TELEGRAM_LEDGER_CHAT_ID = prevLedgerChat;
     if (prevBotToken !== undefined) process.env.TELEGRAM_BOT_TOKEN = prevBotToken;
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Regla 2026-11-17 (Tavo): cuotas para registrar resultados PRIMERO de
+// API-Sports (Pinnacle), ESPN solo como respaldo. Antes el enriquecimiento
+// de fútbol solo corría para 6 ligas; las demás (p. ej. Eliminatorias) nunca
+// consultaban API-Sports y se quedaban con precio ESPN o de modelo.
+const apiSportsPinnacleMock = () => {
+  const fixtures = {
+    response: [{
+      fixture: { id: 999001 },
+      teams: { home: { name: 'Estonia' }, away: { name: 'Bulgaria' } },
+      league: { name: 'Eliminatorias UEFA', country: 'World' }
+    }]
+  };
+  const odds = {
+    response: [{
+      fixture: { id: 999001 },
+      bookmakers: [{
+        bets: [
+          { name: 'Match Winner', values: [
+            { value: 'Home', odd: '1.91' },
+            { value: 'Draw', odd: '3.60' },
+            { value: 'Away', odd: '4.20' }
+          ] },
+          { name: 'Goals Over/Under', values: [
+            { value: 'Over 2.5', odd: '2.05' },
+            { value: 'Under 2.5', odd: '1.80' }
+          ] },
+          { name: 'Asian Handicap', values: [
+            { value: 'Home -1.5', odd: '2.90' },
+            { value: 'Away +1.5', odd: '1.45' }
+          ] }
+        ]
+      }]
+    }]
+  };
+  return async (input) => {
+    const url = String(input);
+    if (url.includes('v3.football.api-sports.io/fixtures')) return Response.json(fixtures);
+    if (url.includes('v3.football.api-sports.io/odds')) return Response.json(odds);
+    return new Response('Not Found', { status: 404 });
+  };
+};
+
+test("la clave genérica 'soccer' consulta API-Sports (Pinnacle) sin tocar The Odds API", async () => {
+  const originalFetch = globalThis.fetch;
+  const prevApiSportsKey = process.env.APISPORTS_KEY;
+  const prevApiSportsKeys = process.env.APISPORTS_KEYS;
+  const prevOddsKeys = process.env.ODDS_API_KEYS;
+  process.env.APISPORTS_KEY = 'test-apisports-key-123';
+  delete process.env.APISPORTS_KEYS;
+  process.env.ODDS_API_KEYS = 'test-odds-key-1234567890';
+  let oddsApiCalls = 0;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes('the-odds-api.com')) {
+      oddsApiCalls += 1;
+      return new Response('Unauthorized', { status: 401 });
+    }
+    return apiSportsPinnacleMock()(input);
+  };
+  try {
+    const events = await fetchPinnacleOdds('soccer');
+    assert.equal(oddsApiCalls, 0, 'la clave genérica no debe quemar cuota de The Odds API (no es clave válida)');
+    assert.ok(Array.isArray(events) && events.length === 1, 'debe devolver los eventos Pinnacle de API-Sports');
+    assert.equal(events[0].homeTeam, 'Estonia');
+    assert.equal(events[0].awayTeam, 'Bulgaria');
+    assert.equal(events[0].bookmaker, 'Pinnacle');
+    assert.equal(events[0].isPinnacle, true);
+    assert.equal(events[0].moneyline.home, 1.91);
+    assert.equal(events[0].totals.overOdds, 2.05);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (prevApiSportsKey === undefined) delete process.env.APISPORTS_KEY;
+    else process.env.APISPORTS_KEY = prevApiSportsKey;
+    if (prevApiSportsKeys === undefined) delete process.env.APISPORTS_KEYS;
+    else process.env.APISPORTS_KEYS = prevApiSportsKeys;
+    if (prevOddsKeys === undefined) delete process.env.ODDS_API_KEYS;
+    else process.env.ODDS_API_KEYS = prevOddsKeys;
+  }
+});
+
+test('un partido de Eliminatorias (fuera de las 6 ligas) se enriquece con precio Pinnacle de API-Sports', async () => {
+  const originalFetch = globalThis.fetch;
+  const prevApiSportsKey = process.env.APISPORTS_KEY;
+  const prevApiSportsKeys = process.env.APISPORTS_KEYS;
+  const prevOddsKeys = process.env.ODDS_API_KEYS;
+  process.env.APISPORTS_KEY = 'test-apisports-key-123';
+  delete process.env.APISPORTS_KEYS;
+  process.env.ODDS_API_KEYS = 'test-odds-key-1234567890';
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes('the-odds-api.com')) return new Response('Unauthorized', { status: 401 });
+    return apiSportsPinnacleMock()(input);
+  };
+  try {
+    const match = {
+      id: 'soccer-999001',
+      sport: 'futbol',
+      league: 'Eliminatorias UEFA',
+      gameDate: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+      home: { name: 'Estonia' },
+      away: { name: 'Bulgaria' },
+      market: {
+        homeOdds: '2.10',
+        awayOdds: '3.40',
+        hasRealOdds: false,
+        provider: 'Modelo Cuantitativo (Sin Línea Vegas)'
+      }
+    };
+    const enriched = await enrichSoccerWithSharpOdds([match]);
+    assert.equal(enriched.length, 1);
+    assert.equal(enriched[0].market.homeOdds, '1.91', 'el precio Pinnacle de API-Sports sustituye al de modelo');
+    assert.equal(enriched[0].market.awayOdds, '4.2');
+    assert.equal(enriched[0].market.hasRealOdds, true);
+    assert.equal(enriched[0].market.sharpBookmaker, 'Pinnacle');
+    assert.equal(enriched[0].market.isPinnacle, true);
+    assert.equal(enriched[0].vegas.overUnder, 2.5);
+    assert.equal(enriched[0].vegas.overOdds, '2.05');
+    assert.equal(enriched[0].vegas.underOdds, '1.8');
+    assert.equal(enriched[0].sharpValidated, true);
+    assert.equal(enriched[0].sharpBook, 'Pinnacle');
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (prevApiSportsKey === undefined) delete process.env.APISPORTS_KEY;
+    else process.env.APISPORTS_KEY = prevApiSportsKey;
+    if (prevApiSportsKeys === undefined) delete process.env.APISPORTS_KEYS;
+    else process.env.APISPORTS_KEYS = prevApiSportsKeys;
+    if (prevOddsKeys === undefined) delete process.env.ODDS_API_KEYS;
+    else process.env.ODDS_API_KEYS = prevOddsKeys;
+  }
+});
+
+test('el respaldo API-Sports sigue sin aplicar a deportes que no son fútbol', async () => {
+  const originalFetch = globalThis.fetch;
+  const prevOddsKeys = process.env.ODDS_API_KEYS;
+  process.env.ODDS_API_KEYS = 'test-odds-key-1234567890';
+  globalThis.fetch = async () => new Response('Unauthorized', { status: 401 });
+  try {
+    const events = await fetchPinnacleOdds('nfl');
+    assert.equal(events, null, 'sin saldo en The Odds API y sin respaldo para NFL, no hay cuotas');
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (prevOddsKeys === undefined) delete process.env.ODDS_API_KEYS;
+    else process.env.ODDS_API_KEYS = prevOddsKeys;
   }
 });

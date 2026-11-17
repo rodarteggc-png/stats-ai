@@ -3798,8 +3798,19 @@ async function enrichMatchesWithSharpOdds(matches = [], sportKey = 'nfl') {
   }
 }
 
-async function enrichSoccerWithSharpOdds(soccerMatches = []) {
+export async function enrichSoccerWithSharpOdds(soccerMatches = []) {
   if (!soccerMatches || soccerMatches.length === 0) return soccerMatches;
+
+  // Regla 2026-11-17 (Tavo): las cuotas para registrar resultados son
+  // PRIMERO de API-Sports (Pinnacle) y ESPN solo como respaldo. Antes este
+  // enriquecimiento solo corría para 6 ligas (EPL, LaLiga, Champions, Liga MX,
+  // Bundesliga, Serie A): las demás ligas (p. ej. Eliminatorias) nunca
+  // consultaban API-Sports y se quedaban con precio ESPN o de modelo. El
+  // comodín 'soccer' consulta el respaldo Pinnacle de API-Sports para TODAS
+  // las ligas de la fecha; el loop de las 6 ligas después puede subir el
+  // precio a The Odds API (también Pinnacle) donde haya saldo.
+  let currentMatches = [...soccerMatches];
+  currentMatches = await enrichMatchesWithSharpOdds(currentMatches, 'soccer');
 
   const leaguesToCheck = new Set();
   soccerMatches.forEach(m => {
@@ -3812,7 +3823,6 @@ async function enrichSoccerWithSharpOdds(soccerMatches = []) {
     else if (l.includes('serie a')) leaguesToCheck.add('seriea');
   });
 
-  let currentMatches = [...soccerMatches];
   for (const lKey of leaguesToCheck) {
     currentMatches = await enrichMatchesWithSharpOdds(currentMatches, lKey);
   }
