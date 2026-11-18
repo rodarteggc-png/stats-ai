@@ -1029,7 +1029,7 @@ export async function generateAiExecutiveReport(picks = [], shiftBadge = 'EDICI�
       stakeDetail: stakeLabel,
       tacticalRationale: p.tipsterAudit?.reason || p.argument || 'Superioridad en métricas avanzadas y modelado cuantitativo.',
       rlmDetail: p.consensus?.rlmInfo?.reason || null,
-      stability: p.mcStats ? `${p.mcStats.stability}% (Riesgo ${p.mcStats.risk})` : 'Alta'
+      stability: p.mcStats ? `${p.mcStats.stability}% (Riesgo ${p.mcStats.risk})` : 'Sin dato — Monte Carlo no ejecutado para NBA'
     };
   });
 
@@ -2780,7 +2780,7 @@ export function buildOpportunitiesAndTopSlate({
         edgeVal: Math.max(4.0, ev),
         edgeStr: `Prob: ${probs.homeCoverProb}% | Edge: +${ev}%`,
         argument: `Modelo de Posesiones Dean Oliver proyecta margen local de ${probs.projectedSpread > 0 ? '+' : ''}${probs.projectedSpread} pts (Pace: ${probs.projectedPace}).`,
-        mcStats: { stability: 82, risk: 'Bajo', iterations: 10000 },
+        mcStats: null, // A1 2026-11-18: sin Monte Carlo real para NBA; null hace que el Voto 2 se abstenga.
         match: m,
         probs: { f5: { homeMl: probs.homeWinProb, awayMl: probs.awayWinProb } }
       });
@@ -2802,7 +2802,7 @@ export function buildOpportunitiesAndTopSlate({
         edgeVal: Math.max(4.0, ev),
         edgeStr: `Prob: ${probs.awayCoverProb}% | Edge: +${ev}%`,
         argument: `Modelo de Posesiones Dean Oliver proyecta ventaja para ${m.away.name} cubriendo línea de ${spreadFmt} (Pace: ${probs.projectedPace}).`,
-        mcStats: { stability: 82, risk: 'Bajo', iterations: 10000 },
+        mcStats: null, // A1 2026-11-18: sin Monte Carlo real para NBA; null hace que el Voto 2 se abstenga.
         match: m,
         probs: { f5: { homeMl: probs.homeWinProb, awayMl: probs.awayWinProb } }
       });
@@ -2825,7 +2825,7 @@ export function buildOpportunitiesAndTopSlate({
         edgeVal: Math.max(4.5, ev),
         edgeStr: `Total Proyectado: ${probs.projectedTotal} vs Línea ${m.total} | Edge: +${ev}%`,
         argument: `Ritmo proyectado de ${probs.projectedPace} posesiones genera expectativa de ${probs.projectedTotal} pts, marcando fuerte valor bajista.`,
-        mcStats: { stability: 85, risk: 'Bajo', iterations: 10000 },
+        mcStats: null, // A1 2026-11-18: sin Monte Carlo real para NBA; null hace que el Voto 2 se abstenga.
         match: m,
         probs: { f5: { homeMl: probs.homeWinProb, awayMl: probs.awayWinProb } }
       });
@@ -2845,7 +2845,7 @@ export function buildOpportunitiesAndTopSlate({
         edgeVal: Math.max(4.5, ev),
         edgeStr: `Total Proyectado: ${probs.projectedTotal} vs Línea ${m.total} | Edge: +${ev}%`,
         argument: `Encuentro de alta velocidad con ${probs.projectedPace} posesiones proyectadas, superando el total institucional de ${m.total}.`,
-        mcStats: { stability: 85, risk: 'Bajo', iterations: 10000 },
+        mcStats: null, // A1 2026-11-18: sin Monte Carlo real para NBA; null hace que el Voto 2 se abstenga.
         match: m,
         probs: { f5: { homeMl: probs.homeWinProb, awayMl: probs.awayWinProb } }
       });
@@ -2870,9 +2870,14 @@ export function buildOpportunitiesAndTopSlate({
           edgeVal: ev,
           edgeStr: `+${ev}% EV vs Cuota | Prob: ${probs.homeWinProb}%`,
           argument: `Dominio ofensivo y ventaja de localía proyectada en ${probs.homeExpectedScore} pts frente a ${probs.awayExpectedScore} pts rivales.`,
-          mcStats: { stability: 80, risk: 'Bajo', iterations: 10000 },
+          mcStats: null, // A1 2026-11-18: sin Monte Carlo real para NBA; null hace que el Voto 2 se abstenga.
           match: m,
-          probs: { f5: { homeMl: probs.homeWinProb, awayMl: probs.awayWinProb } }
+          // A1 (2026-11-18): el Voto 1 ML lee probs.homeWinProb/awayWinProb en el
+          // nivel superior; antes el builder solo pasaba { f5: {...} } (copiado
+          // de MLB) y maxWin siempre era 50 < 55, así que el Voto 1 NUNCA pasaba
+          // para ML y el pick solo despachaba por el Voto 2 fabricado. Se mantiene
+          // f5 (lo usa el cálculo de effectiveProb) y se exponen las probs reales.
+          probs: { f5: { homeMl: probs.homeWinProb, awayMl: probs.awayWinProb }, homeWinProb: probs.homeWinProb, awayWinProb: probs.awayWinProb }
         });
       }
     }
@@ -4477,7 +4482,7 @@ export async function runAlertEngine(options = {}) {
 
     const stabilityLine = pick.mcStats 
       ? `🎲 *Estabilidad de Simulación:* \`${pick.mcStats.stability}% (Riesgo ${pick.mcStats.risk})\`` 
-      : `🎲 *Estabilidad de Simulación:* \`Alta (Calibrada)\``;
+      : `🎲 *Estabilidad de Simulación:* \`Sin dato — Monte Carlo no ejecutado para NBA\``;
 
     const isPickProp = isPlayerIndividualProp(pick);
     const isPickElite = pick.isEliteProp || 
