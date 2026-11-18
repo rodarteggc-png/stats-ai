@@ -995,6 +995,28 @@ export async function syncTelegramLedgerToHistory() {
  * - Protección contra verificación indebida de Player Props con resultados de juego
  * - Actualización automática de Elo dinámico
  */
+/**
+ * Nombre de liga (del pick) → slug ESPN para consultar sus resultados.
+ * La rama femenil VA ANTES que la genérica 'champion': un pick UWCL
+ * ("UEFA Women's Champions League") contiene 'champion' y sin esta rama
+ * se calificaría contra la Champions varonil (uefa.champions).
+ * Devuelve null si la liga no se reconoce (el llamador usa el default).
+ */
+export function espnSoccerLeagueForName(leagueName) {
+  const l = (leagueName || '').toLowerCase();
+  if (l.includes('champion') && (l.includes('women') || l.includes('femen'))) return 'uefa.wchampions';
+  if (l.includes('champion')) return 'uefa.champions';
+  if (l.includes('europa')) return 'uefa.europa';
+  if (l.includes('premier') || l.includes('inglaterra')) return 'eng.1';
+  if (l.includes('laliga') || l.includes('españa') || l.includes('espana')) return 'esp.1';
+  if (l.includes('serie a') || l.includes('italia')) return 'ita.1';
+  if (l.includes('bundesliga') || l.includes('alemania')) return 'ger.1';
+  if (l.includes('ligue 1') || l.includes('francia')) return 'fra.1';
+  if (l.includes('liga mx') || l.includes('mexico') || l.includes('méxico')) return 'mex.1';
+  if (l.includes('mls')) return 'usa.1';
+  return null;
+}
+
 export async function autoVerifyResultsWithAPIs(sportFilter = null) {
   const tgSync = await syncTelegramLedgerToHistory();
   const history = getHistory(sportFilter);
@@ -1124,7 +1146,7 @@ export async function autoVerifyResultsWithAPIs(sportFilter = null) {
   if (pendingSports.has('futbol')) {
     // Detectar qué ligas específicas están en las apuestas pendientes
     const allSoccerLeagues = [
-      'uefa.champions', 'uefa.europa', 'uefa.europa.conf',
+      'uefa.champions', 'uefa.wchampions', 'uefa.europa', 'uefa.europa.conf',
       'esp.1', 'eng.1', 'ita.1', 'ger.1', 'fra.1', 'mex.1',
       'mex.w.1', 'usa.nwsl', 'conmebol.libertadores',
       'usa.1', 'ksa.1', 'por.1', 'ned.1', 'arg.1', 'bra.1'
@@ -1133,16 +1155,9 @@ export async function autoVerifyResultsWithAPIs(sportFilter = null) {
     const targetLeagues = new Set();
     pendingItems.forEach(i => {
       if ((i.sport || 'futbol') === 'futbol') {
-        const itemLeague = (i.match?.league || i.match?.tournament || '').toLowerCase();
-        if (itemLeague.includes('champion')) targetLeagues.add('uefa.champions');
-        else if (itemLeague.includes('europa')) targetLeagues.add('uefa.europa');
-        else if (itemLeague.includes('premier') || itemLeague.includes('inglaterra')) targetLeagues.add('eng.1');
-        else if (itemLeague.includes('laliga') || itemLeague.includes('españa') || itemLeague.includes('espana')) targetLeagues.add('esp.1');
-        else if (itemLeague.includes('serie a') || itemLeague.includes('italia')) targetLeagues.add('ita.1');
-        else if (itemLeague.includes('bundesliga') || itemLeague.includes('alemania')) targetLeagues.add('ger.1');
-        else if (itemLeague.includes('ligue 1') || itemLeague.includes('francia')) targetLeagues.add('fra.1');
-        else if (itemLeague.includes('liga mx') || itemLeague.includes('mexico') || itemLeague.includes('méxico')) targetLeagues.add('mex.1');
-        else if (itemLeague.includes('mls')) targetLeagues.add('usa.1');
+        const itemLeague = (i.match?.league || i.match?.tournament || '');
+        const slug = espnSoccerLeagueForName(itemLeague);
+        if (slug) targetLeagues.add(slug);
       }
     });
 

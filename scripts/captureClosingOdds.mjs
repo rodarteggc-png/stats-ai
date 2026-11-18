@@ -102,8 +102,11 @@ const SOCCER_LEAGUES = [
   { match: ['eredivisie'], espn: 'ned.1', name: 'Eredivisie' },
   { match: ['liga portugal', 'primeira'], espn: 'por.1', name: 'Liga Portugal' },
   { match: ['championship'], espn: 'eng.2', name: 'Championship' },
-  { match: ['champions league'], espn: 'uefa.champions', name: 'Champions League' },
+  // La femenil VA ANTES que la genérica 'champions league': espnLeagueFor
+  // devuelve la PRIMERA coincidencia y "UEFA Women's Champions League"
+  // contiene 'champions league'; sin este orden caería en uefa.champions.
   { match: ["women's champions", 'womens champions', 'uefa women'], espn: 'uefa.wchampions', name: "UEFA Women's Champions League" },
+  { match: ['champions league'], espn: 'uefa.champions', name: 'Champions League' },
   { match: ['mls'], espn: 'usa.1', name: 'MLS' },
   { match: ['liga mx femenil'], espn: 'mex.w.1', name: 'Liga MX Femenil' },
   { match: ['liga mx'], espn: 'mex.1', name: 'Liga MX' },
