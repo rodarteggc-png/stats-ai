@@ -74,6 +74,10 @@ async function sendReport(report, chatId, keyboard) {
   if (chunk && !await sendTelegramMessage(chunk, false, chatId, keyboard)) throw new Error('No se pudo entregar el reporte.');
 }
 
+export function getVipScanWindow(isPrivateVip) {
+  return isPrivateVip ? { dateRange: 'hoy_y_manana', maxHoursAhead: 12 } : {};
+}
+
 export default async function handler(req, res) {
   // Telegram envía las actualizaciones vía método POST
   if (req.method !== 'POST') {
@@ -103,6 +107,7 @@ export default async function handler(req, res) {
       ? Number(process.env.TELEGRAM_VIP_CHAT_ID)
       : 1258878024;
     const isPrivateVip = senderId === VIP_CHAT_ID && chatId === VIP_CHAT_ID && message?.chat?.type === 'private';
+    const scanWindow = getVipScanWindow(isPrivateVip);
     const KEYBOARD_MENU = isPrivateVip ? {
       ...BASE_KEYBOARD_MENU,
       keyboard: [
@@ -247,17 +252,27 @@ export default async function handler(req, res) {
       const sportLabel = sportNames[targetSport] || targetSport.toUpperCase();
 
       await sendTelegramMessage(
-        `⏳ *Escaneando ${sportLabel} en tiempo real...*\n🔬 _Consultando cuotas Pinnacle en API-Sports, métricas avanzadas y simulación Monte Carlo 10k... Recibirás el análisis individual a continuación._`,
+        isPrivateVip
+          ? `⏳ *Escaneando ${sportLabel} | Próximas ${scanWindow.maxHoursAhead} h...*\n🔬 _Consultando calendarios y cuotas disponibles._`
+          : `⏳ *Escaneando ${sportLabel} en tiempo real...*\n🔬 _Consultando cuotas Pinnacle en API-Sports, métricas avanzadas y simulación Monte Carlo 10k... Recibirás el análisis individual a continuación._`,
         false,
         chatId,
         KEYBOARD_MENU
       );
 
       try {
-        const result = await runAlertEngine({ force: true, vip: true, sport: targetSport, skipAudit: true, targetChatId: chatId });
+        const result = await runAlertEngine({ ...scanWindow, force: true, vip: true, sport: targetSport, skipAudit: true, targetChatId: chatId });
         if (result.sentCount === 0) {
+          const reason = result.skipped
+            ? `Escaneo sin despacho: ${result.skipped}.`
+            : result.toSend?.length
+              ? 'Hubo selecciones, pero no se confirmó su envío.'
+              : 'No hubo selecciones aprobadas con los datos disponibles. Puede haber partidos sin cuota utilizable.';
+          const warnings = result.scheduleWarnings?.length ? `\nCobertura parcial: ${result.scheduleWarnings.join('; ')}.` : '';
           await sendTelegramMessage(
-            `✅ *Mercado al día en ${sportLabel}:*\nNo se encontraron selecciones que superen los 5 Candados de Veto (+EV) en este momento o los partidos de hoy ya concluyeron.`,
+            isPrivateVip
+              ? `*${sportLabel} | Próximas ${scanWindow.maxHoursAhead} h*\n${reason}${warnings}`
+              : `✅ *Mercado al día en ${sportLabel}:*\nNo se encontraron selecciones que superen los 5 Candados de Veto (+EV) en este momento o los partidos de hoy ya concluyeron.`,
             false,
             chatId,
             KEYBOARD_MENU
@@ -313,7 +328,7 @@ export default async function handler(req, res) {
     if (command === '/cheatsheet' || command === 'cheatsheet' || command === '/hoja' || command === 'hoja' || command === '4') {
       await sendTelegramMessage('⏳ *Generando Cheatsheet VIP de Alto Impacto...*', false, chatId, KEYBOARD_MENU);
       try {
-        const result = await runAlertEngine({ force: true, vip: true, sport: 'all', skipAudit: true, targetChatId: chatId, dryRun: true });
+        const result = await runAlertEngine({ ...scanWindow, force: true, vip: true, sport: 'all', skipAudit: true, targetChatId: chatId, dryRun: true });
         const candidates = (result.toSend && result.toSend.length > 0) ? result.toSend : (result.approvedOpps || []);
         const todayStr = new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'America/Mexico_City' }).toUpperCase();
         const cheatsheetMsg = generateCheatsheetReport(candidates, todayStr);

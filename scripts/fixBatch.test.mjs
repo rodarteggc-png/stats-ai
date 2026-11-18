@@ -23,6 +23,7 @@ import {
 import { setLiveNbaRatings, clearLiveNbaRatings } from '../src/utils/hoops.js';
 import { clearNbaRatingsCache } from '../src/services/nbaRatings.js';
 import scanHandler from '../api/scan.js';
+import { getVipScanWindow } from '../api/webhook.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DATA_DIR = path.join(ROOT, 'data');
@@ -338,8 +339,7 @@ function nbaScoreboardMock(gameDate) {
   };
 }
 
-async function runNbaDryRun({ withAi }) {
-  const gameDate = new Date(Date.now() + 2 * 3600000).toISOString();
+async function runNbaDryRun({ withAi, gameDate = new Date(Date.now() + 2 * 3600000).toISOString(), scanWindow = { maxHoursAhead: 48 } }) {
   const calls = [];
   const handler = async (input, opts) => {
     const url = String(input);
@@ -372,7 +372,7 @@ async function runNbaDryRun({ withAi }) {
     };
     const result = await withEnv(envPatch, () =>
       withMockFetch(handler, () =>
-        runAlertEngine({ force: true, vip: true, sport: 'nba', skipAudit: true, dryRun: true, maxHoursAhead: 48 })));
+        runAlertEngine({ force: true, vip: true, sport: 'nba', skipAudit: true, dryRun: true, ...scanWindow })));
     return { result, calls, ledgerBefore, ledgerFile };
   } finally {
     clearLiveNbaRatings();
@@ -380,6 +380,20 @@ async function runNbaDryRun({ withAi }) {
     restoreFile(shiftLog, logBackup);
   }
 }
+
+test('solo el VIP privado usa 12 horas sin ampliar el turno matutino', async (context) => {
+  context.mock.timers.enable({ apis: ['Date'], now: new Date('2026-11-18T18:48:00Z') });
+  assert.deepEqual(getVipScanWindow(false), {});
+  const gameDate = '2026-11-19T00:00:00Z';
+  const scheduled = await runNbaDryRun({ withAi: false, gameDate, scanWindow: { shift: 'matutino' } });
+  assert.equal(scheduled.result.sentCount, 0);
+  const manual = await runNbaDryRun({ withAi: false, gameDate, scanWindow: getVipScanWindow(true) });
+  assert.equal(manual.result.sentCount, 1);
+  assert.equal(Date.parse(manual.result.toSend[0].gameDate), Date.parse(gameDate));
+  context.mock.timers.setTime(Date.parse('2026-11-18T19:04:00Z'));
+  const tooLate = await runNbaDryRun({ withAi: false, gameDate: '2026-11-19T07:05:00Z', scanWindow: getVipScanWindow(true) });
+  assert.equal(tooLate.result.sentCount, 0);
+});
 
 test('C4: dry-run clásico no registra en el ledger ni espeja LEDGER al canal', async () => {
   const { result, calls, ledgerBefore, ledgerFile } = await runNbaDryRun({ withAi: false });
