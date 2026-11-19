@@ -10,13 +10,14 @@ const ALLOWED = {
 };
 const MAX_BODY_BYTES = 200 * 1024;
 
-// Orden de respaldo tras el modelo pedido: los de mayor capacidad gratuita
-// (2.0/1.5-flash, 1,500 req/día) primero, luego el resto. El modelo pedido
-// siempre se prueba primero.
-export const GEMINI_FALLBACK_ORDER = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-3.6-flash', 'gemini-3.8-flash'];
-const MAX_ATTEMPTS = 4; // modelo pedido + 3 respaldos
+// Orden de respaldo tras el modelo pedido: los modelos más nuevos primero.
+// gemini-2.0-flash fue RETIRADO por Google (404 NOT_FOUND, verificado en vivo
+// 2026-11-19) y NO está en la cascada. Un 404 también dispara el respaldo,
+// así que un modelo retirado se salta automáticamente.
+export const GEMINI_FALLBACK_ORDER = ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-1.5-flash'];
+const MAX_ATTEMPTS = 5; // modelo pedido + 4 respaldos
 const FIRST_ATTEMPT_TIMEOUT_MS = 15000;
-const FALLBACK_TIMEOUT_MS = 10000;
+const FALLBACK_TIMEOUT_MS = 8000;
 
 const FALLBACK_GEMINI_KEY = ''; // Sin llave en el codigo: solo GEMINI_API_KEY en variables de entorno.
 
@@ -79,8 +80,9 @@ export default async function handler(req, res) {
       if (status >= 200 && status < 300) {
         return res.status(status).json(data);
       }
-      // 503 (saturado) o 429 (cuota) -> probar el siguiente modelo.
-      if (status === 503 || status === 429) {
+      // 503 (saturado), 429 (cuota) o 404 (modelo retirado/no existe) ->
+      // probar el siguiente modelo.
+      if (status === 503 || status === 429 || status === 404) {
         lastUpstreamStatus = status;
         continue;
       }

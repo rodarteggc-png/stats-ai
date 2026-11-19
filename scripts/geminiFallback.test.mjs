@@ -51,7 +51,7 @@ function okResponse(text) {
   });
 }
 
-test('Fallback: 3.8-flash saturado (503) -> responde 2.0-flash', async () => {
+test('Fallback: 3.8-flash saturado (503) -> responde 3.6-flash', async () => {
   await withEnv({ PORTAL_ACCESS_TOKEN: undefined, GEMINI_API_KEY: 'test-key' }, async () => {
     const calls = [];
     await withMockFetch(async (url) => {
@@ -69,7 +69,7 @@ test('Fallback: 3.8-flash saturado (503) -> responde 2.0-flash', async () => {
       assert.equal(res.body.candidates[0].content.parts[0].text, 'respuesta de respaldo');
       assert.equal(calls.length, 2, `se esperaban 2 llamadas (3.8 y respaldo), hay ${calls.length}`);
       assert.ok(calls[0].includes('gemini-3.8-flash'), 'la primera llamada debe ser al modelo pedido');
-      assert.ok(calls[1].includes('gemini-2.0-flash'), `el respaldo debe ser 2.0-flash, es: ${calls[1]}`);
+      assert.ok(calls[1].includes('gemini-3.6-flash'), `el respaldo debe ser 3.6-flash, es: ${calls[1]}`);
     });
   });
 });
@@ -127,6 +127,27 @@ test('Sin fallback: un 400 no prueba otro modelo', async () => {
   });
 });
 
+test('Fallback: 404 (modelo retirado) también dispara el respaldo', async () => {
+  await withEnv({ PORTAL_ACCESS_TOKEN: undefined, GEMINI_API_KEY: 'test-key' }, async () => {
+    const calls = [];
+    await withMockFetch(async (url) => {
+      calls.push(String(url));
+      if (url.includes('gemini-3.8-flash')) {
+        return new Response(JSON.stringify({ error: { message: 'This model is no longer available.' } }), {
+          status: 404, headers: { 'content-type': 'application/json' },
+        });
+      }
+      return okResponse('ok tras 404');
+    }, async () => {
+      const res = mockRes();
+      await geminiHandler({ method: 'POST', headers: {}, body: BODY }, res);
+      assert.equal(res.statusCode, 200);
+      assert.equal(calls.length, 2);
+      assert.ok(calls[1].includes('gemini-3.6-flash'));
+    });
+  });
+});
+
 test('Todos saturados: devuelve 503 con la lista de modelos probados', async () => {
   await withEnv({ PORTAL_ACCESS_TOKEN: undefined, GEMINI_API_KEY: 'test-key' }, async () => {
     const calls = [];
@@ -139,17 +160,19 @@ test('Todos saturados: devuelve 503 con la lista de modelos probados', async () 
       const res = mockRes();
       await geminiHandler({ method: 'POST', headers: {}, body: BODY }, res);
       assert.equal(res.statusCode, 503);
-      assert.equal(calls.length, 4, 'máximo 4 intentos (pedido + 3 respaldos)');
+      assert.equal(calls.length, 5, 'máximo 5 intentos (pedido + 4 respaldos)');
       assert.ok(Array.isArray(res.body.triedModels), 'la respuesta debe listar los modelos probados');
       assert.equal(res.body.triedModels[0], 'gemini-3.8-flash', 'el primero es el modelo pedido');
-      assert.ok(res.body.triedModels.includes('gemini-2.0-flash'), 'el respaldo debe incluir 2.0-flash');
+      assert.ok(res.body.triedModels.includes('gemini-3.6-flash'), 'el respaldo debe incluir 3.6-flash');
+      assert.ok(!res.body.triedModels.includes('gemini-2.0-flash'), '2.0-flash está retirado, no debe estar en la cascada');
       assert.match(res.body.error, /saturados o sin cuota/);
     });
   });
 });
 
 test('La cascada respeta el modelo pedido primero y no lo repite', () => {
-  assert.ok(GEMINI_FALLBACK_ORDER.includes('gemini-2.0-flash'), '2.0-flash debe estar en la cascada');
-  assert.ok(GEMINI_FALLBACK_ORDER.includes('gemini-1.5-flash'), '1.5-flash debe estar en la cascada');
-  assert.equal(GEMINI_FALLBACK_ORDER[0], 'gemini-2.0-flash', 'el primer respaldo es el de mayor capacidad');
+  assert.ok(GEMINI_FALLBACK_ORDER.includes('gemini-3.6-flash'), '3.6-flash debe estar en la cascada');
+  assert.ok(GEMINI_FALLBACK_ORDER.includes('gemini-3.5-flash'), '3.5-flash debe estar en la cascada');
+  assert.ok(!GEMINI_FALLBACK_ORDER.includes('gemini-2.0-flash'), '2.0-flash está retirado por Google (404 verificado en vivo 2026-11-19), no debe estar en la cascada');
+  assert.equal(GEMINI_FALLBACK_ORDER[0], 'gemini-3.6-flash', 'el primer respaldo es el modelo 3.x más nuevo disponible');
 });
