@@ -124,6 +124,15 @@ export function calculateMatchProbabilities(
   let under25 = 0;
   let over35 = 0;
   let under35 = 0;
+  // Líneas altas (Fase 2, 2026-11-19): el mercado de totales no siempre es 2.5
+  // (UWCL: 3.5/4.5/6.5). Se suman sobre la misma matriz de marcadores, sin
+  // cambiar ningún parámetro de Poisson/Dixon-Coles ni las probs existentes.
+  let over45 = 0;
+  let under45 = 0;
+  let over55 = 0;
+  let under55 = 0;
+  let over65 = 0;
+  let under65 = 0;
   let bttsYes = 0;
   let bttsNo = 0;
 
@@ -151,6 +160,15 @@ export function calculateMatchProbabilities(
 
       if (i + j > 3.5) over35 += prob;
       else under35 += prob;
+
+      if (i + j > 4.5) over45 += prob;
+      else under45 += prob;
+
+      if (i + j > 5.5) over55 += prob;
+      else under55 += prob;
+
+      if (i + j > 6.5) over65 += prob;
+      else under65 += prob;
       
       if (i > 0 && j > 0) bttsYes += prob;
       else bttsNo += prob;
@@ -169,6 +187,15 @@ export function calculateMatchProbabilities(
 
   const totalOu35 = over35 + under35;
   over35 /= totalOu35; under35 /= totalOu35;
+
+  const totalOu45 = over45 + under45;
+  over45 /= totalOu45; under45 /= totalOu45;
+
+  const totalOu55 = over55 + under55;
+  over55 /= totalOu55; under55 /= totalOu55;
+
+  const totalOu65 = over65 + under65;
+  over65 /= totalOu65; under65 /= totalOu65;
   
   const totalBtts = bttsYes + bttsNo;
   bttsYes /= totalBtts; bttsNo /= totalBtts;
@@ -217,6 +244,12 @@ export function calculateMatchProbabilities(
     under25: (under25 * 100).toFixed(1),
     over35: (over35 * 100).toFixed(1),
     under35: (under35 * 100).toFixed(1),
+    over45: (over45 * 100).toFixed(1),
+    under45: (under45 * 100).toFixed(1),
+    over55: (over55 * 100).toFixed(1),
+    under55: (under55 * 100).toFixed(1),
+    over65: (over65 * 100).toFixed(1),
+    under65: (under65 * 100).toFixed(1),
     bttsYes: (bttsYes * 100).toFixed(1),
     bttsNo: (bttsNo * 100).toFixed(1),
     dnb,

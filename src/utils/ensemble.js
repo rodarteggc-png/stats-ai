@@ -93,7 +93,12 @@ export function evaluateEnsembleConsensus({
         vote1Reason = `Cuota fuera de rango rentable (${numericOdds.toFixed(2)}) o cobertura insuficiente.`;
       }
     } else if (isTotalsPick) {
-      const isOver25 = (typeof pick === 'string' && (pick.toLowerCase().includes('más de 2.5') || pick.toLowerCase().includes('over 2.5'))) || pTypeUpper.includes('OVER 2.5');
+      // Candado 2 (2026-11-19): el veto de derbi/liga defensiva antes solo
+      // cubría 'OVER 2.5'. Ahora el motor evalúa la línea del mercado (3.5,
+      // 4.5, 6.5...), así que el veto cubre cualquier OVER en derbi o liga
+      // defensiva — la razón es la misma (los derbis son de bajo ritmo) y un
+      // OVER de línea alta en un derbi es aún más riesgoso. No se relaja nada.
+      const isOverTotals = isTotalsPick && ((typeof pick === 'string' && pick.toLowerCase().includes('over')) || pTypeUpper.includes('OVER'));
       const hName = (match.home?.name || '').toLowerCase();
       const aName = (match.away?.name || '').toLowerCase();
       const lName = (match.league || '').toLowerCase();
@@ -121,10 +126,10 @@ export function evaluateEnsembleConsensus({
 
       const isDefensiveLeague = lName.includes('liga mx') || lName.includes('femenil') || lName.includes('serie a') || lName.includes('ligue 1');
 
-      if (isOver25 && isDerbyOrClasico) {
+      if (isOverTotals && isDerbyOrClasico) {
         vote1Passed = false;
         vote1Reason = `⛔ Veto Táctico Derbi/Clásico: 'Más de 2.5 Goles' vetado en duelos de máxima rivalidad. Bloques bajos y tensión táctica reducen el ritmo. Exige Más de 1.5 o 1X/X2.`;
-      } else if (isOver25 && isDefensiveLeague && numericOdds >= 2.00) {
+      } else if (isOverTotals && isDefensiveLeague && numericOdds >= 2.00) {
         vote1Passed = false;
         vote1Reason = `⛔ Veto Liga Defensiva: 'Más de 2.5 Goles' a cuota ${numericOdds.toFixed(2)} (> 2.00) en liga de baja anotación. Falso valor con alta varianza negativa.`;
       } else if (parseFloat(prob) >= 54 || totalXg >= 2.75 || edgeVal >= 3.0) {

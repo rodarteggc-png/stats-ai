@@ -2073,20 +2073,38 @@ export function buildOpportunitiesAndTopSlate({
       });
     }
 
-    // 5. EVALUACIÓN DE TOTALES (OVER / UNDER 2.5 GOLES) EN FÚTBOL TIER 1
-    const calOver = parseFloat(probs.over25 || 50);
-    const calUnder = parseFloat(probs.under25 || 50);
-    // Solo se usan cuotas reales si la línea del libro es exactamente 2.5 (2.25/2.75/3.0 son otro mercado)
-    const isLine25 = parseFloat(m.vegas?.overUnder) === 2.5;
-    const realOver = isLine25 ? parseFloat(m.vegas?.overOdds || m.market?.overOdds) : NaN;
-    const realUnder = isLine25 ? parseFloat(m.vegas?.underOdds || m.market?.underOdds) : NaN;
+    // 5. EVALUACIÓN DE TOTALES (OVER / UNDER) EN FÚTBOL TIER 1 — LÍNEA DEL MERCADO
+    // Antes solo se evaluaba la línea 2.5 y solo se usaba cuota real si la línea
+    // era exactamente 2.5. Ahora se evalúa la línea que realmente ofrece el
+    // mercado y la probabilidad del modelo para ESA línea (1.5/2.5/3.5 ya
+    // existían en Poisson y Monte Carlo; 4.5/5.5/6.5 se agregan en Fase 2 —
+    // aditivo, sin cambiar ninguna probabilidad existente). La cuota viene de
+    // la misma fuente que la línea: Pinnacle (m.vegas, sharp) primero,
+    // ESPN/DraftKings (m.market) de respaldo. Si la línea no es una línea
+    // soportada (p. ej. 2.75 asiática), no se usa cuota real (fail-closed).
+    const SUPPORTED_TOTAL_LINES = [1.5, 2.5, 3.5, 4.5, 5.5, 6.5];
+    const sharpLine = parseFloat(m.vegas?.overUnder);
+    const espnLine = parseFloat(m.market?.totalClose);
+    const marketLineRaw = Number.isFinite(sharpLine) ? sharpLine : espnLine;
+    const lineIsSupported = SUPPORTED_TOTAL_LINES.includes(marketLineRaw);
+    const marketLine = lineIsSupported ? marketLineRaw : 2.5;
+    const useSharpLine = Number.isFinite(sharpLine);
+    const realOver = lineIsSupported ? (useSharpLine ? parseFloat(m.vegas?.overOdds) : parseFloat(m.market?.overOdds)) : NaN;
+    const realUnder = lineIsSupported ? (useSharpLine ? parseFloat(m.vegas?.underOdds) : parseFloat(m.market?.underOdds)) : NaN;
+    const lineKey = String(marketLine).replace('.', '');
+    const calOver = parseFloat(probs[`over${lineKey}`] ?? probs.over25 ?? 50);
+    const calUnder = parseFloat(probs[`under${lineKey}`] ?? probs.under25 ?? 50);
     const overOddsDec = realOver > 1 ? realOver : 1.90;
     const underOddsDec = realUnder > 1 ? realUnder : 1.90;
     const totalsOddsSource = (realOver > 1 && realUnder > 1) ? 'market' : 'model';
     const totalsNoVig = totalsOddsSource === 'market' ? removeVig([overOddsDec, underOddsDec]) : null;
+    // Umbrales de xG escalados con la línea (en 2.5 quedan igual que antes:
+    // UNDER <= 2.25, OVER >= 2.85).
+    const underXgCap = marketLine - 0.25;
+    const overXgFloor = marketLine + 0.35;
 
-    // A) UNDER 2.5 Goles: Ritmo defensivo / bajo xG combinado (<= 2.25) con probabilidad >= 60%
-    if (calUnder >= 60.0 && (hXgNum + aXgNum) <= 2.25 && underOddsDec >= 1.60 && underOddsDec <= 2.20 && mc.riskLevel !== 'Alto') {
+    // A) UNDER (línea del mercado): Ritmo defensivo / bajo xG combinado con probabilidad >= 60%
+    if (calUnder >= 60.0 && (hXgNum + aXgNum) <= underXgCap && underOddsDec >= 1.60 && underOddsDec <= 2.20 && mc.riskLevel !== 'Alto') {
       const impliedUnder = (1 / underOddsDec) * 100;
       const underEdge = calUnder - impliedUnder;
       if (underEdge >= 3.0) {
@@ -2097,21 +2115,21 @@ export function buildOpportunitiesAndTopSlate({
           game: `${m.home.name} vs ${m.away.name}`,
           gameDate: m.gameDate,
           type: '💨 TOTALES FÚTBOL (VALOR UNDER)',
-          pick: 'UNDER 2.5 Goles',
+          pick: `UNDER ${marketLine} Goles`,
           prob: `${calUnder.toFixed(0)}%`,
           odds: underOddsDec.toFixed(2),
           oddsSource: totalsOddsSource,
           marketNoVigProb: totalsNoVig ? totalsNoVig.probs[1] * 100 : undefined,
           edgeVal: underEdge,
-          edgeStr: `Under 2.5: ${calUnder.toFixed(0)}% | Edge: +${underEdge.toFixed(1)}%`,
-          argument: `Duelo de bajo ritmo y defensas cerradas (xG combinado de ${(hXgNum + aXgNum).toFixed(2)} goles). Simulación Monte Carlo y Poisson proyectan partido táctico con menos de 3 anotaciones.`,
+          edgeStr: `Under ${marketLine}: ${calUnder.toFixed(0)}% | Edge: +${underEdge.toFixed(1)}%`,
+          argument: `Duelo de bajo ritmo y defensas cerradas (xG combinado de ${(hXgNum + aXgNum).toFixed(2)} goles). Simulación Monte Carlo y Poisson proyectan partido táctico con menos de ${marketLine + 0.5} anotaciones.`,
           mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel, iterations: 10000 },
           match: m,
           probs: probs
         });
       }
-    } else if (calOver >= 60.0 && (hXgNum + aXgNum) >= 2.85 && overOddsDec >= 1.60 && overOddsDec <= 2.20 && mc.riskLevel !== 'Alto') {
-      // B) OVER 2.5 Goles: Ataques de alto volumen (Candado 2 anti-derbi se evalúa en ensembleConsensus)
+    } else if (calOver >= 60.0 && (hXgNum + aXgNum) >= overXgFloor && overOddsDec >= 1.60 && overOddsDec <= 2.20 && mc.riskLevel !== 'Alto') {
+      // B) OVER (línea del mercado): Ataques de alto volumen (Candado 2 anti-derbi se evalúa en ensembleConsensus)
       const impliedOver = (1 / overOddsDec) * 100;
       const overEdge = calOver - impliedOver;
       if (overEdge >= 3.0) {
@@ -2122,13 +2140,13 @@ export function buildOpportunitiesAndTopSlate({
           game: `${m.home.name} vs ${m.away.name}`,
           gameDate: m.gameDate,
           type: '🔥 TOTALES FÚTBOL (VALOR OVER)',
-          pick: 'OVER 2.5 Goles',
+          pick: `OVER ${marketLine} Goles`,
           prob: `${calOver.toFixed(0)}%`,
           odds: overOddsDec.toFixed(2),
           oddsSource: totalsOddsSource,
           marketNoVigProb: totalsNoVig ? totalsNoVig.probs[0] * 100 : undefined,
           edgeVal: overEdge,
-          edgeStr: `Over 2.5: ${calOver.toFixed(0)}% | Edge: +${overEdge.toFixed(1)}%`,
+          edgeStr: `Over ${marketLine}: ${calOver.toFixed(0)}% | Edge: +${overEdge.toFixed(1)}%`,
           argument: `Generación ofensiva bilateral masiva (${(hXgNum + aXgNum).toFixed(2)} xG combinados). Proyección matemática supera la cuota de Las Vegas con +${overEdge.toFixed(1)}% de ventaja.`,
           mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel, iterations: 10000 },
           match: m,

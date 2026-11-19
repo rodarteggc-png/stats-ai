@@ -82,6 +82,10 @@ export function simulateSoccerMatch(homeXg, awayXg, iterations = 10000) {
   let over15 = 0;
   let over25 = 0;
   let over35 = 0;
+  // Líneas altas (Fase 2, 2026-11-19): misma simulación, nuevos contadores.
+  let over45 = 0;
+  let over55 = 0;
+  let over65 = 0;
   let btts = 0;
   let homeMinus15 = 0;
   let awayMinus15 = 0;
@@ -139,6 +143,9 @@ export function simulateSoccerMatch(homeXg, awayXg, iterations = 10000) {
     if (totalGoals > 1.5) over15++;
     if (totalGoals > 2.5) over25++;
     if (totalGoals > 3.5) over35++;
+    if (totalGoals > 4.5) over45++;
+    if (totalGoals > 5.5) over55++;
+    if (totalGoals > 6.5) over65++;
     if (hGoals > 0 && aGoals > 0) btts++;
 
     // Medir colapso real del favorito (derrota directa = 1.0, empate = 0.45)
@@ -157,6 +164,9 @@ export function simulateSoccerMatch(homeXg, awayXg, iterations = 10000) {
   const o15Prob = Number(((over15 / numIterations) * 100).toFixed(1));
   const o25Prob = Number(((over25 / numIterations) * 100).toFixed(1));
   const o35Prob = Number(((over35 / numIterations) * 100).toFixed(1));
+  const o45Prob = Number(((over45 / numIterations) * 100).toFixed(1));
+  const o55Prob = Number(((over55 / numIterations) * 100).toFixed(1));
+  const o65Prob = Number(((over65 / numIterations) * 100).toFixed(1));
   const bttsProb = Number(((btts / numIterations) * 100).toFixed(1));
   const hMinus15Prob = Number(((homeMinus15 / numIterations) * 100).toFixed(1));
   const aMinus15Prob = Number(((awayMinus15 / numIterations) * 100).toFixed(1));
@@ -188,6 +198,9 @@ export function simulateSoccerMatch(homeXg, awayXg, iterations = 10000) {
     over15Prob: o15Prob,
     over25Prob: o25Prob,
     over35Prob: o35Prob,
+    over45Prob: o45Prob,
+    over55Prob: o55Prob,
+    over65Prob: o65Prob,
     bttsProb: bttsProb,
     homeMinus15Prob: hMinus15Prob,
     awayMinus15Prob: aMinus15Prob,
