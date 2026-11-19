@@ -1,11 +1,49 @@
 // api/gemini.js - Proxy server-side de Gemini: la llave nunca viaja al navegador.
+// Cascada de modelos (2026-11-19): si el modelo pedido devuelve 503 (saturado)
+// o 429 (cuota), el proxy prueba automáticamente el siguiente modelo, sin que
+// el navegador tenga que reintentar. Es el arreglo al error "This model is
+// currently experiencing high demand" del simulador manual (gemini-3.8-flash
+// saturado). La llave nunca viaja al navegador.
 const ALLOWED = {
   generateContent: new Set(['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']),
   embedContent: new Set(['text-embedding-004'])
 };
 const MAX_BODY_BYTES = 200 * 1024;
 
+// Orden de respaldo tras el modelo pedido: los de mayor capacidad gratuita
+// (2.0/1.5-flash, 1,500 req/día) primero, luego el resto. El modelo pedido
+// siempre se prueba primero.
+export const GEMINI_FALLBACK_ORDER = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-3.6-flash', 'gemini-3.8-flash'];
+const MAX_ATTEMPTS = 4; // modelo pedido + 3 respaldos
+const FIRST_ATTEMPT_TIMEOUT_MS = 15000;
+const FALLBACK_TIMEOUT_MS = 10000;
+
 const FALLBACK_GEMINI_KEY = ''; // Sin llave en el codigo: solo GEMINI_API_KEY en variables de entorno.
+
+function cascadeFor(requestedModel) {
+  const rest = GEMINI_FALLBACK_ORDER.filter((m) => m !== requestedModel);
+  return [requestedModel, ...rest].slice(0, MAX_ATTEMPTS);
+}
+
+async function callUpstream(model, op, payload, geminiKey, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const upstream = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:${op}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiKey },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      }
+    );
+    const data = await upstream.json().catch(() => ({}));
+    return { status: upstream.status, data };
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -30,22 +68,36 @@ export default async function handler(req, res) {
     return res.status(413).json({ error: 'Payload demasiado grande.' });
   }
 
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 45000);
-    const upstream = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:${op}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiKey },
-        body: JSON.stringify(payload),
-        signal: controller.signal
+  // Solo generateContent tiene cascada; embedContent usa el modelo pedido.
+  const models = op === 'generateContent' ? cascadeFor(model) : [model];
+  let lastUpstreamStatus = null;
+  for (let i = 0; i < models.length; i++) {
+    const attemptModel = models[i];
+    const timeoutMs = i === 0 ? FIRST_ATTEMPT_TIMEOUT_MS : FALLBACK_TIMEOUT_MS;
+    try {
+      const { status, data } = await callUpstream(attemptModel, op, payload, geminiKey, timeoutMs);
+      if (status >= 200 && status < 300) {
+        return res.status(status).json(data);
       }
-    ).finally(() => clearTimeout(timer));
-    const data = await upstream.json();
-    return res.status(upstream.status).json(data);
-  } catch (err) {
-    console.error('Error en proxy Gemini:', err.message);
-    return res.status(502).json({ error: 'Fallo consultando el proveedor de IA.' });
+      // 503 (saturado) o 429 (cuota) -> probar el siguiente modelo.
+      if (status === 503 || status === 429) {
+        lastUpstreamStatus = status;
+        continue;
+      }
+      // Cualquier otro error (400/401/403/...) es del cliente o de config:
+      // no tiene sentido probar otro modelo.
+      return res.status(status).json(data);
+    } catch (err) {
+      // Timeout o fallo de red: probar el siguiente modelo.
+      lastUpstreamStatus = 502;
+      console.error(`Error en proxy Gemini (${attemptModel}):`, err.message);
+      continue;
+    }
   }
+  // Todos los modelos fallaron por saturación/cuota.
+  return res.status(503).json({
+    error: `Todos los modelos de IA están saturados o sin cuota (${models.join(', ')}). Inténtalo de nuevo en unos minutos.`,
+    triedModels: models,
+    lastUpstreamStatus,
+  });
 }
