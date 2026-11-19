@@ -1850,16 +1850,28 @@ export default function App() {
       llmPrompt += `\n${historicalContext}\n\nRedacta el Análisis Profundo del Pick oficial en 3 bloques siguiendo las instrucciones.`;
 
       setStep("🤖 Generando Radiografía Cuantitativa & Análisis Profundo con Gemini...");
-      const { ok: llmOk, data: llmData } = await callGemini(MODEL, "generateContent", {
-        systemInstruction: { parts: [{ text: buildSystemPrompt() }] },
-        contents: [{ role: "user", parts: [{ text: llmPrompt }] }],
-        generationConfig: { temperature: 0.4 }
-      });
+      // La narrativa de Gemini es un adorno: si falla (saturación 503, cuota
+      // 429, modelo retirado 404 o error de red), la simulación NO se pierde.
+      // Se muestra el resultado matemático completo con un aviso (2026-11-19).
+      let llmText = "";
+      let aiNarrativeFailed = false;
+      try {
+        const { ok: llmOk, data: llmData } = await callGemini(MODEL, "generateContent", {
+          systemInstruction: { parts: [{ text: buildSystemPrompt() }] },
+          contents: [{ role: "user", parts: [{ text: llmPrompt }] }],
+          generationConfig: { temperature: 0.4 }
+        });
+        if (!llmOk) throw new Error(llmData.error?.message || llmData.error || "Error en Gemini API");
+        llmText = llmData.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        if (!llmText.trim()) throw new Error("Gemini devolvió una respuesta vacía.");
+      } catch (geminiErr) {
+        console.warn('Narrativa Gemini no disponible, se muestra solo el resultado matemático:', geminiErr.message);
+        aiNarrativeFailed = true;
+      }
 
-      if (!llmOk) throw new Error(llmData.error?.message || llmData.error || "Error en Gemini API");
-      const llmText = llmData.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      
-      const tweets = llmText.split('---').map(t => t.trim()).filter(t => t.length > 0);
+      const tweets = aiNarrativeFailed
+        ? ['⚠️ Análisis de IA no disponible (Gemini saturado o sin cuota). El resultado matemático de esta simulación es completo: probabilidad, consenso y stake están calculados y se muestran en esta tarjeta.']
+        : llmText.split('---').map(t => t.trim()).filter(t => t.length > 0);
 
       // Evaluar Consenso Tripartito 3v1 y Kelly Stake también en el Simulador Manual
       let simMcStats = { stability: 65, risk: 'Medio' };
@@ -1929,6 +1941,7 @@ export default function App() {
         tweets, 
         consensus: simConsensus,
         learnedLessons: learned.lessons,
+        aiNarrativeFailed,
         style: { bg: backgroundColor, accent: accentColor } 
       });
 
@@ -3754,6 +3767,11 @@ export default function App() {
                   <div style={{ padding: "8px 16px", background: "#1e293b", color: "#e2e8f0", borderRadius: 6, fontWeight: 700, display: "inline-block" }}>
                     📊 Radiografía Cuantitativa & Análisis Profundo del Pick (IA Big Data)
                   </div>
+                  {analysisResult.aiNarrativeFailed && (
+                    <div style={{ background: "#451a03", border: "1px solid #f59e0b", borderRadius: 12, padding: "12px 16px", fontSize: 13, color: "#fde68a", fontWeight: 700 }}>
+                      ⚠️ La narrativa de IA no se generó (Gemini saturado o sin cuota). El resultado matemático de la simulación está completo abajo.
+                    </div>
+                  )}
                   {analysisResult.tweets.map((tweet, idx) => (
                     <div key={idx} style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "20px", position: "relative" }}>
                       <div style={{ position: "absolute", top: 10, right: 15, fontSize: 10, color: "#64748b", fontWeight: 800 }}>
