@@ -1886,7 +1886,18 @@ async function fetchRealNflSchedule(dateRange) {
         turnoverDifferential: g.home.turnoverDiff,
         epaNet: g.home.epaNet !== undefined ? g.home.epaNet : 0.0,
         daysRest: 7,
-        keyPlayer: { name: g.home.qb, passYardsAvg: Math.round(g.home.ypp * 45) }
+        // Stats reales de ESPN (2026-11-19) cuando están disponibles; si no,
+        // se conserva el estimado derivado YPP×45 y statsSource lo marca.
+        keyPlayer: {
+          name: g.home.qb,
+          passYardsAvg: g.home.teamStats?.passYardsPerGame ?? Math.round(g.home.ypp * 45),
+          passTd: g.home.teamStats?.passTd ?? null,
+          passInt: g.home.teamStats?.passInt ?? null,
+          completionPct: g.home.teamStats?.completionPct ?? null,
+          rushYardsPerGame: g.home.teamStats?.rushYardsPerGame ?? null,
+          recYardsPerGame: g.home.teamStats?.recYardsPerGame ?? null,
+          statsSource: g.home.teamStats?.statsSource || 'derived',
+        }
       },
       away: {
         ...g.away,
@@ -1895,7 +1906,16 @@ async function fetchRealNflSchedule(dateRange) {
         turnoverDifferential: g.away.turnoverDiff,
         epaNet: g.away.epaNet !== undefined ? g.away.epaNet : 0.0,
         daysRest: 7,
-        keyPlayer: { name: g.away.qb, passYardsAvg: Math.round(g.away.ypp * 42) }
+        keyPlayer: {
+          name: g.away.qb,
+          passYardsAvg: g.away.teamStats?.passYardsPerGame ?? Math.round(g.away.ypp * 42),
+          passTd: g.away.teamStats?.passTd ?? null,
+          passInt: g.away.teamStats?.passInt ?? null,
+          completionPct: g.away.teamStats?.completionPct ?? null,
+          rushYardsPerGame: g.away.teamStats?.rushYardsPerGame ?? null,
+          recYardsPerGame: g.away.teamStats?.recYardsPerGame ?? null,
+          statsSource: g.away.teamStats?.statsSource || 'derived',
+        }
       },
       vegas: {
         ...g.vegas,
@@ -1918,6 +1938,43 @@ async function fetchRealNflSchedule(dateRange) {
   });
 }
 
+// Parsea las categorías de estadísticas de ESPN (fútbol americano, NFL y
+// NCAAF) en stats reales del equipo. Es la fuente de yardas/pases/TD/INT
+// reales (2026-11-19): reemplaza el estimado derivado YPP×45 que se usaba
+// para passYardsAvg. Fail-safe: todo campo ausente queda en null.
+export function parseEspnFootballTeamStats(categories) {
+  const byName = {};
+  for (const cat of categories || []) {
+    for (const s of cat?.stats || []) {
+      if (s?.name && byName[s.name] === undefined) byName[s.name] = s;
+    }
+  }
+  const num = (name) => {
+    const s = byName[name];
+    if (!s) return null;
+    const v = parseFloat(String(s.displayValue ?? s.value ?? '').replace(/,/g, ''));
+    return Number.isFinite(v) ? v : null;
+  };
+  const totalYards = num('totalYards');
+  const totalPlays = num('totalOffensivePlays');
+  return {
+    totalYards,
+    totalPlays,
+    turnoverDiff: num('turnOverDifferential'),
+    gamesPlayed: num('teamGamesPlayed'),
+    passYardsPerGame: num('netPassingYardsPerGame'),
+    passYards: num('netPassingYards'),
+    passTd: num('passingTouchdowns'),
+    passInt: num('interceptions'),
+    completionPct: num('completionPct'),
+    qbRating: num('QBRating'),
+    rushYardsPerGame: num('rushingYardsPerGame'),
+    rushTd: num('rushingTouchdowns'),
+    recYardsPerGame: num('receivingYardsPerGame'),
+    recTd: num('receivingTouchdowns'),
+  };
+}
+
 // Cache en memoria para no saturar la API de ESPN si recargamos la misma semana
 const nflLiveStatsCache = {};
 
@@ -1929,18 +1986,11 @@ async function fetchLiveNflTeamStats(teamId, fallbackElo, fallbackQb) {
     if (!res.ok) throw new Error("API error");
     const data = await res.json();
     const cats = data.results?.stats?.categories || [];
+    const parsed = parseEspnFootballTeamStats(cats);
 
-    let totalYards = 0;
-    let totalPlays = 0;
-    let turnoverDiff = 0;
-
-    cats.forEach(cat => {
-      cat.stats?.forEach(s => {
-        if (s.name === 'totalYards') totalYards = parseFloat(s.displayValue.replace(/,/g, ''));
-        if (s.name === 'totalOffensivePlays') totalPlays = parseFloat(s.displayValue.replace(/,/g, ''));
-        if (s.name === 'turnOverDifferential') turnoverDiff = parseFloat(s.displayValue.replace(/,/g, ''));
-      });
-    });
+    const totalYards = parsed.totalYards ?? 0;
+    const totalPlays = parsed.totalPlays ?? 0;
+    const turnoverDiff = parsed.turnoverDiff ?? 0;
 
     let rawYpp = totalPlays > 0 ? (totalYards / totalPlays) : 5.3;
     if (rawYpp < 4.2 || rawYpp > 6.5) {
@@ -1952,14 +2002,23 @@ async function fetchLiveNflTeamStats(teamId, fallbackElo, fallbackQb) {
       ypp: Number(ypp.toFixed(2)),
       to: turnoverDiff,
       elo: fallbackElo, // Seguimos usando Elo base hasta calcular Elo dinámico
-      qb: fallbackQb
+      qb: fallbackQb,
+      // Stats reales de ESPN (2026-11-19): yardas/TD/INT por juego y totales.
+      passYardsPerGame: parsed.passYardsPerGame,
+      passTd: parsed.passTd,
+      passInt: parsed.passInt,
+      completionPct: parsed.completionPct,
+      rushYardsPerGame: parsed.rushYardsPerGame,
+      recYardsPerGame: parsed.recYardsPerGame,
+      gamesPlayed: parsed.gamesPlayed,
+      statsSource: parsed.passYardsPerGame !== null ? 'espn' : 'derived',
     };
     
     nflLiveStatsCache[teamId] = result;
     return result;
   } catch (err) {
     console.error(`Error fetching stats for team ${teamId}:`, err);
-    return { ypp: 5.3, to: 0, elo: fallbackElo, qb: fallbackQb };
+    return { ypp: 5.3, to: 0, elo: fallbackElo, qb: fallbackQb, passYardsPerGame: null, passTd: null, passInt: null, completionPct: null, rushYardsPerGame: null, recYardsPerGame: null, gamesPlayed: null, statsSource: 'derived' };
   }
 }
 
@@ -2074,7 +2133,8 @@ export async function fetchNflWeekSchedule(weekNumber = null) {
         ypp: hStats.ypp,
         turnoverDiff: hStats.to,
         elo: getDynamicElo(homeName, effectiveHomeElo),
-        epaNet: effectiveHomeEpa
+        epaNet: effectiveHomeEpa,
+        teamStats: hStats
       },
       away: {
         name: awayName,
@@ -2086,7 +2146,8 @@ export async function fetchNflWeekSchedule(weekNumber = null) {
         ypp: aStats.ypp,
         turnoverDiff: aStats.to,
         elo: getDynamicElo(awayName, effectiveAwayElo),
-        epaNet: effectiveAwayEpa
+        epaNet: effectiveAwayEpa,
+        teamStats: aStats
       },
       vegas: {
         spread,
@@ -2220,18 +2281,11 @@ async function fetchLiveNcaafTeamStats(teamId, fallbackElo, fallbackQb) {
     if (!res.ok) throw new Error("API error");
     const data = await res.json();
     const cats = data.results?.stats?.categories || [];
+    const parsed = parseEspnFootballTeamStats(cats);
 
-    let totalYards = 0;
-    let totalPlays = 0;
-    let turnoverDiff = 0;
-
-    cats.forEach(cat => {
-      cat.stats?.forEach(s => {
-        if (s.name === 'totalYards') totalYards = parseFloat(s.displayValue.replace(/,/g, ''));
-        if (s.name === 'totalOffensivePlays') totalPlays = parseFloat(s.displayValue.replace(/,/g, ''));
-        if (s.name === 'turnOverDifferential') turnoverDiff = parseFloat(s.displayValue.replace(/,/g, ''));
-      });
-    });
+    const totalYards = parsed.totalYards ?? 0;
+    const totalPlays = parsed.totalPlays ?? 0;
+    const turnoverDiff = parsed.turnoverDiff ?? 0;
 
     let rawYpp = totalPlays > 0 ? (totalYards / totalPlays) : 5.6;
     if (rawYpp < 4.0 || rawYpp > 7.5) {
@@ -2243,13 +2297,22 @@ async function fetchLiveNcaafTeamStats(teamId, fallbackElo, fallbackQb) {
       ypp: Number(ypp.toFixed(2)),
       to: turnoverDiff,
       elo: fallbackElo,
-      qb: fallbackQb
+      qb: fallbackQb,
+      // Stats reales de ESPN (2026-11-19): yardas/TD/INT por juego y totales.
+      passYardsPerGame: parsed.passYardsPerGame,
+      passTd: parsed.passTd,
+      passInt: parsed.passInt,
+      completionPct: parsed.completionPct,
+      rushYardsPerGame: parsed.rushYardsPerGame,
+      recYardsPerGame: parsed.recYardsPerGame,
+      gamesPlayed: parsed.gamesPlayed,
+      statsSource: parsed.passYardsPerGame !== null ? 'espn' : 'derived',
     };
     
     ncaafLiveStatsCache[teamId] = result;
     return result;
   } catch (err) {
-    return { ypp: 5.6, to: 0, elo: fallbackElo, qb: fallbackQb };
+    return { ypp: 5.6, to: 0, elo: fallbackElo, qb: fallbackQb, passYardsPerGame: null, passTd: null, passInt: null, completionPct: null, rushYardsPerGame: null, recYardsPerGame: null, gamesPlayed: null, statsSource: 'derived' };
   }
 }
 
@@ -2370,7 +2433,8 @@ export async function fetchNcaafWeekSchedule(options = {}) {
         ypp: hStats.ypp,
         turnoverDiff: hStats.to,
         elo: getDynamicElo(homeBaseName, effectiveHomeElo),
-        epaNet: effectiveHomeEpa
+        epaNet: effectiveHomeEpa,
+        teamStats: hStats
       },
       away: {
         name: awayName,
@@ -2384,7 +2448,8 @@ export async function fetchNcaafWeekSchedule(options = {}) {
         ypp: aStats.ypp,
         turnoverDiff: aStats.to,
         elo: getDynamicElo(awayBaseName, effectiveAwayElo),
-        epaNet: effectiveAwayEpa
+        epaNet: effectiveAwayEpa,
+        teamStats: aStats
       },
       vegas: {
         spread,
@@ -2503,7 +2568,18 @@ async function fetchRealNcaafSchedule(dateRange = "hoy", options = {}) {
         turnoverDifferential: g.home.turnoverDiff !== undefined ? g.home.turnoverDiff : 0,
         epaNet: g.home.epaNet !== undefined ? g.home.epaNet : 0.0,
         daysRest: 7,
-        keyPlayer: { name: g.home.qb, passYardsAvg: Math.round((g.home.ypp || 5.8) * 45) }
+        // Stats reales de ESPN (2026-11-19) cuando están disponibles; si no,
+        // se conserva el estimado derivado YPP×45 y statsSource lo marca.
+        keyPlayer: {
+          name: g.home.qb,
+          passYardsAvg: g.home.teamStats?.passYardsPerGame ?? Math.round((g.home.ypp || 5.8) * 45),
+          passTd: g.home.teamStats?.passTd ?? null,
+          passInt: g.home.teamStats?.passInt ?? null,
+          completionPct: g.home.teamStats?.completionPct ?? null,
+          rushYardsPerGame: g.home.teamStats?.rushYardsPerGame ?? null,
+          recYardsPerGame: g.home.teamStats?.recYardsPerGame ?? null,
+          statsSource: g.home.teamStats?.statsSource || 'derived',
+        }
       },
       away: {
         ...g.away,
@@ -2512,7 +2588,16 @@ async function fetchRealNcaafSchedule(dateRange = "hoy", options = {}) {
         turnoverDifferential: g.away.turnoverDiff !== undefined ? g.away.turnoverDiff : 0,
         epaNet: g.away.epaNet !== undefined ? g.away.epaNet : 0.0,
         daysRest: 7,
-        keyPlayer: { name: g.away.qb, passYardsAvg: Math.round((g.away.ypp || 5.4) * 42) }
+        keyPlayer: {
+          name: g.away.qb,
+          passYardsAvg: g.away.teamStats?.passYardsPerGame ?? Math.round((g.away.ypp || 5.4) * 42),
+          passTd: g.away.teamStats?.passTd ?? null,
+          passInt: g.away.teamStats?.passInt ?? null,
+          completionPct: g.away.teamStats?.completionPct ?? null,
+          rushYardsPerGame: g.away.teamStats?.rushYardsPerGame ?? null,
+          recYardsPerGame: g.away.teamStats?.recYardsPerGame ?? null,
+          statsSource: g.away.teamStats?.statsSource || 'derived',
+        }
       },
       vegas: {
         ...g.vegas,
@@ -2635,7 +2720,7 @@ export async function fetchMatchData(query, sport) {
         turnoverDifferential: 2,
         elo: isCol ? 1580 : 1560,
         daysRest: 7,
-        keyPlayer: { name: "QB Titular", passYardsAvg: isCol ? 280 : 260 }
+        keyPlayer: { name: "QB Titular", passYardsAvg: isCol ? 280 : 260, statsSource: 'derived' }
       },
       away: {
         name: awayName,
@@ -2644,7 +2729,7 @@ export async function fetchMatchData(query, sport) {
         turnoverDifferential: -1,
         elo: isCol ? 1490 : 1470,
         daysRest: 7,
-        keyPlayer: { name: "RB Estrella", rushYardsAvg: isCol ? 85 : 70 }
+        keyPlayer: { name: "RB Estrella", rushYardsAvg: isCol ? 85 : 70, statsSource: 'derived' }
       },
       market: { open: "2.10", current: "1.90", isSteamMove: true }
     };

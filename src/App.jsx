@@ -3354,7 +3354,7 @@ export default function App() {
                             {game.away.name} @ {game.home.name}
                           </div>
                           <div style={{ fontSize: 10, color: "#475569", marginTop: 2 }}>
-                            QB: {game.home.qb} vs {game.away.qb}
+                            QB: {game.home.qb}{game.home.keyPlayer?.statsSource === 'espn' && game.home.keyPlayer?.passYardsAvg != null ? ` (${game.home.keyPlayer.passYardsAvg} yd/j, ${game.home.keyPlayer.passTd ?? 0} TD, ${game.home.keyPlayer.passInt ?? 0} INT)` : ''} vs {game.away.qb}{game.away.keyPlayer?.statsSource === 'espn' && game.away.keyPlayer?.passYardsAvg != null ? ` (${game.away.keyPlayer.passYardsAvg} yd/j, ${game.away.keyPlayer.passTd ?? 0} TD, ${game.away.keyPlayer.passInt ?? 0} INT)` : ''}
                           </div>
                         </div>
                       </div>
