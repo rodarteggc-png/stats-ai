@@ -6,11 +6,12 @@ import zlib from 'zlib';
 import { fileURLToPath } from 'url';
 import { fetchDailySchedule, fetchClosingOddsForPick } from '../src/services/sportsApi.js';
 import { fetchPinnacleOdds } from '../src/services/oddsFeed.js';
+import { enrichMatchesWithPropLine, findPropLinePrice, normalizePropLineName } from '../src/services/propLine.js';
 import { calculateMatchProbabilities } from '../src/utils/poisson.js';
 import { calculateMlbProbabilities, isExtremeAltitudePark, calculateMlbTotalProbabilities } from '../src/utils/sabermetrics.js';
 import { generateDailyMlbProps } from '../src/utils/mlbProps.js';
 import { generateDailySoccerProps } from '../src/utils/soccerProps.js';
-import { calculateNflProbabilities } from '../src/utils/gridiron.js';
+import { calculateNflProbabilities, normalCdf } from '../src/utils/gridiron.js';
 import { simulateSoccerMatch, simulateMlbMatch, simulateNflMatch } from '../src/utils/monteCarlo.js';
 import { evaluateEnsembleConsensus } from '../src/utils/ensemble.js';
 import { applyPlattCalibration, recalibrateFromAudit, hydratePlattCoefficients } from '../src/utils/calibration.js';
@@ -1533,11 +1534,23 @@ export function resolveOddsProvenance(opp) {
     return;
   }
   if (isPlayerIndividualProp(opp)) {
+    // PropLine (2026-11-20): si el partido trae un precio real de DraftKings
+    // para ESTE prop (jugador + mercado + línea + lado, en match.propLineProps
+    // vía propMeta del builder), la procedencia es 'propline' y la cuota es
+    // la decimal real — no se veta por C3. Sin precio PropLine que coincida,
+    // se mantiene el comportamiento de siempre:
     // C3 (2026-11-16): los props NO tienen precio real de mercado. Su cuota
     // la calcula el propio modelo (soccerProps: 2.20 - proyectado*0.25, piso
     // 1.65; mlbProps: 1.87 fija o estimada), así que su procedencia es
     // 'model', no 'market'. Con el veto de P4 ya no se despachan hasta que
     // exista una fuente real de precios de props.
+    const propPrice = opp.propMeta ? findPropLinePrice(opp.match?.propLineProps, opp.propMeta) : null;
+    if (propPrice) {
+      opp.odds = propPrice.decimal.toFixed(2);
+      opp.oddsSource = 'propline';
+      opp.oddsProvider = 'DraftKings (PropLine)';
+      return;
+    }
     opp.oddsSource = 'model';
     return;
   }
@@ -1695,16 +1708,21 @@ export function classifyOpportunity(opp = {}) {
   // Solo descartar si es un proxy de otro deporte no relacionado
   if (opp.oddsSource === 'proxy') return deny('odds_proxy', 'Cuota proxy de otro deporte');
   // P4 (2026-11-16, variante B lote 2): gate de cuota de mercado. Se admiten
-  // dos niveles: 'market' (sharp: Pinnacle/Bet365) y 'espn' (precio real de
-  // ESPN/DraftKings, segundo nivel etiquetado). Cualquier otra procedencia
-  // ('derived', 'model', 'assumed', etc.) tampoco se despacha.
-  if (opp.oddsSource !== 'market' && opp.oddsSource !== 'espn') return deny('no_market_odds', `Cuota sin procedencia de mercado (${opp.oddsSource || 'sin dato'})`);
+  // tres niveles: 'market' (sharp: Pinnacle/Bet365), 'espn' (precio real de
+  // ESPN/DraftKings, segundo nivel etiquetado) y 'propline' (precio real de
+  // DraftKings vía PropLine para props, 2026-11-20). Cualquier otra procedencia
+  // ('derived', 'model', 'assumed', etc.) tampoco se despacha. El veto C3
+  // ('model') no se toca: solo cambia qué procedencias cuentan como reales.
+  if (opp.oddsSource !== 'market' && opp.oddsSource !== 'espn' && opp.oddsSource !== 'propline') return deny('no_market_odds', `Cuota sin procedencia de mercado (${opp.oddsSource || 'sin dato'})`);
   // E4 (2026-11-16): frescura de cuotas ESPN. El precio debe ser del escaneo
   // actual (≤15 min). Sin fetchedAt o con más de 15 min, no se despacha.
-  if (opp.oddsSource === 'espn') {
-    const fetchedAt = opp.match?.oddsFetchedAt ? Date.parse(opp.match.oddsFetchedAt) : NaN;
+  // PropLine (2026-11-20): mismo trato para 'propline' con la hora del
+  // enriquecimiento del turno (match.propLineFetchedAt).
+  if (opp.oddsSource === 'espn' || opp.oddsSource === 'propline') {
+    const fetchedAtRaw = opp.oddsSource === 'propline' ? opp.match?.propLineFetchedAt : opp.match?.oddsFetchedAt;
+    const fetchedAt = fetchedAtRaw ? Date.parse(fetchedAtRaw) : NaN;
     if (!Number.isFinite(fetchedAt) || Date.now() - fetchedAt > ESPN_ODDS_MAX_AGE_MS) {
-      return deny('odds_stale', `Cuota ESPN sin fecha o con más de 15 min (${opp.match?.oddsFetchedAt || 'sin dato'})`);
+      return deny('odds_stale', `Cuota ${opp.oddsSource} sin fecha o con más de 15 min (${fetchedAtRaw || 'sin dato'})`);
     }
   }
   // P1 (2026-11-16): gate NBA estático. Fail-closed: si el campo no viene,
@@ -2239,6 +2257,10 @@ export function buildOpportunitiesAndTopSlate({
         argument: prop.reason,
         mcStats: { stability: Math.max(70, prop.prob), risk: 'Bajo', iterations: 10000 },
         match: parentMatch,
+        // PropLine (2026-11-20): metadato para buscar el precio real DraftKings
+        // (jugador + mercado + línea + lado); sin precio, la procedencia queda
+        // 'model' y el prop se veta como antes.
+        propMeta: { player: prop.playerName, market: 'player_shots_on_target', line: prop.line, side: 'over' },
         probs: { f5: { homeMl: 50, awayMl: 50 } } // mock para pasar verificaciones
       });
     }
@@ -2444,6 +2466,7 @@ export function buildOpportunitiesAndTopSlate({
         argument: prop.reason,
         mcStats: { stability: Math.max(70, prop.prob), risk: 'Bajo', iterations: 10000 },
         match: mlbMatches.find(m => m.id === prop.matchId),
+        propMeta: { player: prop.pitcherName, market: 'player_strikeouts', line: prop.line, side: prop.pickType.includes('MÁS DE') ? 'over' : 'under' },
         probs: { f5: { homeMl: 50, awayMl: 50 } } // Mock to pass basic checks if needed
       });
     }
@@ -2467,6 +2490,7 @@ export function buildOpportunitiesAndTopSlate({
         argument: prop.reason,
         mcStats: { stability: Math.max(70, prop.prob), risk: 'Medio', iterations: 10000 },
         match: mlbMatches.find(m => m.id === prop.matchId),
+        propMeta: { player: prop.batterName, market: 'player_total_bases', line: 1.5, side: 'over' },
         probs: { f5: { homeMl: 50, awayMl: 50 } }
       });
     }
@@ -2619,6 +2643,62 @@ export function buildOpportunitiesAndTopSlate({
         match: m,
         probs: nflProbs
       });
+    }
+  });
+
+  // ================= C.1 PLAYER PROPS NFL (QB YARDAS POR PASE, PRECIO REAL PROPLINE) =================
+  // PropLine (2026-11-20): primer builder de props NFL. Solo genera cuando hay
+  // precio real DraftKings (player_pass_yds en match.propLineProps) Y la media
+  // de yardas por pase del equipo está en el partido (teamStats.passYardsPerGame,
+  // dato real ESPN de d295797; sin él no se genera nada). La media es del
+  // EQUIPO (≈ QB: tira casi todos los pases), no la línea individual del
+  // jugador — mismo matiz que d295797. Probabilidad por CDF normal
+  // (media, σ=55). Sin precio PropLine no hay prop: fail-closed, como el resto.
+  nflMatches.forEach(m => {
+    const sides = [
+      { qb: m.home?.qb, teamStats: m.home?.teamStats },
+      { qb: m.away?.qb, teamStats: m.away?.teamStats },
+    ];
+    for (const { qb, teamStats } of sides) {
+      try {
+        const qbName = typeof qb === 'string' ? qb.trim() : (qb?.name || '').trim();
+        const mean = parseFloat(teamStats?.passYardsPerGame);
+        if (!qbName || !Number.isFinite(mean) || mean <= 0) continue;
+        const pl = (m.propLineProps || []).find(p =>
+          p && p.market === 'player_pass_yds' &&
+          normalizePropLineName(p.player) === normalizePropLineName(qbName) &&
+          Number.isFinite(Number(p.line))
+        );
+        if (!pl) continue;
+        const line = Number(pl.line);
+        const isOver = mean > line;
+        const sidePrice = isOver ? pl.overDecimal : pl.underDecimal;
+        if (!Number.isFinite(sidePrice) || sidePrice < 1.10) continue;
+        const probPct = isOver
+          ? (1 - normalCdf(line, mean, 55)) * 100
+          : normalCdf(line, mean, 55) * 100;
+        if (!Number.isFinite(probPct) || probPct <= 0 || probPct >= 100) continue;
+        const implied = (1 / sidePrice) * 100;
+        rawOpportunities.push({
+          id: `prop-nfl-${m.id}-${qbName.replace(/\s+/g, '')}`,
+          sport: 'NFL',
+          league: 'NFL',
+          game: `${m.home.name} vs ${m.away.name}`,
+          gameDate: m.gameDate,
+          type: '🏈 PLAYER PROP (YARDAS POR PASE QB)',
+          isProp: true,
+          pick: `${qbName} ${isOver ? 'Más de' : 'Menos de'} ${line} yardas por pase`,
+          prob: `${probPct.toFixed(1)}%`,
+          odds: sidePrice.toFixed(2),
+          edgeVal: Number((probPct - implied).toFixed(1)),
+          edgeStr: `Edge: +${(probPct - implied).toFixed(1)}% | Media equipo: ${mean.toFixed(1)} yd/j`,
+          argument: `${qbName} promedia ${mean.toFixed(1)} yardas por pase por juego (equipo, ESPN) frente a línea de mercado ${line} (DraftKings vía PropLine).`,
+          mcStats: { stability: Math.max(70, Math.round(probPct)), risk: 'Bajo', iterations: 10000 },
+          match: m,
+          propMeta: { player: qbName, market: 'player_pass_yds', line, side: isOver ? 'over' : 'under' },
+          probs: { f5: { homeMl: 50, awayMl: 50 } } // mock como los demás props
+        });
+      } catch (e) { /* fail-safe: un QB sin datos no tumba el resto */ }
     }
   });
 
@@ -4143,8 +4223,33 @@ export async function runAlertEngine(options = {}) {
     console.warn('Aviso enriqueciendo cuotas sharp:', err.message);
   }
 
+  // Enriquecimiento PropLine (2026-11-20): precios reales DraftKings para
+  // player props y totales de equipo (match.propLineProps / propLineTeamTotal).
+  // El fútbol SIGUE con API-Sports como fuente principal de cuotas sharp (el
+  // paso anterior no se toca): PropLine solo aporta props + totales de equipo,
+  // y respaldo de líneas. Fail-safe: sin llave, con PropLine caído o sin
+  // precio para un partido, los partidos quedan intactos y los props siguen
+  // vetados como 'model' (sin cambio de conducta).
+  let enrichedNba = nbaMatches;
+  try {
+    const [plNfl, plMlb, plNcaaf, plNba, plSoccer] = await Promise.all([
+      enrichMatchesWithPropLine(enrichedNfl, 'nfl'),
+      enrichMatchesWithPropLine(enrichedMlb, 'mlb'),
+      enrichMatchesWithPropLine(enrichedNcaaf, 'ncaaf'),
+      enrichMatchesWithPropLine(nbaMatches, 'nba'),
+      enrichMatchesWithPropLine(enrichedSoccer, 'soccer')
+    ]);
+    enrichedNfl = plNfl;
+    enrichedMlb = plMlb;
+    enrichedNcaaf = plNcaaf;
+    enrichedNba = plNba;
+    enrichedSoccer = plSoccer;
+  } catch (err) {
+    console.warn('Aviso enriqueciendo PropLine:', err.message);
+  }
+
   // Detección de Dinero Profesional / Steam Moves en Pinnacle en tiempo real
-  const allMatchesWithOdds = [...enrichedSoccer, ...enrichedMlb, ...enrichedNfl, ...enrichedNcaaf, ...nbaMatches];
+  const allMatchesWithOdds = [...enrichedSoccer, ...enrichedMlb, ...enrichedNfl, ...enrichedNcaaf, ...enrichedNba];
   try {
     await detectAndAlertSteamMoves(allMatchesWithOdds, isVipOnly);
   } catch (err) {
@@ -4166,7 +4271,7 @@ export async function runAlertEngine(options = {}) {
     mlbMatches: enrichedMlb,
     nflMatches: enrichedNfl,
     ncaafMatches: enrichedNcaaf,
-    nbaMatches,
+    nbaMatches: enrichedNba,
     maxPicksToSend,
     runtimePenalties: auditResult.runtimePenalties,
     sentCache,

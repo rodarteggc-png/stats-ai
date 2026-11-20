@@ -25,7 +25,7 @@
     "ledger:import": "node scripts/realImport.mjs",
     "ledger:learn": "node scripts/learnFromLedger.mjs",
     "hits:report": "node scripts/hitsReport.mjs",
-    "test": "node --test scripts/userFlows.test.mjs scripts/captureClosingOdds.test.mjs scripts/realImport.test.mjs scripts/learnFromLedger.test.mjs scripts/fixBatch.test.mjs scripts/securityBatch.test.mjs scripts/fixBatch2.test.mjs scripts/hitsReport.test.mjs scripts/realRacha.test.mjs scripts/nbaMcStatsNull.test.mjs scripts/uwcl.test.mjs scripts/marketLineTotals.test.mjs scripts/geminiFallback.test.mjs scripts/nflPlayerStats.test.mjs"
+    "test": "node --test scripts/userFlows.test.mjs scripts/captureClosingOdds.test.mjs scripts/realImport.test.mjs scripts/learnFromLedger.test.mjs scripts/fixBatch.test.mjs scripts/securityBatch.test.mjs scripts/fixBatch2.test.mjs scripts/hitsReport.test.mjs scripts/realRacha.test.mjs scripts/nbaMcStatsNull.test.mjs scripts/uwcl.test.mjs scripts/marketLineTotals.test.mjs scripts/geminiFallback.test.mjs scripts/nflPlayerStats.test.mjs scripts/propLine.test.mjs"
   },
   "dependencies": {
     "html-to-image": "^1.11.13",
