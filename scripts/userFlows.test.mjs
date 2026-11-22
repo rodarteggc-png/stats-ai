@@ -77,7 +77,9 @@ test('NBA consulta la ventana futura explicita en vez de reutilizar la jornada a
   let observedDates;
   globalThis.fetch = async input => {
     const url = new URL(input);
-    observedDates = url.searchParams.get('dates');
+    // fetchNbaSchedule también consulta los standings de ESPN (sin parámetro
+    // dates, para la racha del equipo); solo nos interesa la URL del scoreboard.
+    if (String(input).includes('scoreboard')) observedDates = url.searchParams.get('dates');
     return Response.json({ events: [] });
   };
   try {

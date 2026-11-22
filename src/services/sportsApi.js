@@ -1198,6 +1198,9 @@ export async function fetchLiveSoccerStandings(leagueCode) {
         homeDefenseXg,
         awayOffenseXg,
         awayDefenseXg,
+        // Récord real de la tabla (ej. "9-1-1"): detalle de la racha del
+        // equipo en la tarjeta. Sin partidos jugados, "0-0".
+        record: ties > 0 ? `${wins}-${losses}-${ties}` : `${wins}-${losses}`,
         elo
       };
 
@@ -1229,6 +1232,27 @@ function getSoccerDaysRest(leagueCode, gameDateStr) {
     return 3; // Doble jornada de liga entre semana (martes a jueves)
   }
   return 5; // Jornada regular de fin de semana
+}
+
+/**
+ * Racha actual de un equipo derivada de su `form` REAL de ESPN (últimos 5
+ * partidos, ej. "WDLWD", con el resultado más reciente al final): la racha
+ * es la corrida final de resultados iguales (ej. "WDWWW" → "W3", "WDLWD" →
+ * "D1"). El form es dato real de ESPN; la corrida final es un hecho sobre
+ * esos resultados, no un invento (si la racha real fuera mayor de 5, el form
+ * solo cubre 5 y el valor queda acotado, nunca inflado).
+ * Sin form real (ausente/vacío/sin W/D/L) devuelve undefined (fail-closed).
+ * NUNCA se usa el fallback fabricado "WDLWD"/"LDWLD" de homeForm/awayForm
+ * ni se convierte `recentForm` en streak.
+ */
+export function streakFromForm(form) {
+  if (typeof form !== 'string') return undefined;
+  const cleaned = form.toUpperCase().replace(/[^WDL]/g, '');
+  if (!cleaned) return undefined;
+  const last = cleaned[cleaned.length - 1];
+  let n = 0;
+  for (let i = cleaned.length - 1; i >= 0 && cleaned[i] === last; i--) n++;
+  return `${last}${n}`;
 }
 
 /**
@@ -1446,6 +1470,11 @@ async function fetchRealSoccerSchedule(dateRange) {
         home: {
           name: home.team?.displayName || "Local",
           recentForm: homeForm.split('').join(' '),
+          // Racha real del equipo (ESPN): streak derivado del `form` real del
+          // scoreboard + récord real de standings. Sin form real no hay streak
+          // (fail-closed). Fútbol no tiene lastTen en ESPN (el form cubre 5).
+          streak: streakFromForm(home.form),
+          record: hStats.record,
           xG: isNaN(homeXG) ? hStats.xG : homeXG,
           elo: getDynamicElo(home.team?.displayName, hStats.elo),
           daysRest: soccerDaysRest,
@@ -1456,6 +1485,8 @@ async function fetchRealSoccerSchedule(dateRange) {
         away: {
           name: away.team?.displayName || "Visitante",
           recentForm: awayForm.split('').join(' '),
+          streak: streakFromForm(away.form),
+          record: aStats.record,
           xG: isNaN(awayXG) ? aStats.xG : awayXG,
           elo: getDynamicElo(away.team?.displayName, aStats.elo),
           daysRest: soccerDaysRest,
@@ -1713,7 +1744,9 @@ export async function fetchLiveNflStandings() {
             epaNet,
             elo: dynamicBaseElo,
             record: `${w}-${l}${t > 0 ? '-' + t : ''}`,
-            streak: streak || (w >= l ? 'W1' : 'L1'),
+            // Solo dato real de ESPN: sin stat de racha, '' (la tarjeta hace
+            // fail-closed). El fallback 'W1'/'L1' anterior era derivado, no real.
+            streak: streak || '',
             pointsForPerGame: Number((pf / gp).toFixed(1)),
             pointsAgainstPerGame: Number((pa / gp).toFixed(1))
           };
@@ -2246,7 +2279,9 @@ export async function fetchLiveNcaafStandings() {
             epaNet,
             elo: dynamicBaseElo,
             record: `${w}-${l}${t > 0 ? '-' + t : ''}`,
-            streak: streak || (w >= l ? 'W1' : 'L1'),
+            // Solo dato real de ESPN: sin stat de racha, '' (la tarjeta hace
+            // fail-closed). El fallback 'W1'/'L1' anterior era derivado, no real.
+            streak: streak || '',
             pointsForPerGame: Number((pf / gp).toFixed(1)),
             pointsAgainstPerGame: Number((pa / gp).toFixed(1))
           };

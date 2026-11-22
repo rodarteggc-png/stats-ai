@@ -5,6 +5,8 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { generateHitRateAndMatchup, loadRecentLedgerResults, clearRecentResultsCache, buildTeamStreakLine, getSystemStreakLine, generateCheatsheetReport } from './alertEngine.js';
 import { setLiveNbaRatings, clearLiveNbaRatings } from '../src/utils/hoops.js';
+import { streakFromForm, fetchLiveNflStandings, fetchLiveNcaafStandings } from '../src/services/sportsApi.js';
+import { parseNbaStandingsEntries, fetchNbaStandingsMap, clearNbaStandingsCache } from '../src/services/nbaService.js';
 
 // La racha fabricada anterior (tabla fija por probabilidad) se eliminó
 // 2026-11-17: ahora la racha es el récord real del ledger.
@@ -219,8 +221,12 @@ test('racha del equipo: MLB con streak+record+lastTen; N/A no cuenta', () => {
   assert.equal(buildTeamStreakLine(na), null);
 });
 
-test('racha del equipo: fail-closed sin streak real (NBA y fútbol)', () => {
-  // NBA: el constructor no trae streak/record.
+test('racha del equipo: fail-closed sin streak real en el pick', () => {
+  // Sin campos de streak en el pick, no hay línea (el comportamiento de
+  // buildTeamStreakLine no cambió: solo usa streak/record/lastTen reales).
+  // Desde 2026-11-22 los constructores de NBA y fútbol SÍ adjuntan esos
+  // campos (ver tests de constructores abajo); este test cubre el caso en
+  // que el dato no existe (fail-closed), no la ausencia del constructor.
   const nba = {
     id: 'nba-x', sport: 'Baloncesto', league: 'NBA', type: 'SPREAD', pick: 'Lakers -7.5', prob: '59%',
     match: { home: { name: 'Los Angeles Lakers' }, away: { name: 'Charlotte Hornets' } },
@@ -269,4 +275,170 @@ test('racha del sistema: una sola vez por turno, etiquetada; cheatsheet la lleva
   assert.equal(cs.split('🔥 *Racha:*').length - 1, 1);
   // La racha vieja del ledger ya no aparece en ninguna tarjeta.
   assert.ok(!/Racha:.*4\/10 L10/.test(cs));
+});
+
+// ---- Constructores de racha del equipo (2026-11-22) ----
+// Fútbol y NBA ya adjuntan streak/record/lastTen reales desde ESPN.
+// NFL/NCAAF ya no sintetizan 'W1'/'L1' sin stat de racha.
+
+test('streakFromForm: corrida final del form real de ESPN; sin form no hay streak', () => {
+  assert.equal(streakFromForm('WDWWW'), 'W3');
+  assert.equal(streakFromForm('WDLWD'), 'D1');
+  assert.equal(streakFromForm('WWDLW'), 'W1');
+  assert.equal(streakFromForm('WWWWW'), 'W5');
+  assert.equal(streakFromForm('LLLLL'), 'L5');
+  assert.equal(streakFromForm('W D L W W'), 'W2'); // con espacios, igual
+  assert.equal(streakFromForm('wdwww'), 'W3'); // minúsculas
+  assert.equal(streakFromForm(undefined), undefined);
+  assert.equal(streakFromForm(''), undefined);
+  assert.equal(streakFromForm('-----'), undefined);
+  // El fallback fabricado "WDLWD" NUNCA se pasa como form real: si ESPN no
+  // trae form, el constructor deja streak ausente (esto se verifica en vivo,
+  // no aquí: streakFromForm solo recibe lo que ESPN devuelve).
+  assert.equal(streakFromForm(null), undefined);
+});
+
+test('racha del equipo: fútbol y NBA con streak real ahora muestran línea', () => {
+  // Fútbol: streak derivado del form + récord de standings (sin lastTen).
+  const soccer = {
+    id: 'soc-y', sport: 'Fútbol', league: 'LaLiga', type: 'OVER 2.5', pick: 'OVER 2.5 Goles', prob: '60%',
+    match: {
+      home: { name: 'Real Madrid', streak: 'W3', record: '9-1-1' },
+      away: { name: 'FC Barcelona', streak: 'L1', record: '7-1-3' },
+    },
+  };
+  assert.equal(buildTeamStreakLine(soccer), 'Barcelona L1 (7-1-3) · Madrid W3 (9-1-1)');
+  // NBA: streak + récord + L10 de standings.
+  const nba = {
+    id: 'nba-y', sport: 'Baloncesto', league: 'NBA', type: 'SPREAD', pick: 'Celtics -4.5', prob: '60%',
+    match: {
+      home: { name: 'Boston Celtics', streak: 'W2', record: '10-6', lastTen: '7-3' },
+      away: { name: 'Detroit Pistons', streak: 'W5', record: '10-5', lastTen: '8-2' },
+    },
+  };
+  assert.equal(buildTeamStreakLine(nba), 'Pistons W5 (10-5, L10 8-2) · Celtics W2 (10-6, L10 7-3)');
+});
+
+test('parseNbaStandingsEntries: extrae streak/record/L10 reales por id de equipo', () => {
+  const json = {
+    children: [{
+      standings: {
+        entries: [
+          { team: { id: 2, displayName: 'Boston Celtics' }, stats: [
+            { name: 'streak', displayValue: 'W2' },
+            { name: 'overall', displayValue: '10-6' },
+            { name: 'Last Ten Games', displayValue: '7-3' },
+            { name: 'wins', displayValue: '10' },
+          ] },
+          { team: { id: 8, displayName: 'Detroit Pistons' }, stats: [
+            { name: 'streak', displayValue: 'W5' },
+            { name: 'overall', displayValue: '10-5' },
+            { name: 'Last Ten Games', displayValue: '8-2' },
+          ] },
+          // Sin stats de racha: no entra al mapa (fail-closed).
+          { team: { id: 99, displayName: 'Sin Datos FC' }, stats: [
+            { name: 'wins', displayValue: '0' },
+          ] },
+          // Sin id: se ignora.
+          { team: {}, stats: [{ name: 'streak', displayValue: 'W9' }] },
+        ],
+      },
+    }],
+  };
+  assert.deepEqual(parseNbaStandingsEntries(json), {
+    2: { streak: 'W2', record: '10-6', lastTen: '7-3' },
+    8: { streak: 'W5', record: '10-5', lastTen: '8-2' },
+  });
+  assert.deepEqual(parseNbaStandingsEntries({}), {});
+  assert.deepEqual(parseNbaStandingsEntries(null), {});
+});
+
+test('fetchNbaStandingsMap: usa el endpoint de standings de ESPN (mock)', async () => {
+  clearNbaStandingsCache();
+  const originalFetch = globalThis.fetch;
+  const fixture = {
+    children: [{ standings: { entries: [
+      { team: { id: 2, displayName: 'Boston Celtics' }, stats: [
+        { name: 'streak', displayValue: 'W2' },
+        { name: 'overall', displayValue: '10-6' },
+        { name: 'Last Ten Games', displayValue: '7-3' },
+      ] },
+    ] } }],
+  };
+  let observedUrl = '';
+  globalThis.fetch = async (input) => {
+    observedUrl = String(input);
+    return Response.json(fixture);
+  };
+  try {
+    const map = await fetchNbaStandingsMap();
+    assert.equal(observedUrl, 'https://site.api.espn.com/apis/v2/sports/basketball/nba/standings');
+    assert.deepEqual(map, { 2: { streak: 'W2', record: '10-6', lastTen: '7-3' } });
+    // Segunda llamada usa caché (no vuelve a pedir).
+    observedUrl = '';
+    assert.deepEqual(await fetchNbaStandingsMap(), { 2: { streak: 'W2', record: '10-6', lastTen: '7-3' } });
+    assert.equal(observedUrl, '');
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearNbaStandingsCache();
+  }
+});
+
+test('fetchNbaStandingsMap: si ESPN falla, devuelve {} (fail-closed, sin romper)', async () => {
+  clearNbaStandingsCache();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('red caída'); };
+  try {
+    assert.deepEqual(await fetchNbaStandingsMap(), {});
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearNbaStandingsCache();
+  }
+});
+
+// Fixture de standings NFL/NCAAF: un equipo CON stat de racha y otro SIN él.
+// fetchLiveNflStandings exige >=28 equipos y fetchLiveNcaafStandings >=20
+// para considerar la tabla completa, así que se rellena con 28 equipos extra.
+function footballStandingsFixture() {
+  const entry = (name, withStreak) => ({
+    team: { id: 1, displayName: name },
+    stats: [
+      { name: 'pointsFor', displayValue: '250' },
+      { name: 'pointsAgainst', displayValue: '200' },
+      { name: 'wins', displayValue: '8' },
+      { name: 'losses', displayValue: '3' },
+      { name: 'ties', displayValue: '0' },
+      ...(withStreak ? [{ name: 'streak', displayValue: 'W3' }] : []),
+    ],
+  });
+  const entries = [entry('Con Racha', true), entry('Sin Racha', false)];
+  for (let i = 0; i < 28; i++) entries.push(entry(`Relleno ${i}`, true));
+  return { children: [{ standings: { entries } }] };
+}
+
+test('fetchLiveNflStandings: sin stat de racha queda \'\' (ya no sintetiza W1/L1)', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json(footballStandingsFixture());
+  try {
+    const map = await fetchLiveNflStandings();
+    assert.equal(map['Con Racha'].streak, 'W3');
+    assert.equal(map['Con Racha'].record, '8-3');
+    // Sin stat de racha: '' (la tarjeta hace fail-closed), NO 'W1' inventado.
+    assert.equal(map['Sin Racha'].streak, '');
+    assert.equal(map['Sin Racha'].record, '8-3');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchLiveNcaafStandings: sin stat de racha queda \'\' (ya no sintetiza W1/L1)', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json(footballStandingsFixture());
+  try {
+    const map = await fetchLiveNcaafStandings();
+    assert.equal(map['Con Racha'].streak, 'W3');
+    assert.equal(map['Sin Racha'].streak, '');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

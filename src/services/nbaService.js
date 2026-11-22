@@ -12,6 +12,65 @@ const NBA_CACHE = new Map();
 // classifyOpportunity lo exige al despachar).
 const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutos
 
+// Caché de standings NBA (1 hora: los standings cambian lento; el scoreboard
+// usa 15 min porque las cuotas sí se mueven). Solo guarda racha/récord/L10.
+const NBA_STANDINGS_CACHE = new Map();
+const NBA_STANDINGS_TTL_MS = 60 * 60 * 1000; // 1 hora
+
+/**
+ * Extrae { streak, record, lastTen } por id de equipo desde el JSON de
+ * standings de ESPN (https://site.api.espn.com/apis/v2/sports/basketball/nba/standings).
+ * Solo stats reales: `streak` (ej. "W3"), `overall` (ej. "10-6") y
+ * `Last Ten Games` (ej. "7-3"). Un equipo sin dato real no entra al mapa
+ * (fail-closed). Función pura para poder probarla sin red.
+ */
+export function parseNbaStandingsEntries(json) {
+  const map = {};
+  const entries = [];
+  const collect = (node) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node.standings?.entries)) entries.push(...node.standings.entries);
+    if (Array.isArray(node.children)) node.children.forEach(collect);
+  };
+  collect(json);
+  for (const e of entries) {
+    const id = String(e.team?.id || '');
+    if (!id) continue;
+    const stat = (name) => e.stats?.find((s) => s.name === name)?.displayValue;
+    const streak = stat('streak');
+    const record = stat('overall');
+    const lastTen = stat('Last Ten Games');
+    const entry = {};
+    if (typeof streak === 'string' && streak.trim()) entry.streak = streak.trim();
+    if (typeof record === 'string' && record.trim()) entry.record = record.trim();
+    if (typeof lastTen === 'string' && lastTen.trim()) entry.lastTen = lastTen.trim();
+    if (Object.keys(entry).length > 0) map[id] = entry;
+  }
+  return map;
+}
+
+export function clearNbaStandingsCache() { NBA_STANDINGS_CACHE.clear(); }
+
+/**
+ * Mapa equipo → { streak, record, lastTen } desde los standings de ESPN.
+ * Fail-safe: si ESPN falla, devuelve {} y los partidos no llevan racha
+ * (fail-closed en la tarjeta). Nunca inventa streak.
+ */
+export async function fetchNbaStandingsMap({ fetchImpl = fetch } = {}) {
+  const cached = NBA_STANDINGS_CACHE.get('map');
+  if (cached && (Date.now() - cached.timestamp < NBA_STANDINGS_TTL_MS)) return cached.data;
+  try {
+    const res = await fetchImpl('https://site.api.espn.com/apis/v2/sports/basketball/nba/standings', { headers: { 'User-Agent': 'StatsAIPro/1.0' } });
+    if (!res.ok) throw new Error(`ESPN NBA standings HTTP ${res.status}`);
+    const map = parseNbaStandingsEntries(await res.json());
+    NBA_STANDINGS_CACHE.set('map', { timestamp: Date.now(), data: map });
+    return map;
+  } catch (err) {
+    console.warn('[nbaService] Standings NBA no disponibles (sin racha en tarjetas):', err.message);
+    return {};
+  }
+}
+
 /**
  * E1 (2026-11-16): lee los precios REALES de ESPN/DraftKings del objeto odds
  * del scoreboard. Verificado en vivo 2026-11-16 (curl): los partidos pre-juego
@@ -75,6 +134,9 @@ export async function fetchNbaSchedule(range = 'hoy') {
     if (!res.ok) throw new Error(`ESPN NBA HTTP ${res.status}`);
     const json = await res.json();
     const events = json.events || [];
+    // Racha real del equipo (ESPN standings): streak/récord/L10 por equipo.
+    // Fail-safe: sin standings, los partidos no llevan racha (fail-closed).
+    const standingsMap = await fetchNbaStandingsMap();
     // E4 (2026-11-16): hora de descarga del scoreboard. Cada partido lleva
     // su fetchedAt; el gate 'odds_stale' exige cuotas del escaneo actual.
     const oddsFetchedAt = new Date().toISOString();
@@ -87,6 +149,9 @@ export async function fetchNbaSchedule(range = 'hoy') {
 
       const homeName = homeComp.team?.displayName || 'Local';
       const awayName = awayComp.team?.displayName || 'Visitante';
+      // Racha/récord/L10 reales del equipo (solo si ESPN los trae).
+      const homeStreak = standingsMap[String(homeComp.team?.id || '')] || {};
+      const awayStreak = standingsMap[String(awayComp.team?.id || '')] || {};
       const marketSpread = oddsObj.spread !== undefined ? parseFloat(oddsObj.spread) : null;
       const marketTotal = oddsObj.overUnder !== undefined ? parseFloat(oddsObj.overUnder) : null;
 
@@ -106,8 +171,8 @@ export async function fetchNbaSchedule(range = 'hoy') {
         sport: 'Baloncesto',
         league: 'NBA',
         game: `${homeName} vs ${awayName}`,
-        home: { name: homeName, score: homeScore },
-        away: { name: awayName, score: awayScore },
+        home: { name: homeName, score: homeScore, ...homeStreak },
+        away: { name: awayName, score: awayScore, ...awayStreak },
         homeScore,
         awayScore,
         date: evt.date,
