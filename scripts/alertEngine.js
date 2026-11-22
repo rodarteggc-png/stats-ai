@@ -824,30 +824,99 @@ function nbaOpponentIsBottom5Defense(pick) {
 }
 
 /**
+ * Racha del SISTEMA desde el ledger (últimos 10 picks cerrados).
+ * Extraída para reutilizarla en el encabezado del turno (una sola vez):
+ * ya NO va en la tarjeta de cada pick.
+ */
+function computeLedgerStreak(recentResults) {
+  const settled = (Array.isArray(recentResults) ? recentResults : []).filter((r) => r === 'WON' || r === 'LOST');
+  const last10 = settled.slice(-10);
+  const last5 = last10.slice(-5);
+  if (last10.length === 0) {
+    return { hitsL10: null, hitsL5: null, hitRateStr: null, hitRateDots: '', hitRateSummary: null };
+  }
+  const hitsL10 = last10.filter((r) => r === 'WON').length;
+  const hitsL5 = last5.filter((r) => r === 'WON').length;
+  const pct = Math.round((hitsL10 / last10.length) * 100);
+  return {
+    hitsL10,
+    hitsL5,
+    hitRateStr: `${hitsL10}/${last10.length} L${last10.length} (${pct}%)`,
+    // Puntos en orden cronológico (la secuencia real): pueden salir mezclados.
+    hitRateDots: last5.map((r) => (r === 'WON' ? '🟢' : '🔴')).join(''),
+    hitRateSummary: `El sistema acertó ${hitsL5} de sus últimos ${last5.length} picks.`
+  };
+}
+
+/**
+ * Línea de racha del SISTEMA para mostrar UNA sola vez por turno
+ * (encabezado del slate / reporte IA / cheatsheet), etiquetada como del
+ * sistema para no confundirla con la racha del equipo de cada pick.
+ * Sin picks cerrados, null (no se muestra nada).
+ */
+export function getSystemStreakLine() {
+  const { hitRateStr, hitRateDots } = computeLedgerStreak(getRecentResultsCached(10));
+  return hitRateStr ? `🔥 *Racha del sistema:* \`${hitRateStr}\` ${hitRateDots}` : null;
+}
+
+// --- Racha REAL DEL EQUIPO (ESPN standings, desde pick.match) ---
+// Solo campos reales: `streak` ("W3"/"L2") y `record` ("12-5"), y `lastTen`
+// ("7-3", MLB) cuando existen. NUNCA `recentForm`: ese campo tiene un
+// fallback FABRICADO ("W W L W W" / "L W L L W") cuando no hay streak real.
+// Sin streak real en ningún equipo: sin línea de Racha (fail-closed).
+
+// Un código real de racha es W/L/T/D + número (ej. "W3", "L2").
+// Excluye 'N/A' (MLB sin dato) y cualquier otro valor no conforme.
+function isRealStreakCode(s) {
+  return typeof s === 'string' && /^[WLTD]\d+$/i.test(s.trim());
+}
+
+function shortTeamName(name) {
+  if (typeof name !== 'string') return '';
+  const parts = name.trim().split(/\s+/);
+  return parts.length > 1 ? parts[parts.length - 1] : name.trim();
+}
+
+function teamStreakPart(team) {
+  if (!team || !isRealStreakCode(team.streak)) return null;
+  const name = shortTeamName(team.name) || 'Equipo';
+  const streak = String(team.streak).trim().toUpperCase();
+  const details = [];
+  if (typeof team.record === 'string' && /^\d+-\d+(-\d+)?$/.test(team.record.trim())) details.push(team.record.trim());
+  if (typeof team.lastTen === 'string' && /^\d+-\d+$/.test(team.lastTen.trim())) details.push(`L10 ${team.lastTen.trim()}`);
+  return details.length > 0 ? `${name} ${streak} (${details.join(', ')})` : `${name} ${streak}`;
+}
+
+/**
+ * Racha real de los equipos del partido (visitante primero, luego local).
+ * Devuelve null si ningún equipo trae `streak` real (fail-closed).
+ * Fútbol: el constructor del partido no adjunta `streak`/`record`/`lastTen`
+ * estructurados (solo `recentForm`, con fallback fabricado) → sin línea.
+ * NBA: el constructor no trae `streak`/`record` → sin línea.
+ * Nota: el constructor de standings NFL/NCAAF sintetiza 'W1'/'L1' cuando
+ * ESPN no trae el stat de racha; un "W1"/"L1" mostrado puede ser derivado
+ * y no directo de ESPN (limitación aguas arriba, sportsApi.js).
+ */
+export function buildTeamStreakLine(pick) {
+  const m = pick?.match || {};
+  const parts = [teamStreakPart(m.away), teamStreakPart(m.home)].filter(Boolean);
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+/**
  * Genera el Récord Visual de Hit Rate (L5/L10) y el Matchup Defensivo (Top/Bottom 5)
  * Inspirado en la heurística analítica de Linemate adaptada al motor cuantitativo de Stats-AI Pro.
  */
 export function generateHitRateAndMatchup(pick, recentResults = null) {
-  // 1. RACHA REAL del sistema (ledger). Sin datos reales, NO se muestra racha
-  // (fail-closed): antes era una tabla fija por probabilidad, dato inventado.
+  // 1. RACHA DEL SISTEMA (ledger). Ya NO va en la tarjeta de cada pick:
+  // se muestra una sola vez por turno (ver getSystemStreakLine).
+  // Sin datos reales, los campos quedan en null (fail-closed).
   const recent = Array.isArray(recentResults) ? recentResults : getRecentResultsCached(10);
-  const settled = recent.filter((r) => r === 'WON' || r === 'LOST');
-  const last10 = settled.slice(-10);
-  const last5 = last10.slice(-5);
-  let hitsL10 = null;
-  let hitsL5 = null;
-  let hitRateStr = null;
-  let hitRateDots = '';
-  let hitRateSummary = null;
-  if (last10.length > 0) {
-    hitsL10 = last10.filter((r) => r === 'WON').length;
-    hitsL5 = last5.filter((r) => r === 'WON').length;
-    const pct = Math.round((hitsL10 / last10.length) * 100);
-    hitRateStr = `${hitsL10}/${last10.length} L${last10.length} (${pct}%)`;
-    // Puntos en orden cronológico (la secuencia real): pueden salir mezclados.
-    hitRateDots = last5.map((r) => (r === 'WON' ? '🟢' : '🔴')).join('');
-    hitRateSummary = `El sistema acertó ${hitsL5} de sus últimos ${last5.length} picks.`;
-  }
+  const { hitsL10, hitsL5, hitRateStr, hitRateDots, hitRateSummary } = computeLedgerStreak(recent);
+
+  // 2. RACHA REAL DEL EQUIPO (ESPN standings, desde pick.match).
+  // Es lo que se muestra en la tarjeta de cada pick.
+  const teamStreakStr = buildTeamStreakLine(pick);
 
   // 2. DETECTOR DE MATCHUP (solo con dato real; sin dato, no hay sello).
   // Fútbol: solo si el rival concede xG alto o su Elo es bajo (dato real del
@@ -878,6 +947,7 @@ export function generateHitRateAndMatchup(pick, recentResults = null) {
     hitRateStr,
     hitRateDots,
     hitRateSummary,
+    teamStreakStr,
     matchupBadge,
     matchupDetail
   };
@@ -892,9 +962,12 @@ export function generateCheatsheetReport(picks = [], dateStr = '') {
     return '📋 *STATS-AI PRO CHEATSHEET VIP*\n_No se encontraron selecciones activas que superen los 5 Candados (+EV) en este momento._';
   }
 
+  // Racha del sistema UNA vez por reporte (no en cada pick).
+  const systemStreakLine = getSystemStreakLine();
   const header = [
     `📋 *STATS-AI PRO — CHEATSHEET VIP* 📋`,
     `📅 *${dateStr || 'HOY'}* | _Top Picks Cuantitativos (+EV)_`,
+    ...(systemStreakLine ? [systemStreakLine] : []),
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
   ];
 
@@ -910,7 +983,7 @@ export function generateCheatsheetReport(picks = [], dateStr = '') {
       `${numIcon} ${sportIcon} *${pick.game}*`,
       `   👉 \`${pick.pick}\` @ \`${pick.odds}\``,
       `   📊 *Ventaja:* \`${pick.edgeStr}\` | *Prob:* \`${pick.prob}\``,
-      hr.hitRateStr ? `   🔥 *Racha:* \`${hr.hitRateStr}\` ${hr.hitRateDots}` : null,
+      hr.teamStreakStr ? `   🔥 *Racha:* \`${hr.teamStreakStr}\`` : null,
       hr.matchupBadge ? `   ${hr.matchupBadge}` : null,
       ``
     ].filter(Boolean).join('\n');
@@ -4508,8 +4581,11 @@ export async function runAlertEngine(options = {}) {
   try {
     const aiReportText = await generateAiExecutiveReport(toSend, shiftBadge, cdmxDateFmt);
     if (aiReportText) {
+      // Racha del sistema UNA vez por turno (no va en cada pick).
+      const systemStreakLine = getSystemStreakLine();
+      const aiReportWithStreak = systemStreakLine ? `${aiReportText}\n\n${systemStreakLine}` : aiReportText;
       console.log('🤖 Enviando Dictamen Consolidado de IA Senior Tipster a Telegram...');
-      const reportOk = await sendTelegramMessage(aiReportText, isDryRun, targetChatId);
+      const reportOk = await sendTelegramMessage(aiReportWithStreak, isDryRun, targetChatId);
       if (reportOk) {
         aiExecutiveReportSent = true;
         for (const pick of toSend) {
@@ -4580,10 +4656,13 @@ export async function runAlertEngine(options = {}) {
         return `${idx + 1}. ${tierBadge} *${p.sport}:* ${p.game}\n   👉 \`${p.pick}\` @ \`${p.odds}\``;
       });
 
+      // Racha del sistema UNA vez por turno (no en cada pick).
+      const systemStreakLine = getSystemStreakLine();
       const slateHeader = [
         `🚀 *STATS-AI PRO — SLATE OFICIAL [${shiftBadge}]* 🚀`,
         `📅 *${cdmxDateFmt.toUpperCase()}* | CDMX`,
         `🔬 _Calibración Monte Carlo (10,000 Sims) & Consenso Tripartito_`,
+        ...(systemStreakLine ? [systemStreakLine] : []),
         ``,
         `📊 *RESUMEN DEL SLATE (${toSend.length} SELECCIONES ACTIVAS):*`,
         ...summaryLines,
@@ -4721,9 +4800,8 @@ export async function runAlertEngine(options = {}) {
       ...(() => {
         const hr = generateHitRateAndMatchup(pick);
         return [
-          ...(hr.hitRateStr ? [
-            `🔥 *Racha Reciente (Hit Rate):* \`${hr.hitRateStr}\` ${hr.hitRateDots}`,
-            `  _${hr.hitRateSummary}_`,
+          ...(hr.teamStreakStr ? [
+            `🔥 *Racha:* \`${hr.teamStreakStr}\``,
             ``,
           ] : []),
           ...(hr.matchupBadge ? [hr.matchupBadge, `  _${hr.matchupDetail}_`, ``] : [])
