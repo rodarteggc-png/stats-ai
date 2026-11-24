@@ -78,7 +78,9 @@ test('Fase 1: línea 3.5 (ESPN) genera UNDER 3.5 con cuota real', () => {
   assert.equal(raw[0].pick, 'UNDER 3.5 Goles');
   assert.equal(raw[0].odds, '1.63');
   assert.equal(raw[0].oddsSource, 'espn', 'la cuota 3.5 es real (ESPN, tier espn), no model');
-  assert.ok(parseFloat(raw[0].prob) >= 60, `prob UNDER 3.5 ${raw[0].prob} < 60`);
+  // Refit Fase 3 (R2): la cruda del UNDER 3.5 es 84% y con el par global
+  // A=0.34/B=-0.33 calibra 55.8% (antes, con A=0.65/B=-0.20, era ≥60%).
+  assert.equal(parseFloat(raw[0].prob), 55.8, `prob UNDER 3.5 ${raw[0].prob}, se esperaba 55.8`);
 });
 
 test('Fase 1: línea 4.5 genera UNDER 4.5 con cuota real', () => {

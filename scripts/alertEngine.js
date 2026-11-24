@@ -14,8 +14,9 @@ import { generateDailySoccerProps } from '../src/utils/soccerProps.js';
 import { calculateNflProbabilities, normalCdf } from '../src/utils/gridiron.js';
 import { simulateSoccerMatch, simulateMlbMatch, simulateNflMatch } from '../src/utils/monteCarlo.js';
 import { evaluateEnsembleConsensus } from '../src/utils/ensemble.js';
-import { applyPlattCalibration, recalibrateFromAudit, hydratePlattCoefficients } from '../src/utils/calibration.js';
+import { applyPlattCalibration, recalibrateFromAudit } from '../src/utils/calibration.js';
 import { buildPaperEntry, compactPaperEntry, expandPaperEntry, paperSlateMessage, accumulatePaperReport, paperReportSectionLines, PAPER_MAX_STASH_ENTRIES, PAPER_MAX_STASH_JSON_CHARS } from '../src/utils/paperLedger.js';
+import { formatDisplayedProb } from '../src/utils/displayProb.js';
 import { getPairCorrelation } from '../src/utils/correlationMatrix.js';
 import { detectReverseLineMovement } from '../src/utils/rlmDetector.js';
 import { auditCandidateAsTipsterPro } from '../src/utils/tipsterAuditor.js';
@@ -41,16 +42,17 @@ import { removeVig, noVigFromSingleSide, expectedValuePct, edgePp, deriveDoubleC
 
 // Umbral mínimo de Valor Esperado real (p·cuota − 1) para publicar una selección
 const MIN_EV_PCT = 2.0;
-// Pausa de spreads (2026-11-10, decisión de Tavo): los spreads son TODA la
-// pérdida del ledger real (1W-9L, -7.51u; NBA 0W-6L, -6.30u; resto +0.40u).
-// Mientras esté en true, ningún spread se despacha como pick real, SALVO los
-// spreads de NBA con ratings en vivo (excepción 2026-11-16, decisión de
-// Tavo: esos picks ya pasaban el gate P1 con ratingsSource 'live', precio
-// real ESPN y consenso 3/3; el resto —NFL, NCAAF, fútbol, NBA estático o
-// sin dato— sigue en pausa). El veto es 'spread_paused' al final de
-// classifyOpportunity (después de todos los demás filtros, así el motivo
-// solo cubre spreads que habrían salido) y el modo paper los sigue
-// registrando y calificando contra resultados reales.
+// Pausa de spreads (2026-11-10, decisión de Tavo; ampliada 2026-11-24,
+// R1 del plan de afinación fase 1): los spreads son TODA la pérdida del
+// ledger real (1W-12L, -12.01u; NBA 0W-9L — diagnóstico forense 2026-11-24).
+// Mientras esté en true, NINGÚN spread se despacha como pick real, tampoco
+// los de NBA con ratings en vivo (la excepción 2026-11-16 queda revocada
+// hasta tener 20+ picks paper con cover medio >= 0 y acierto >= 50%).
+// El veto es 'spread_paused' al final de classifyOpportunity (después de
+// todos los demás filtros, así el motivo solo cubre spreads que habrían
+// salido) y el modo paper los sigue registrando y calificando contra
+// resultados reales. En modo real también se registran en el ledger paper
+// (ver runAlertEngine, R1), sin despachar nada a suscriptores.
 const SPREADS_PAUSED = true;
 // Brecha máxima tolerada entre el modelo y la probabilidad sin vig del mercado sharp
 const MAX_MODEL_MARKET_GAP_PP = 12;
@@ -359,13 +361,15 @@ export async function notifyShiftFailure({ reason, detail = '', targetChatId = n
 /**
  * Registra inmutablemente un pick en data/pick_ledger.jsonl en disco para auditoría permanente
  */
-export function recordPickToLedger(pick, effectiveStake = 1.0) {
+export function recordPickToLedger(pick, effectiveStake = 1.0, options = {}) {
   try {
     const dataDir = path.join(__dirname, '..', 'data');
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
     }
-    const ledgerFile = path.join(dataDir, 'pick_ledger.jsonl');
+    // R7 (2026-11-24): options.ledgerFile solo existe para pruebas; en
+    // producción siempre es data/pick_ledger.jsonl.
+    const ledgerFile = options.ledgerFile || path.join(dataDir, 'pick_ledger.jsonl');
 
     let exists = false;
     if (fs.existsSync(ledgerFile)) {
@@ -399,7 +403,10 @@ export function recordPickToLedger(pick, effectiveStake = 1.0) {
         rawProb: pick.rawProb ? parseFloat(pick.rawProb) : null,
         evPct: Number.isFinite(pick.evPct) ? Number(pick.evPct.toFixed(2)) : null,
         confidenceTier: pick.confidence?.tier || null,
-        oddsSource: pick.oddsSource || 'market',
+        // R7 (2026-11-24): sin procedencia NO se inventa 'market'. Un pick
+        // sin oddsSource queda en null (procedencia desconocida), nunca con
+        // un tier fabricado; el espejo de Telegram lleva los mismos valores.
+        oddsSource: pick.oddsSource || null,
         oddsProvider: pick.oddsProvider || null,
         evNoVig: Boolean(pick.evNoVig),
         fairOdds: pick.fairOdds || null,
@@ -432,10 +439,12 @@ export function recordPickToLedger(pick, effectiveStake = 1.0) {
         prob: parseFloat(pick.prob) || null,
         rawProb: pick.rawProb ? parseFloat(pick.rawProb) : null,
         evPct: Number.isFinite(pick.evPct) ? Number(pick.evPct.toFixed(2)) : null,
-        oddsSource: pick.oddsSource || 'market',
+        oddsSource: pick.oddsSource || null,
         oddsProvider: pick.oddsProvider || null,
         evNoVig: Boolean(pick.evNoVig),
         fairOdds: pick.fairOdds || null,
+        sharpBook: pick.sharpBookmaker || null,
+        isPinnacle: Boolean(pick.isPinnacle),
         stakeUnits: parseFloat(effectiveStake) || 1.0,
         status: 'PENDING'
       });
@@ -594,11 +603,15 @@ export async function loadCloudLedger() {
           ...(local._meta || {}),
           ...(cloudData._meta || {}),
           dynamicElo: { ...(local._meta?.dynamicElo || {}), ...(cloudData._meta?.dynamicElo || {}) },
-          plattCoefficients: { ...(local._meta?.plattCoefficients || {}), ...(cloudData._meta?.plattCoefficients || {}) }
+          plattCoefficientsSuggested: { ...(local._meta?.plattCoefficientsSuggested || {}), ...(cloudData._meta?.plattCoefficientsSuggested || {}) }
         };
         const clean = pruneCache(merged);
         if (clean._meta?.dynamicElo) hydrateDynamicEloFromCloud(clean._meta.dynamicElo);
-        if (clean._meta?.plattCoefficients) hydratePlattCoefficients(clean._meta.plattCoefficients);
+        // R8 (2026-11-24): NUNCA hidratar coeficientes Platt desde el cloud
+        // ledger. El despacho aplica siempre los defaults documentados del
+        // código (global A=0.34/B=-0.33, NBA A=0.36/B=-0.60 desde Fase 3);
+        // `_meta.plattCoefficientsSuggested` solo
+        // guarda la sugerencia de la auditoría para revisión humana.
         saveLocalCache(clean);
         return clean;
       }
@@ -609,7 +622,7 @@ export async function loadCloudLedger() {
 
   const cleanFallback = pruneCache(local);
   if (cleanFallback._meta?.dynamicElo) hydrateDynamicEloFromCloud(cleanFallback._meta.dynamicElo);
-  if (cleanFallback._meta?.plattCoefficients) hydratePlattCoefficients(cleanFallback._meta.plattCoefficients);
+  // R8 (2026-11-24): sin hidratación de coeficientes Platt (ver arriba).
   return cleanFallback;
 }
 
@@ -642,7 +655,7 @@ export async function saveCloudLedger(cache) {
             ...(cloudData._meta || {}),
             ...(cache._meta || {}),
             dynamicElo: { ...(cloudData._meta?.dynamicElo || {}), ...(cache._meta?.dynamicElo || {}) },
-            plattCoefficients: { ...(cloudData._meta?.plattCoefficients || {}), ...(cache._meta?.plattCoefficients || {}) }
+            plattCoefficientsSuggested: { ...(cloudData._meta?.plattCoefficientsSuggested || {}), ...(cache._meta?.plattCoefficientsSuggested || {}) }
           };
         }
       }
@@ -982,7 +995,7 @@ export function generateCheatsheetReport(picks = [], dateStr = '') {
     return [
       `${numIcon} ${sportIcon} *${pick.game}*`,
       `   👉 \`${pick.pick}\` @ \`${pick.odds}\``,
-      `   📊 *Ventaja:* \`${pick.edgeStr}\` | *Prob:* \`${pick.prob}\``,
+      `   📊 *Ventaja:* \`${pick.edgeStr}\` | *Prob:* \`${formatDisplayedProb(pick.prob)}\``,
       hr.teamStreakStr ? `   🔥 *Racha:* \`${hr.teamStreakStr}\`` : null,
       hr.matchupBadge ? `   ${hr.matchupBadge}` : null,
       ``
@@ -1096,7 +1109,10 @@ export async function generateAiExecutiveReport(picks = [], shiftBadge = 'EDICI�
       game: p.game,
       pick: p.pick,
       odds: p.odds,
-      calibratedProb: p.prob,
+      // R5 (2026-11-24): a Gemini solo se le pasa la probabilidad MOSTRADA
+      // (tope 80%): el dictamen no puede citar más de 80%. p.prob (interna)
+      // no se toca: gates y stake usan el valor real.
+      calibratedProb: formatDisplayedProb(p.prob),
       edge: p.edgeStr,
       category,
       stake: `${effectiveStake.toFixed(1)} Unidades`,
@@ -1564,6 +1580,35 @@ export function gradeOfficialPick(pick, match) {
 }
 
 /**
+ * R7 (2026-11-24): fija la procedencia sharp en la oportunidad DESPUÉS de
+ * que resolveOddsProvenance decida el tier final. Regla: solo un precio
+ * 'market' puede llevar sharpBook/isPinnacle. Con cualquier otro tier el
+ * precio NO salió del libro sharp (ESPN, línea real con precio estándar,
+ * derivado o modelo), así que ambos quedan en null/false aunque el partido
+ * traiga enriquecimiento sharp en otro mercado. isPinnacle es true solo
+ * cuando el libro sharp es Pinnacle (por nombre, o por el flag
+ * market.isPinnacle). Con otro tier ambos se fuerzan a null/false: el
+ * precio registrado no salió del libro sharp, así que afirmar lo contrario
+ * sería procedencia inventada (aunque el partido traiga enriquecimiento
+ * sharp en otro mercado o el builder haya dejado un valor previo).
+ */
+export function attachSharpBookmaker(opp) {
+  if (!opp) return opp;
+  if (opp.oddsSource === 'market') {
+    if (!opp.sharpBookmaker) {
+      opp.sharpBookmaker = opp.match?.market?.sharpBookmaker || opp.match?.sharpBook || null;
+    }
+    if (opp.isPinnacle == null) {
+      opp.isPinnacle = /pinnacle/i.test(opp.sharpBookmaker || '') || Boolean(opp.match?.market?.isPinnacle);
+    }
+  } else {
+    opp.sharpBookmaker = null;
+    opp.isPinnacle = false;
+  }
+  return opp;
+}
+
+/**
  * Determina de dónde sale la cuota publicada y la reemplaza por el precio real del libro cuando existe.
  * oddsSource: 'market' (precio sharp: Pinnacle/Bet365 vía Odds API/API-Sports) | 'espn' (precio real
  *             de ESPN/DraftKings, segundo nivel etiquetado, variante B de P4) | 'derived' (derivado
@@ -1872,12 +1917,11 @@ export function classifyOpportunity(opp = {}) {
   if (SPREADS_PAUSED) {
     const isSpread = (opp.type || '').toUpperCase().includes('SPREAD')
       || pickStr.includes('cubre') || pickStr.includes('hándicap') || pickStr.includes('handicap');
-    // Excepción NBA en vivo (2026-11-16, decisión de Tavo): un spread de NBA
-    // con ratingsSource 'live' no se veta — el gate P1 ya lo exige en vivo
-    // (fail-closed: sin dato o 'static' cae en nba_static_ratings antes).
-    // El resto de spreads sigue en pausa.
-    const isNbaLive = (opp.sport === 'Baloncesto' || opp.league === 'NBA') && opp.ratingsSource === 'live';
-    if (isSpread && !isNbaLive) return deny('spread_paused', 'Spreads en pausa: mercado en medición (1W-9L en el ledger)');
+    // R1 (2026-11-24, fase 1): TODOS los spreads en pausa, incluida la NBA
+    // con ratings en vivo (la excepción 2026-11-16 queda revocada: el
+    // forense muestra 1W-12L y el modelo actual de spreads NBA tiene n=0
+    // picks cerrados, sin evidencia a favor ni en contra).
+    if (isSpread) return deny('spread_paused', 'Spreads en pausa: mercado en medición (1W-12L en el ledger)');
   }
 
   // P3b (2026-11-16): si el Kelly fraccionado da 0, el pick no tiene ventaja
@@ -3057,11 +3101,10 @@ export function buildOpportunitiesAndTopSlate({
   // ================= D. TRIBUNAL DE CONSENSO Y ORDENAMIENTO ESTRICTO POR EFECTIVIDAD =================
   rawOpportunities.forEach(opp => {
     opp.isToday = isMatchTodayInCdmx(opp.gameDate);
-    if (!opp.sharpBookmaker && (opp.match?.market?.sharpBookmaker || opp.match?.sharpBook)) {
-      opp.sharpBookmaker = opp.match.market?.sharpBookmaker || opp.match.sharpBook;
-      opp.isPinnacle = Boolean(opp.match.market?.isPinnacle);
-    }
     resolveOddsProvenance(opp);
+    // R7 (2026-11-24): procedencia sharp DESPUÉS del tier final, no antes:
+    // solo un precio 'market' lleva sharpBook/isPinnacle (ver attachSharpBookmaker).
+    attachSharpBookmaker(opp);
 
     // Calibración Bayesiana de Platt por deporte para corregir sesgos de cola
     const rawP = parseFloat(opp.prob) || 60;
@@ -3928,14 +3971,21 @@ export async function runDailyTelegramAudit(options = {}) {
     }));
   hydrateCloudLessons(cloudLessonsForMemory);
 
-  // ================= AREA 11: AUTO-CALIBRACIÓN MATEMÁTICA (PLATT SCALING) =================
-  const mlbCal = recalibrateFromAudit(allAuditedRecent, 'mlb');
-  const nflCal = recalibrateFromAudit(allAuditedRecent, 'nfl');
-  const ncaafCal = recalibrateFromAudit(allAuditedRecent, 'ncaaf');
-  const soccerCal = recalibrateFromAudit(allAuditedRecent, 'futbol');
+  // ================= AREA 11: SUGERENCIA DE RECALIBRACIÓN (PLATT SCALING) =================
+  // R8 (2026-11-24): esto SOLO sugiere coeficientes; ya no recalibra el
+  // despacho. Antes, recalibrateFromAudit mutaba PLATT_COEFFICIENTS en el
+  // proceso (y la auditoría corre en el mismo proceso antes del despacho) y
+  // persistía el resultado en `_meta.plattCoefficients`, que el siguiente
+  // escaneo hidrataba: el despacho podía aplicar coeficientes no
+  // documentados sin revisión. Ahora se calcula con persist:false y se
+  // guarda como `plattCoefficientsSuggested` (solo lectura humana, futura R2).
+  const mlbCal = recalibrateFromAudit(allAuditedRecent, 'mlb', { persist: false });
+  const nflCal = recalibrateFromAudit(allAuditedRecent, 'nfl', { persist: false });
+  const ncaafCal = recalibrateFromAudit(allAuditedRecent, 'ncaaf', { persist: false });
+  const soccerCal = recalibrateFromAudit(allAuditedRecent, 'futbol', { persist: false });
 
   if (!providedCache._meta) providedCache._meta = {};
-  providedCache._meta.plattCoefficients = {
+  providedCache._meta.plattCoefficientsSuggested = {
     mlb: mlbCal,
     nfl: nflCal,
     ncaaf: ncaafCal,
@@ -3954,7 +4004,8 @@ export async function runDailyTelegramAudit(options = {}) {
     pendingPicks: pendingStillPlaying,
     runtimePenalties,
     dynamicElo: getDynamicEloStore(),
-    plattCoefficients: providedCache._meta.plattCoefficients,
+    // R8: sugerencia de la auditoría (no la calibración aplicada en despacho).
+    plattCoefficients: providedCache._meta.plattCoefficientsSuggested,
     summary: {
       total: picksToReport.length,
       won,
@@ -4420,6 +4471,31 @@ export async function runAlertEngine(options = {}) {
     console.log(`Pendientes por enviar a Telegram (no duplicadas): ${toSend.length}`);
   }
 
+  // R1 (2026-11-24, fase 1): en modo real los spreads vetados por
+  // 'spread_paused' TAMBIÉN se registran en el ledger paper (mismo formato
+  // y misma función que en modo paper) para acumular los 20+ picks que
+  // exige la re-activación (cover medio >= 0 y acierto >= 50%, medidos con
+  // scripts/paperReport.mjs). No se despacha nada a suscriptores:
+  // recordPaperPick solo escribe data/paper_ledger.jsonl y espeja al canal
+  // privado de auditoría (prefijo PAPER_LEDGER). Va ANTES del retorno de
+  // turno vacío: un turno con solo spreads tendría toSend 0 y si no, no se
+  // registraría nunca. En dry-run no se registra nada (precedente C4).
+  // En modo paper no se duplica: el bloque paper de abajo ya registra
+  // TODOS los vetados (y recordPaperPick ignora duplicados por id).
+  if (!isPaper && !isDryRun) {
+    const pausedSpreads = (vetoedOpps || []).filter(opp => opp.vetoReason === 'spread_paused');
+    if (pausedSpreads.length) {
+      let brakeBlocked = false;
+      try { brakeBlocked = Boolean(readBankrollState({ sentCache }).blocked); } catch (e) { brakeBlocked = false; }
+      let recorded = 0;
+      for (const opp of pausedSpreads) {
+        const entry = buildPaperEntry(opp, { vetoReason: 'spread_paused', vetoDetail: opp.vetoDetail, shift: activeShiftType, brakeBlocked, wouldStake: 1.0 });
+        if (recordPaperPick(entry)) recorded++;
+      }
+      console.log(`🧪 R1: ${pausedSpreads.length} spread(s) en pausa registrado(s) en el ledger paper (${recorded} nuevos).`);
+    }
+  }
+
   if (toSend.length === 0 && !isPaper) {
     if (usesLock) sentCache._meta.scanLock = null;
     if (!isDryRun && (usesLock || auditResult.auditSent || autoSavedUnanimousCount > 0)) {
@@ -4787,7 +4863,7 @@ export async function runAlertEngine(options = {}) {
       `👉 *${pick.pick}*`,
       ``,
       ...(pick.tipsterAudit ? [pick.tipsterAudit.badgeTitle, `  _${pick.tipsterAudit.reason}_`, ``] : []),
-      `📊 *Probabilidad Calibrada:* \`${pick.prob}\``,
+      `📊 *Probabilidad Calibrada:* \`${formatDisplayedProb(pick.prob)}\``,
       `🏷️ *Nivel de Confianza:* \`${pick.confidence?.label || 'N/D'}\``,
       stabilityLine,
       // E2 (2026-11-16): el tier se muestra siempre. 'espn' es precio real de

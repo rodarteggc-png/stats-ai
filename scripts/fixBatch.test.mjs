@@ -360,8 +360,12 @@ async function runNbaDryRun({ withAi, gameDate = new Date(Date.now() + 2 * 36000
   const logBackup = snapshotFile(shiftLog);
   try {
     setLiveNbaRatings({
-      'boston celtics': { pace: 99, ortg: 114, drtg: 112, games: 10, source: 'live' },
-      'washington wizards': { pace: 101, ortg: 110, drtg: 113, games: 10, source: 'live' },
+      // Favorito claro (margen proyectado +22.3, cruda ML 93.5% → cal 58.9%
+      // con el par NBA Fase 3, R3): el ML local pasa los gates y el dry-run
+      // tiene algo que "enviar". Con los ratings viejos (114/112 vs 110/113)
+      // la cruda era ~70.7% y el refit la dejaba en cal ~43% (EV negativo).
+      'boston celtics': { pace: 99, ortg: 119, drtg: 109, games: 10, source: 'live' },
+      'washington wizards': { pace: 101, ortg: 107, drtg: 117, games: 10, source: 'live' },
     });
     clearNbaRatingsCache();
     const envPatch = {
@@ -398,7 +402,7 @@ test('solo el VIP privado usa 12 horas sin ampliar el turno matutino', async (co
 test('C4: dry-run clásico no registra en el ledger ni espeja LEDGER al canal', async () => {
   const { result, calls, ledgerBefore, ledgerFile } = await runNbaDryRun({ withAi: false });
   // El único pick que pasa todos los gates es el ML local (ratings live,
-  // EV +13.1%, gap mercado 6.7pp < 12pp, 2/3 votos). En dry-run se "envía".
+  // EV +12.5%, gap mercado 6.5pp < 12pp, 2/3 votos). En dry-run se "envía".
   // Lote 2: su precio es ESPN/DraftKings, así que el tier es 'espn' (no
   // 'market'); P4 variante B lo admite como segundo nivel.
   assert.equal(result.sentCount, 1);

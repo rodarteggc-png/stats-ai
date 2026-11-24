@@ -21,6 +21,8 @@
 //    cabe, no se guarda (el espejo Telegram sigue siendo el registro).
 //  - Local: data/paper_ledger.jsonl (misma forma que el ledger real + campos paper).
 
+import { capDisplayedProb } from './displayProb.js';
+
 export const PAPER_LEDGER_FILENAME = 'paper_ledger.jsonl';
 export const PAPER_CLOSURES_FILENAME = 'paper_ledger_closures.jsonl';
 export const PAPER_MAX_STASH_ENTRIES = 30;
@@ -41,7 +43,7 @@ export const PAPER_VETO_REASONS = {
   tipster_audit: 'Veto cualitativo Tipster Pro (fatiga/vestidor/clima)',
   burned_odds: 'Momio quemado: RLM favorable pero edge remanente < 3% o cuota < 1.45',
   prob_below_min: 'Probabilidad calibrada por debajo del mínimo del mercado',
-  spread_paused: 'Spreads en pausa: mercado en medición (1W-9L en el ledger real)',
+  spread_paused: 'Spreads en pausa: mercado en medición (1W-12L en el ledger real)',
   slate_cupo: 'Aprobado pero sin cupo en el Top Slate',
 };
 
@@ -86,7 +88,12 @@ export function buildPaperEntry(pick = {}, opts = {}) {
     rawProb: pick.rawProb !== undefined && pick.rawProb !== null ? num(pick.rawProb, null) : null,
     evPct: Number.isFinite(pick.evPct) ? Number(pick.evPct.toFixed(2)) : null,
     consensus: `${pick.consensus?.votesPassed ?? 3}/3`,
-    oddsSource: pick.oddsSource || 'market',
+    // R7 (2026-11-24): sin procedencia NO se inventa 'market' (null =
+    // desconocida). sharpBook/isPinnacle los fija attachSharpBookmaker en
+    // el despacho; aquí solo se trasladan al registro paper.
+    oddsSource: pick.oddsSource || null,
+    sharpBook: pick.sharpBookmaker || null,
+    isPinnacle: Boolean(pick.isPinnacle),
     // E2 (2026-11-16): tier y proveedor de la cuota, para que el registro
     // paper no mezcle picks sharp con picks ESPN.
     oddsProvider: pick.oddsProvider || null,
@@ -379,7 +386,10 @@ export function paperSlateMessage({ shiftLabel = '', dateStr = '', emitted = [],
   if (emitted.length) {
     lines.push(`📊 *EMITIDOS (habrían salido): ${emitted.length}*`);
     emitted.forEach((p, i) => {
-      lines.push(`${i + 1}. *${p.sport}:* ${p.game}\n   👉 \`${p.pick}\` @ \`${p.odds}\` | Prob cal. ${p.prob} (cruda ${p.rawProb ?? '?'}) | EV ${p.evPct ?? '?'}% | Stake ${p.stakeUnits ?? 1}u`);
+      // R5 (2026-11-24): la prob cal. mostrada lleva tope 80%. La cruda se
+      // muestra tal cual: es el diagnóstico de calibración que solo ve Tavo
+      // (el registro guardado —buildPaperEntry— conserva ambas reales).
+      lines.push(`${i + 1}. *${p.sport}:* ${p.game}\n   👉 \`${p.pick}\` @ \`${p.odds}\` | Prob cal. ${capDisplayedProb(p.prob)} (cruda ${p.rawProb ?? '?'}) | EV ${p.evPct ?? '?'}% | Stake ${p.stakeUnits ?? 1}u`);
     });
     lines.push(``);
   } else {

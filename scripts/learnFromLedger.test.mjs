@@ -15,7 +15,7 @@ const fakeReport = {
   streaks: { current: { type: 'L', count: 1 }, longestWin: 3, longestLoss: 4 },
   warnings: []
 };
-const tuning = { platt: { nba: { A: 0.65, B: -0.2 } }, nbaSigma: 14.7, spreadsPaused: true, drawdownStopUnits: 15, maxDailyExposureUnits: 6, internalQualityTargetUnits30d: 6 };
+const tuning = { platt: { nba: { A: 0.36, B: -0.6 } }, nbaSigma: 14.7, spreadsPaused: true, drawdownStopUnits: 15, maxDailyExposureUnits: 6, internalQualityTargetUnits30d: 6 };
 
 test('learn: el resumen lleva los números que importan', () => {
   const s = summarizeForAi(fakeReport);
@@ -27,7 +27,7 @@ test('learn: el resumen lleva los números que importan', () => {
 
 test('learn: el prompt incluye afinación vigente y las reglas de no tocar', () => {
   const p = buildLearningPrompt(summarizeForAi(fakeReport), tuning);
-  assert.match(p, /0\.65/);
+  assert.match(p, /0\.36/);
   assert.match(p, /Spreads en pausa: true/);
   assert.match(p, /Nunca propongas tocar los 5 candados/);
   assert.match(p, /muestra es insuficiente/);

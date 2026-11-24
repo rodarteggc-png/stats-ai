@@ -141,6 +141,10 @@ export function calculateNbaProbabilities(match) {
   // de margen de ~14.7 pts, así que la σ asumida subestimaba la varianza y las
   // coberturas salían sobreconfiadas. Total sigue en 17.5 pts (sin evidencia
   // en contra). Afecta a la prob. de victoria directa y a la de cubrir spread.
+  // R6 (Fase 4, 2026-11-24) — VERIFICADO, SIN CAMBIO: la σ de totales NBA
+  // ya es 17.5, por encima de la DE observada (16.03, §2.1). El "σ=14.7"
+  // del informe es la σ de MARGEN (spreadStdDev, arriba), no la de totales;
+  // bajar el total a ~16 aumentaría la sobreconfianza, lo contrario de R6.
   const spreadStdDev = 14.7;
   const totalStdDev = 17.5;
 

@@ -1,5 +1,6 @@
 import { buildOpportunitiesAndTopSlate } from '../../scripts/alertEngine.js';
 import { loadFutureModelData } from './futureData.js';
+import { capDisplayedProb } from '../../src/utils/displayProb.js';
 
 const observations = new Map();
 
@@ -103,7 +104,7 @@ export function formatFutureMultiSport(report) {
     lines.push(
       `*${index + 1}. ${safeText(pick.game)}* (${safeText(pick.sport)})`,
       `${safeText(pick.pick)} @ *${Number(pick.odds).toFixed(2)}*${pick.oddsSource === 'espn' ? ' (ESPN 2º nivel)' : ''}`,
-      `Probabilidad calibrada: *${parseFloat(pick.prob).toFixed(1)}%* | EV estimado: ${Number(pick.evPct).toFixed(1)}% | Consenso: ${pick.consensus.votesPassed}/3`,
+      `Probabilidad calibrada: *${capDisplayedProb(parseFloat(pick.prob)).toFixed(1)}%* | EV estimado: ${Number(pick.evPct).toFixed(1)}% | Consenso: ${pick.consensus.votesPassed}/3`,
       ...(pick.oddsSource === 'espn' ? ['Cuota ESPN (2º nivel): precio de DraftKings, no Pinnacle. EV medido sin vig.'] : []),
       `Inicio: ${safeText(pick.gameDate)} | Casa: ${safeText(pick.oddsSource === 'espn' ? (pick.oddsProvider || 'DraftKings') : pick.match?.market?.sharpBookmaker)}`,
       `Cuota actualizada: ${safeText(pick.match?.market?.updatedAt)}`,
@@ -117,7 +118,11 @@ export function formatFutureMultiSport(report) {
     const combo = report.combination;
     lines.push('*COMBINACION OPCIONAL | DOS PARTIDOS*');
     combo.legs.forEach(leg => lines.push(`${safeText(leg.game)}: ${safeText(leg.pick)} @ ${Number(leg.odds).toFixed(2)}`));
-    lines.push(`Cuota multiplicada estimada: ${combo.odds.toFixed(2)}. Probabilidad conjunta: ${combo.probability.toFixed(1)}%.`,
+    // R5 (2026-11-24): la conjunta MOSTRADA se calcula con las patas ya
+    // topadas en 80% (máx. 64%). La conjunta interna de
+    // buildConservativeCombination, usada para el gate >= 60%, no se toca.
+    const comboProbShown = combo.legs.reduce((acc, leg) => acc * capDisplayedProb(parseFloat(leg.prob)) / 100, 1) * 100;
+    lines.push(`Cuota multiplicada estimada: ${combo.odds.toFixed(2)}. Probabilidad conjunta: ${comboProbShown.toFixed(1)}%.`,
       'Estimacion bajo independencia, no garantia ni cuota cotizada de una combinada. Dos patas siempre reducen la probabilidad frente a jugar cada una por separado.', '');
   } else lines.push('No se construye combinada: faltan dos partidos de equipos distintos cuya probabilidad conjunta estimada alcance 60%.', '');
   for (const notice of [...new Set(report.notices)].slice(0, 6)) lines.push(safeText(notice));

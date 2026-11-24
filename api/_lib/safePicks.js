@@ -3,13 +3,16 @@
 // (1.13–1.50). Son picks de ALTA probabilidad y cuota corta, NO +EV: el EV
 // según el modelo es negativo y se muestra explícitamente, nunca se oculta.
 // No toca la matemática congelada ni los 5 candados: reutiliza
-// calculateMatchProbabilities + applyPlattCalibration tal cual, y solo añade
-// un umbral de selección propio. El registro va a un ledger SEPARADO
-// (data/safe_picks_ledger.jsonl), jamás a data/pick_ledger.jsonl.
+// calculateMatchProbabilities tal cual, y solo añade un umbral de selección
+// propio. La calibración es la suave de fútbol (applySoccerSafeCalibration,
+// A=0.36/B=-0.03, decisión de Tavo 2026-11-24 15:16 CST): el Seguro es solo
+// favoritos ML de fútbol y el refit global (A=0.34/B=-0.33) lo sobrecorrige.
+// El registro va a un ledger SEPARADO (data/safe_picks_ledger.jsonl), jamás
+// a data/pick_ledger.jsonl.
 // Solo disponible en el chat privado VIP (el webhook lo gatea con isPrivateVip).
 import { fetchDailySchedule } from '../../src/services/sportsApi.js';
 import { calculateMatchProbabilities } from '../../src/utils/poisson.js';
-import { applyPlattCalibration } from '../../src/utils/calibration.js';
+import { applySoccerSafeCalibration } from '../../src/utils/calibration.js';
 import { appendFileSync } from 'node:fs';
 
 export const SAFE_MIN_CAL_PROB = 55;
@@ -29,14 +32,16 @@ function teamName(team) {
  *   .league, .gameDate y .market.homeOdds/.awayOdds (DraftKings).
  * @param {number} now - ms epoch (por defecto Date.now()).
  * @param {object} deps - { calculateMatchProbabilities, applyPlattCalibration }
- *   inyectables para tests; por defecto las reales.
+ *   inyectables para tests; por defecto las reales. La calibración por
+ *   defecto es la suave de fútbol (applySoccerSafeCalibration), no la
+ *   global del slate.
  * @returns {Array} picks { game, league, gameDate, side, team, odds, rawProb,
  *   calProb, evCalPct, label: 'SEGURO' }.
  */
 export function selectSafePicks(
   matches,
   now = Date.now(),
-  deps = { calculateMatchProbabilities, applyPlattCalibration }
+  deps = { calculateMatchProbabilities, applyPlattCalibration: applySoccerSafeCalibration }
 ) {
   const { calculateMatchProbabilities: calcProbs, applyPlattCalibration: calibrate } = deps;
   const picks = [];

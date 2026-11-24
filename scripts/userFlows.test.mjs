@@ -746,10 +746,12 @@ test('las fuentes futuras cargan cinco deportes sin inventar precios ni estadist
   assert.ok(requests.filter(url => url.pathname.endsWith('/scoreboard')).every(url => url.searchParams.get('dates') === '20261102-20261104'));
   const modeled = evaluateFutureModels(data.matches, timestamp, timestamp + 48 * 3600000);
   const direct = buildOpportunitiesAndTopSlate({ ...data.matches, isForce: true, sentCache: {}, maxPicksToSend: 100 });
-  // Afinación 2026-11-10: con la calibración nueva (Platt A=0.65/B=-0.20, σ NBA
-  // 14.7) el modelo evalúa el partido NBA pero rechaza los dos picks por EV
-  // negativo (spread y ML con EV < 2%): ya no hay candidato NBA en este caso,
-  // y es lo correcto (antes el spread salía con EV +4%).
+  // Afinación 2026-11-24 (Fase 3, R2+R3): con el refit forense (global
+  // A=0.34/B=-0.33, NBA A=0.36/B=-0.60) el modelo evalúa el partido NBA pero
+  // rechaza los dos picks por EV negativo (spread y ML con EV < 2%): ya no
+  // hay candidato NBA en este caso, y es lo correcto (antes el spread salía
+  // con EV +4%). Las cifras de EV citadas abajo (spread 1.99%, ML -6.48%)
+  // se midieron con la calibración 2026-11-10; con el refit son aún menores.
   // Lote 2026-11-16 (P1): el rechazo llega ANTES por el gate NBA estático
   // (futureData no carga ratings en vivo, así que ratingsSource es 'static'):
   // el veto es 'nba_static_ratings' y el EV negativo sigue debajo (spread
@@ -1716,7 +1718,7 @@ test('modo paper: classifyOpportunity aprueba lo que pasaba y veta con motivo lo
 
 import { applyPlattCalibration } from '../src/utils/calibration.js';
 
-test('afinación 2026-11-10 + excepción NBA 2026-11-16: los spreads quedan en pausa salvo NBA con ratings en vivo', () => {
+test('R1 2026-11-24 (fase 1): TODOS los spreads en pausa, incluida NBA con ratings en vivo', () => {
   const base = {
     sport: 'Baloncesto', league: 'NBA', game: 'Utah Jazz vs Miami Heat',
     pick: 'Utah Jazz +9.5 (Cubre Línea)', type: '🏀 SPREAD NBA', odds: 1.91, prob: '60',
@@ -1724,14 +1726,15 @@ test('afinación 2026-11-10 + excepción NBA 2026-11-16: los spreads quedan en p
     ratingsSource: 'live',
     consensus: { votesPassed: 3 }, tipsterAudit: { isApproved: true },
   };
-  // Excepción 2026-11-16 (decisión de Tavo): el spread NBA con ratings en vivo
-  // pasa la pausa (pasa todo lo demás y se aprueba).
-  assert.equal(classifyOpportunity(base).approved, true);
-  assert.equal(classifyOpportunity(base).vetoReason, null);
+  // R1: la excepción NBA 2026-11-16 queda revocada — el spread NBA con
+  // ratings en vivo también se veta 'spread_paused' hasta tener 20+ picks
+  // paper con cover medio >= 0 y acierto >= 50% (forense: 1W-12L).
+  assert.equal(classifyOpportunity(base).vetoReason, 'spread_paused');
+  assert.equal(classifyOpportunity(base).approved, false);
   // El mismo perfil en total sí se aprueba: la pausa es solo para spreads.
   assert.equal(classifyOpportunity({ ...base, pick: 'UNDER 240.5 Pts', type: '🏀 TOTALES NBA (UNDER)' }).approved, true);
-  // NBA con ratings estáticos o sin dato sigue en pausa (fail-closed: el gate
-  // P1 lo veta antes como nba_static_ratings, así que aquí nunca llega).
+  // NBA con ratings estáticos o sin dato sigue sin llegar a la pausa: el
+  // gate P1 lo veta antes como nba_static_ratings.
   assert.equal(classifyOpportunity({ ...base, ratingsSource: 'static' }).vetoReason, 'nba_static_ratings');
   const { ratingsSource: _ratingsSource, ...noRatings } = base;
   assert.equal(classifyOpportunity(noRatings).vetoReason, 'nba_static_ratings');
@@ -1741,13 +1744,13 @@ test('afinación 2026-11-10 + excepción NBA 2026-11-16: los spreads quedan en p
   assert.equal(classifyOpportunity({ ...base, sport: 'Fútbol Americano', league: 'NFL', type: '🏈 NFL', pick: 'Kansas City -3.5 (Cubre Línea)' }).vetoReason, 'spread_paused');
 });
 
-test('afinación 2026-11-10: Platt usa el ajuste del ledger (A=0.65, B=-0.20)', () => {
-  // Corrección parcial: el ajuste pooled pide A≈0.20 pero eso deja el slate
-  // vacío (muestra seleccionada); A=0.65 corrige la sobreconfianza sin
-  // silenciar el motor. Cruda 85% → calibrada 71.7%; cruda 70% → 58.7%.
-  assert.equal(applyPlattCalibration(85, 'nba'), 71.7);
-  assert.equal(applyPlattCalibration(70, 'futbol'), 58.7);
-  assert.equal(applyPlattCalibration(90, 'ncaaf'), 77.4);
+test('afinación 2026-11-24 (Fase 3, R2+R3): Platt usa el refit forense (global A=0.34, B=-0.33; NBA A=0.36, B=-0.60)', () => {
+  // Refit honesto del diagnóstico forense (n=56, gap +16.43): cruda 85% →
+  // 56.5% global, cruda 70% → 49.0%. El slate +EV casi se vacía por diseño;
+  // el tier Seguro absorbe la acción. NBA: cruda 85% → 50.6% (interino).
+  assert.equal(applyPlattCalibration(85, 'nba'), 50.6);
+  assert.equal(applyPlattCalibration(70, 'futbol'), 49);
+  assert.equal(applyPlattCalibration(90, 'ncaaf'), 60.3);
 });
 
 test('modo paper: buildOpportunitiesAndTopSlate devuelve los vetados con motivo', () => {

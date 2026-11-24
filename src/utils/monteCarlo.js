@@ -373,7 +373,13 @@ export function simulateNflMatch(
   const windPen = wind > 14 ? (wind - 14) * 0.35 : 0;
   const adjTotal = Math.max(25, total - windPen);
   const sigma = isCol ? 16.5 : 13.45;
-  const sigmaTot = isCol ? 14.5 : 9.8;
+  // R6 (Fase 4, 2026-11-24): dispersión de totales colegial 14.5 → 21.0
+  // (DE observada NCAAF 21.43, §2.1 del informe forense). Solo totales: la
+  // σ de margen (16.5/13.45) NO cambia. NFL queda en 9.8 (n=0, sin evidencia).
+  // Nota: en el despacho, los totales NFL/NCAAF viven en gridiron.js
+  // (calculateTotalOverUnderProbability); este σTot solo alimenta el
+  // overProb del simulador web y la cobertura de spread no lo usa.
+  const sigmaTot = isCol ? 21.0 : 9.8;
   const blowoutThresh = isCol ? 14.5 : 10.5;
 
   for (let i = 0; i < numIterations; i++) {

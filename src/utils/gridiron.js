@@ -111,7 +111,11 @@ export function calculateTotalOverUnderProbability(predictedTotal, vegasTotal, w
   }
 
   const effectiveTotal = Math.max(25.0, pTot - windPenalty);
-  const sigmaTotal = isCollege ? 15.20 : 13.80;
+  // R6 (Fase 4, 2026-11-24): dispersión de totales NCAAF 15.20 → 21.0 para
+  // que la DE implícita coincida con la observada (21.43, n=13; §2.1 del
+  // informe forense). La media (effectiveTotal) NO cambia: sin sesgo.
+  // NFL queda en 13.80 (n=0 picks, sin evidencia para un valor propio).
+  const sigmaTotal = isCollege ? 21.0 : 13.80;
 
   // P(Under) = P(Puntos < vegasTotal) = Φ((vegasTotal - effectiveTotal) / σ)
   const underProb = normalCdf(vTot - effectiveTotal, 0, sigmaTotal);
