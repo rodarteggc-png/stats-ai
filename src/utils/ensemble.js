@@ -176,7 +176,16 @@ export function evaluateEnsembleConsensus({
     } else {
       vote1Reason = `Duelo monticular sin disparidad clara en las primeras 5 entradas.`;
     }
-  } else if (sLower.includes('nfl')) {
+  } else if (sLower.includes('nfl') || (sLower.includes('ncaaf') && pTypeUpper.includes('DIRECTO'))) {
+    // WORK B (2026-11-24): 'ncaaf' NO contiene 'nfl' ('n-c-a-a-f'), así que
+    // la NCAAF nunca entraba a esta rama y su Voto 1 NUNCA pasaba
+    // (verificado: un spread NCAAF con 70% de cobertura da votesPassed 2,
+    // Voto 1 ❌ sin motivo). El enrutado NCAAF es SOLO para ML DIRECTO:
+    // meter toda la NCAAF aquí cambiaría los vetos de sus spreads/totales
+    // (Sucker/Heavy/Disparidad/Domo, calibrados para spreads NFL de hasta
+    // 10.5 pts, no para los colegiales de hasta 24), y la tarea prohíbe
+    // tocar vetos de spread/total. Los spreads/totales NCAAF conservan su
+    // comportamiento actual (Voto 1 sin rama).
     const homeCover = parseFloat(probs.homeCoverProb || 50);
     const awayCover = parseFloat(probs.awayCoverProb || 50);
     const maxCover = Math.max(homeCover, awayCover);
@@ -188,7 +197,7 @@ export function evaluateEnsembleConsensus({
 
     // CANDADO 1: VETO A LA LÍNEA TRAMPA (+2.5 / -2.5) EN NFL
     const isSucker25Spread = !isTotalsNfl && (absSpread === 2.5 || pickStr.includes('+2.5') || pickStr.includes('-2.5'));
-    
+
     // CANDADO 3: FILTRO ANTI-BLOWOUT EN PERROS INCOMPETENTES
     const isUnderdogSpread = !isTotalsNfl && ((spread < 0 && awayCover >= homeCover) || (spread > 0 && homeCover >= awayCover));
     const dogTeam = spread < 0 ? match.away : match.home;
@@ -200,15 +209,15 @@ export function evaluateEnsembleConsensus({
     // CANDADO 4: VETO A UNDERS EN DOMOS CON LÍNEA PESADA
     const isUnderNfl = isTotalsNfl && (pTypeUpper.includes('UNDER') || pickStr.includes('under'));
     const stadiumName = (match.stadium?.name || match.stadium || match.weather?.stadium || '').toLowerCase();
-    const isDome = match.weather?.isDome === true || 
-                   stadiumName.includes('dome') || 
-                   stadiumName.includes('ford field') || 
-                   stadiumName.includes('allegiant') || 
-                   stadiumName.includes('sofi') || 
-                   stadiumName.includes('mercedes-benz') || 
-                   stadiumName.includes('att stadium') || 
-                   stadiumName.includes('lucas oil') || 
-                   stadiumName.includes('us bank') || 
+    const isDome = match.weather?.isDome === true ||
+                   stadiumName.includes('dome') ||
+                   stadiumName.includes('ford field') ||
+                   stadiumName.includes('allegiant') ||
+                   stadiumName.includes('sofi') ||
+                   stadiumName.includes('mercedes-benz') ||
+                   stadiumName.includes('att stadium') ||
+                   stadiumName.includes('lucas oil') ||
+                   stadiumName.includes('us bank') ||
                    stadiumName.includes('state farm');
     const vegasTotalNum = parseFloat(match.market?.overUnder || match.vegas?.overUnder || 45.5);
 
@@ -216,7 +225,56 @@ export function evaluateEnsembleConsensus({
     const isFavoriteCover = !isTotalsNfl && ((spread < 0 && homeCover >= awayCover) || (spread > 0 && awayCover >= homeCover));
     const isHeavySpread = absSpread >= 7.5;
 
-    if (isSucker25Spread) {
+    // ML DIRECTO (WORK B): la rama NFL no tenía camino de ML (está
+    // construida para spreads/totales). Este camino va PRIMERO y solo se
+    // activa para picks DIRECTO (no spread/total). Evalúa la prob de
+    // victoria cruda (probs.homeWinProb/awayWinProb, mismo piso 55.0 del
+    // ML NBA: backstop por debajo del piso 62.0 del builder — nunca manda
+    // más que el builder — y por encima del piso 54.0 de classify para ML;
+    // el chequeo matemático universal de abajo sigue aplicando con la
+    // prob CALIBRADA vs la implícita). Vetoes:
+    // - Sucker Line (±2.5): NO aplica al ML. Su propio texto dice
+    //   "o Moneyline directo": el ML es la alternativa recomendada al
+    //   spread trampa, no el spread vetado.
+    // - Heavy Spread (>= 7.5) y Disparidad Extrema (> 10.5): NO aplican.
+    //   Son sobre CUBRIR un spread (exigir >1 TD / riesgo de paliza en
+    //   cobertura), no sobre ganar el partido.
+    // - Dome Pace (UNDER en domo): NO aplica (veto de totales).
+    // - Blowout Risk (Candado 3, uno de los 5 — NO se relaja para
+    //   spreads): SÍ aplica al ML underdog. Respaldar a un underdog
+    //   incompetente (YPP < 4.65 / EPA < -0.12 / pérdidas <= -5) a ganar
+    //   el partido es el mismo riesgo que respaldarlo con puntos. NO
+    //   aplica al pick favorito (el veto es sobre el underdog).
+    const isMlPick = pTypeUpper.includes('DIRECTO') && !isTotalsNfl;
+    if (isMlPick) {
+      const mlLabel = sLower.includes('ncaaf') ? 'NCAAF' : 'NFL';
+      const hWin = parseFloat(probs.homeWinProb ?? probs.homeWin ?? 50);
+      const aWin = parseFloat(probs.awayWinProb ?? probs.awayWin ?? 50);
+      const maxWin = Math.max(hWin, aWin);
+      const isMlUnderdog = numericOdds > 2.05;
+      let mlBlowout = false;
+      let mlDogYpp = NaN;
+      let mlDogEpa = NaN;
+      let mlDogTurnover = NaN;
+      if (isMlUnderdog) {
+        const pickLower = (typeof pick === 'string' ? pick : '').toLowerCase();
+        const isHomePick = Boolean(match.home?.name) && pickLower.includes(String(match.home.name).toLowerCase());
+        const mlDogTeam = isHomePick ? match.home : match.away;
+        mlDogYpp = parseFloat(mlDogTeam?.ypp || mlDogTeam?.stats?.ypp || 5.0);
+        mlDogEpa = parseFloat(mlDogTeam?.epa || mlDogTeam?.stats?.epa || 0.0);
+        mlDogTurnover = parseFloat(mlDogTeam?.turnoverMargin || mlDogTeam?.stats?.turnoverMargin || 0);
+        mlBlowout = mlDogYpp < 4.65 || mlDogEpa < -0.12 || mlDogTurnover <= -5;
+      }
+      if (mlBlowout) {
+        vote1Passed = false;
+        vote1Reason = `⛔ Blowout Risk Veto: Underdog con ataque inerte (YPP ${mlDogYpp} < 4.65 / EPA ${mlDogEpa}) o sangrado de pérdidas (${mlDogTurnover}). Riesgo extremo de derrota por 20+ puntos.`;
+      } else if (maxWin >= 55.0) {
+        vote1Passed = true;
+        vote1Reason = `Moneyline directo ${mlLabel} validado por Gridiron (Prob. de victoria ${maxWin.toFixed(1)}% en cuota ${numericOdds.toFixed(2)}).`;
+      } else {
+        vote1Reason = `Probabilidad de victoria directa insuficiente en ${mlLabel} (${maxWin.toFixed(1)}% < 55.0%).`;
+      }
+    } else if (isSucker25Spread) {
       vote1Passed = false;
       vote1Reason = `⛔ Sucker Line Veto: Spread de 2.5 puntos (+2.5/-2.5) prohibido en NFL. El margen de 3 puntos (15.2% de partidos) rompe la cobertura. Exige línea en 3.0/3.5 o Moneyline directo.`;
     } else if (hasBlowoutRisk) {
@@ -275,8 +333,20 @@ export function evaluateEnsembleConsensus({
         vote1Passed = true;
         vote1Reason = `Favorito directo NBA validado por Modelo de Posesiones (Prob: ${maxWin.toFixed(1)}% en cuota segura ${numericOdds.toFixed(2)}).`;
       } else if (numericOdds > 2.05) {
-        vote1Passed = false;
-        vote1Reason = `⛔ Candado Anti-Underdog NBA: Cuota ${numericOdds.toFixed(2)} (> 2.05) en Moneyline directo. Proteger con Spread o Hándicap positivo.`;
+        // WORK A (2026-11-24, decisión de Tavo 17:34 CST): excepción GAP1.
+        // El builder ML visitante NBA ('VISITANTE DIRECTO') ya exige prob
+        // cruda del visitante >= 62.0% y precio real; si el modelo valida
+        // al underdog con ese piso, el Voto 1 pasa. Cualquier otro ML NBA
+        // con cuota > 2.05 sigue vetado por el Candado Anti-Underdog.
+        // El Candado Matemático Universal (abajo) sigue aplicando.
+        const isGap1AwayMl = pTypeUpper.includes('VISITANTE DIRECTO');
+        if (isGap1AwayMl && aWin >= 62.0) {
+          vote1Passed = true;
+          vote1Reason = `Underdog visitante NBA validado por Modelo de Posesiones (Prob visitante: ${aWin.toFixed(1)}% >= 62.0%, cuota ${numericOdds.toFixed(2)}).`;
+        } else {
+          vote1Passed = false;
+          vote1Reason = `⛔ Candado Anti-Underdog NBA: Cuota ${numericOdds.toFixed(2)} (> 2.05) en Moneyline directo. Proteger con Spread o Hándicap positivo.`;
+        }
       } else {
         vote1Reason = `Margen de victoria directo sin ventaja matemática suficiente.`;
       }

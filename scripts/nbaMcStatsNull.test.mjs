@@ -40,10 +40,10 @@ function vote2(result) {
   return entry;
 }
 
-test('A1: los 5 sitios NBA llevan mcStats: null y no queda ningún fijo 80/82/85', () => {
+test('A1: los 6 sitios NBA llevan mcStats: null y no queda ningún fijo 80/82/85', () => {
   const src = fs.readFileSync(ALERT_ENGINE_PATH, 'utf8');
   const nullCount = (src.match(/mcStats: null/g) || []).length;
-  assert.equal(nullCount, 5, `se esperaban 5x mcStats: null (spreads x2, totales x2, ML x1), hay ${nullCount}`);
+  assert.equal(nullCount, 6, `se esperaban 6x mcStats: null (spreads x2, totales x2, ML x2: local + visitante GAP1), hay ${nullCount}`);
   for (const fixed of ['stability: 80', 'stability: 82', 'stability: 85']) {
     assert.ok(!src.includes(`mcStats: { ${fixed}`), `sigue el fijo NBA mcStats: { ${fixed} — A1 no aplicado`);
   }
@@ -86,15 +86,17 @@ test('A1 control: con mcStats real el Voto 2 sí vota (no es un veto encubierto)
 
 test('A1 (ML): el builder ML expone homeWinProb/awayWinProb para el Voto 1', () => {
   const src = fs.readFileSync(ALERT_ENGINE_PATH, 'utf8');
-  // La línea probs del builder ML es la única con homeWinProb/awayWinProb en el
-  // nivel superior (tras cerrar f5); los spreads/totales solo llevan { f5: ... }.
+  // Las líneas probs de los builders ML son las únicas con homeWinProb/
+  // awayWinProb en el nivel superior (tras cerrar f5); los spreads/totales
+  // solo llevan { f5: ... }. GAP1: ahora hay 2 (ML local + ML visitante).
   const mlProbsLines = src.split('\n').filter((l) =>
     l.includes('probs: { f5:') && l.includes('}, homeWinProb: probs.homeWinProb')
   );
-  assert.equal(mlProbsLines.length, 1, `se esperaba exactamente 1 línea probs de ML con homeWinProb top-level, hay ${mlProbsLines.length}`);
-  const probsLine = mlProbsLines[0];
-  assert.ok(probsLine.includes('awayWinProb: probs.awayWinProb'), 'el probs del ML debe exponer awayWinProb en el nivel superior');
-  assert.ok(probsLine.includes('f5:'), 'el probs del ML debe mantener f5 (lo usa effectiveProb)');
+  assert.equal(mlProbsLines.length, 2, `se esperaban exactamente 2 líneas probs de ML con homeWinProb top-level (local + visitante GAP1), hay ${mlProbsLines.length}`);
+  for (const probsLine of mlProbsLines) {
+    assert.ok(probsLine.includes('awayWinProb: probs.awayWinProb'), 'el probs del ML debe exponer awayWinProb en el nivel superior');
+    assert.ok(probsLine.includes('f5:'), 'el probs del ML debe mantener f5 (lo usa effectiveProb)');
+  }
 });
 
 test('A1 (ML): un ML con homeWinProb real pasa el Voto 1 y despacha 2/2 sin mcStats', () => {

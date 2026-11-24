@@ -126,17 +126,18 @@ test('Fase 1: línea 2.5 sigue igual (regresión)', () => {
   assert.equal(raw[0].oddsSource, 'espn', 'la cuota 2.5 sigue siendo real (ESPN, tier espn)');
 });
 
-test('Fase 1: línea no soportada (2.75) no usa cuota real (fail-closed)', () => {
+test('Fase 1 + GAP 3: línea no soportada (2.75) no genera oportunidad (fail-closed en el builder)', () => {
+  // GAP 3 (2026-11-24): antes se generaba la oportunidad con cuota inventada
+  // (oddsSource 'model') y se vetaba después; ahora no se genera nada.
   const out = runBuilder([soccerMatch({
     id: 'soccer-ml-275',
     home: { name: 'Team A', xG: '3.50' },
     away: { name: 'Team B', xG: '0.50' },
     line: 2.75, overOdds: '1.90', underOdds: '1.90',
   })]);
-  const raw = out.rawOpportunities.filter(o => o.id.startsWith('tot-'));
-  assert.ok(raw.length >= 1, 'se esperaba al menos 1 oportunidad de totales');
-  assert.ok(raw.every(o => o.oddsSource === 'model'),
-    `línea 2.75 no soportada: la cuota debe ser model, hay ${raw.map(o => o.oddsSource).join(',')}`);
+  assert.equal(out.rawOpportunities.length, 0,
+    `línea 2.75 sin precio real: no debe generar oportunidades, hay ${JSON.stringify(out.rawOpportunities.map(o => o.id))}`);
+  assert.equal(out.approvedOpps.length, 0);
 });
 
 test('Fase 1: línea Pinnacle (m.vegas) tiene prioridad sobre ESPN', () => {

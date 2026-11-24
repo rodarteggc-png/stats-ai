@@ -7,8 +7,10 @@ import { espnLeagueFor } from './captureClosingOdds.mjs';
 // Champions League femenil (UWCL) — 2026-11-18.
 // Partido real del 19 nov, xG/Elo de standings en vivo verificados ese día:
 // Barcelona xG 2.45 Elo 1553, Servette xG 1.53 Elo 1496.
-// Sin cuotas de mercado en el fixture: el builder usa fair odds y el veto
-// esperado es 'odds_model' (C3), NO 'league_not_tier1'.
+// Sin cuotas de mercado en el fixture: GAP 3 (2026-11-24) — el builder ya
+// no genera la oportunidad (antes se generaba con cuota inventada y se
+// vetaba por odds_model/C3). Con cuota real, el veto esperado NO es
+// 'league_not_tier1'.
 function uwclMatch() {
   return {
     id: 'soccer-uwcl-test-1',
@@ -28,20 +30,42 @@ test('UWCL: la liga pasa el filtro Tier 1 (como la varonil)', () => {
 });
 
 test('UWCL: el partido se evalúa (genera oportunidades) y no se veta por liga', () => {
-  const out = buildOpportunitiesAndTopSlate({
+  // GAP 3 (2026-11-24): sin cuota real el partido ya no genera oportunidades
+  // (antes se generaban con cuota inventada y se vetaban por odds_model/C3).
+  const outNoPrice = buildOpportunitiesAndTopSlate({
     soccerMatches: [uwclMatch()],
+    mlbMatches: [], nflMatches: [], ncaafMatches: [], nbaMatches: [],
+    maxPicksToSend: 6, sentCache: {}, isForce: true,
+  });
+  assert.equal(
+    outNoPrice.rawOpportunities.filter(o => o.league === "UEFA Women's Champions League").length,
+    0, 'sin cuota real el pick UWCL no debe generarse (GAP 3)');
+  // Con cuota real (ESPN, totales 3.5) sí se evalúa y no se veta por liga.
+  // Fixture con riskLevel estable (xG 1.80/0.30, como en
+  // marketLineTotals.test.mjs): el Barcelona/Servette real es inestable en
+  // Monte Carlo y a veces no genera la oportunidad por riesgo 'Alto'.
+  const priced = {
+    id: 'soccer-uwcl-test-1',
+    sport: 'futbol',
+    league: "UEFA Women's Champions League",
+    leagueCode: 'uefa.wchampions',
+    gameDate: '2026-11-19T20:00:00Z',
+    home: { name: 'Team A', xG: '1.80', elo: 1500, daysRest: 7 },
+    away: { name: 'Team B', xG: '0.30', elo: 1450, daysRest: 7 },
+    market: { totalClose: 3.5, overOdds: '2.20', underOdds: '1.63', provider: 'DraftKings' },
+  };
+  const out = buildOpportunitiesAndTopSlate({
+    soccerMatches: [priced],
     mlbMatches: [], nflMatches: [], ncaafMatches: [], nbaMatches: [],
     maxPicksToSend: 6, sentCache: {}, isForce: true,
   });
   const uwclRaw = out.rawOpportunities.filter(o => o.league === "UEFA Women's Champions League");
   assert.ok(uwclRaw.length >= 1, `se esperaba al menos 1 oportunidad UWCL, hay ${uwclRaw.length}`);
+  assert.ok(uwclRaw.every(o => o.oddsSource === 'espn'),
+    `la cuota UWCL debe ser real (espn), hay: ${uwclRaw.map(o => o.oddsSource).join(',')}`);
   const uwclVetoed = out.vetoedOpps.filter(v => v.league === "UEFA Women's Champions League");
   assert.ok(!uwclVetoed.some(v => v.vetoReason === 'league_not_tier1'),
     'un pick UWCL no debe vetarse por liga');
-  // Sin cuota real en el fixture, el veto esperado es odds_model (C3), no liga.
-  assert.ok(uwclVetoed.length > 0, 'sin cuota real el pick UWCL debe vetarse (odds_model)');
-  assert.ok(uwclVetoed.every(v => v.vetoReason === 'odds_model'),
-    `vetos UWCL esperados 'odds_model', hay: ${uwclVetoed.map(v => v.vetoReason).join(',')}`);
 });
 
 test('UWCL: history.js califica contra uefa.wchampions, no contra la varonil', () => {

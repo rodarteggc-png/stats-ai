@@ -1609,6 +1609,21 @@ export function attachSharpBookmaker(opp) {
 }
 
 /**
+ * GAP 3 (2026-11-24): procedencias de precio REAL. Solo estas tres cuentan
+ * como precio de mercado para generar una oportunidad: 'market' (sharp:
+ * Pinnacle/Bet365), 'espn' (precio real ESPN/DraftKings, segundo nivel) y
+ * 'propline' (precio real DraftKings vía PropLine para props). Cualquier otra
+ * procedencia ('model', 'assumed', 'proxy', 'derived', sin dato) significa
+ * que no hay precio real para ese mercado/lado/línea.
+ * Es el mismo allowlist que el gate P4 de classifyOpportunity, así que
+ * ninguna oportunidad que pudiera aprobarse se pierde con este filtro.
+ */
+export const REAL_ODDS_SOURCES = ['market', 'espn', 'propline'];
+export function hasRealPrice(opp) {
+  return REAL_ODDS_SOURCES.includes(opp?.oddsSource);
+}
+
+/**
  * Determina de dónde sale la cuota publicada y la reemplaza por el precio real del libro cuando existe.
  * oddsSource: 'market' (precio sharp: Pinnacle/Bet365 vía Odds API/API-Sports) | 'espn' (precio real
  *             de ESPN/DraftKings, segundo nivel etiquetado, variante B de P4) | 'derived' (derivado
@@ -1723,7 +1738,16 @@ export function resolveOddsProvenance(opp) {
   }
 
   if (sport === 'nfl' || sport === 'ncaaf') {
-    if (isTotal) {
+    if (id.startsWith('nfl-ml-') || id.startsWith('ncaaf-ml-')) {
+      // ML DIRECTO (WORK B, 2026-11-24): sin esta rama el ML caía en el
+      // camino de spreads de abajo (busca spreadHomeOdds/hasRealSpread) y
+      // quedaba 'model' aunque el precio ML fuera real — el builder sería
+      // código muerto (el splice Gap 3 lo descartaría antes de clasificar).
+      // Espejo exacto de la rama `nba-ml-` de baloncesto: el precio es el
+      // ML real del partido (Pinnacle si hubo enriquecimiento sharp,
+      // DraftKings/ESPN si no; el tier lo decide markRealPrice).
+      markRealPrice(real(opp.odds) && m.market?.hasRealOdds);
+    } else if (isTotal) {
       const price = real(isOver ? (m.vegas?.overOdds || m.market?.overOdds) : (m.vegas?.underOdds || m.market?.underOdds));
       applyTwoWay(m.hasRealTotal, price);
     } else {
@@ -2290,18 +2314,50 @@ export function buildOpportunitiesAndTopSlate({
       }
     }
 
-    // 6. EVALUACIÓN DE HÁNDICAP ASIÁTICO (-1.5) PARA FAVORITOS PESADOS (CUOTA 1X2 <= 1.48)
-    // Permite monetizar equipos dominantes a cuotas rentables (1.65 a 2.30)
-    const probHomeMinus15 = parseFloat(probs.spreads?.homeMinus15 || mc.homeMinus15Prob || 0);
-    const probAwayMinus15 = parseFloat(probs.spreads?.awayMinus15 || mc.awayMinus15Prob || 0);
+    // 6. EVALUACIÓN DE HÁNDICAP ASIÁTICO PARA FAVORITOS PESADOS (CUOTA 1X2 <= 1.48)
+    // — LÍNEA DEL MERCADO (mirror del fix de totales, bd1e617)
+    // Permite monetizar equipos dominantes a cuotas rentables (1.65 a 2.30).
+    // Antes solo se evaluaba -1.5 y solo se usaba cuota real si la línea
+    // publicada era exactamente -1.5. Ahora se evalúa la línea que realmente
+    // ofrece el mercado (-1.5/-2.5, o +1.5/+2.5 del local cuando el favorito
+    // es visitante) y la probabilidad del modelo para ESA línea
+    // (homeMinus25/awayMinus25 ya existen en Poisson; Monte Carlo solo da
+    // -1.5, así que -2.5 usa solo Poisson — sin respaldo a la prob de -1.5).
+    // La cuota viene de la misma fuente que la línea: Pinnacle (m.vegas,
+    // sharp) primero, ESPN/DraftKings (m.market, spreadHomeClose) de
+    // respaldo. Si la línea no es una línea soportada (p. ej. -1.75
+    // asiática), no se usa cuota real (fail-closed): se evalúa -1.5 con
+    // cuota del modelo, que se veta como antes.
+    const SUPPORTED_AH_LINES = [-2.5, -1.5, 1.5, 2.5];
+    const sharpAhLine = parseFloat(m.vegas?.spread);
+    const espnAhLine = parseFloat(m.market?.spreadHomeClose);
+    const marketAhLineRaw = Number.isFinite(sharpAhLine) ? sharpAhLine : espnAhLine;
+    const ahLineIsSupported = SUPPORTED_AH_LINES.includes(marketAhLineRaw);
+    const useSharpAhLine = Number.isFinite(sharpAhLine);
+    // Línea del favorito por lado (negativa = ese lado cubre). Sin línea
+    // soportada se evalúa -1.5 con cuota del modelo (como antes).
+    const ahHomeLine = ahLineIsSupported && marketAhLineRaw < 0 ? marketAhLineRaw : -1.5;
+    const ahAwayLine = ahLineIsSupported && marketAhLineRaw > 0 ? -marketAhLineRaw : -1.5;
+    const probHomeAh = ahHomeLine === -2.5
+      ? parseFloat(probs.spreads?.homeMinus25 || 0)
+      : parseFloat(probs.spreads?.homeMinus15 || mc.homeMinus15Prob || 0);
+    const probAwayAh = ahAwayLine === -2.5
+      ? parseFloat(probs.spreads?.awayMinus25 || 0)
+      : parseFloat(probs.spreads?.awayMinus15 || mc.awayMinus15Prob || 0);
+    // Cuota real de la misma fuente que la línea (Pinnacle primero, ESPN de
+    // respaldo); sin línea soportada no hay precio real (fail-closed).
+    const realHomeAh = ahLineIsSupported && marketAhLineRaw < 0
+      ? (useSharpAhLine ? parseFloat(m.vegas?.spreadHomeOdds || m.market?.homeSpreadOdds) : parseFloat(m.market?.homeSpreadOdds))
+      : NaN;
+    const realAwayAh = ahLineIsSupported && marketAhLineRaw > 0
+      ? (useSharpAhLine ? parseFloat(m.vegas?.spreadAwayOdds || m.market?.awaySpreadOdds) : parseFloat(m.market?.awaySpreadOdds))
+      : NaN;
 
-    // A) Favorito Local -1.5 (Gana por 2 o más goles)
-    if (homeOddsDec <= 1.48 && probHomeMinus15 >= 50.0 && mc.riskLevel !== 'Alto') {
-      // La cuota del libro solo corresponde a -1.5 si la línea publicada es exactamente -1.5 para el local
-      const realHomeAh = parseFloat(m.vegas?.spread) === -1.5 ? parseFloat(m.vegas?.spreadHomeOdds || m.market?.homeSpreadOdds) : NaN;
-      const spreadOddsDec = realHomeAh > 1 ? realHomeAh : parseFloat(getFairOddsDecimal(probHomeMinus15 * 0.94));
+    // A) Favorito Local (gana por 2 o más goles en -1.5, por 3 o más en -2.5)
+    if (homeOddsDec <= 1.48 && probHomeAh >= 50.0 && mc.riskLevel !== 'Alto') {
+      const spreadOddsDec = realHomeAh > 1 ? realHomeAh : parseFloat(getFairOddsDecimal(probHomeAh * 0.94));
       const impliedSpread = (1 / spreadOddsDec) * 100;
-      const spreadEdge = probHomeMinus15 - impliedSpread;
+      const spreadEdge = probHomeAh - impliedSpread;
       if (spreadOddsDec >= 1.60 && spreadOddsDec <= 2.35 && spreadEdge >= 2.5) {
         rawOpportunities.push({
           id: `ah-home-${m.id}`,
@@ -2309,25 +2365,24 @@ export function buildOpportunitiesAndTopSlate({
           league: m.league,
           game: `${m.home.name} vs ${m.away.name}`,
           gameDate: m.gameDate,
-          type: '⚡ HÁNDICAP ASIÁTICO (-1.5)',
-          pick: `${m.home.name} -1.5 (Gana por 2+ goles)`,
-          prob: `${probHomeMinus15.toFixed(0)}%`,
+          type: `⚡ HÁNDICAP ASIÁTICO (${ahHomeLine})`,
+          pick: `${m.home.name} ${ahHomeLine} (Gana por ${ahHomeLine === -2.5 ? '3+' : '2+'} goles)`,
+          prob: `${probHomeAh.toFixed(0)}%`,
           odds: spreadOddsDec.toFixed(2),
           oddsSource: realHomeAh > 1 ? 'market' : 'model',
           edgeVal: spreadEdge,
-          edgeStr: `Cover -1.5: ${probHomeMinus15.toFixed(0)}% | Edge: +${spreadEdge.toFixed(1)}%`,
-          argument: `Favorito pesado con cuota 1X2 impagable (${homeOddsDec.toFixed(2)}). Se monetiza con Hándicap Asiático (-1.5) respaldado por Poisson (${probHomeMinus15.toFixed(0)}% de margen por 2 o más goles) y superioridad de xG (${m.home.xG} vs ${m.away.xG}).`,
+          edgeStr: `Cover ${ahHomeLine}: ${probHomeAh.toFixed(0)}% | Edge: +${spreadEdge.toFixed(1)}%`,
+          argument: `Favorito pesado con cuota 1X2 impagable (${homeOddsDec.toFixed(2)}). Se monetiza con Hándicap Asiático (${ahHomeLine}) respaldado por Poisson (${probHomeAh.toFixed(0)}% de margen por ${ahHomeLine === -2.5 ? '3' : '2'} o más goles) y superioridad de xG (${m.home.xG} vs ${m.away.xG}).`,
           mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel, iterations: 10000 },
           match: m,
           probs: probs
         });
       }
-    } else if (awayOddsDec <= 1.48 && probAwayMinus15 >= 50.0 && mc.riskLevel !== 'Alto') {
-      // B) Favorito Visitante -1.5: la línea del local debe ser +1.5 (si no, la cuota es de otro hándicap)
-      const realAwayAh = parseFloat(m.vegas?.spread) === 1.5 ? parseFloat(m.vegas?.spreadAwayOdds || m.market?.awaySpreadOdds) : NaN;
-      const awaySpreadOddsDec = realAwayAh > 1 ? realAwayAh : parseFloat(getFairOddsDecimal(probAwayMinus15 * 0.94));
+    } else if (awayOddsDec <= 1.48 && probAwayAh >= 50.0 && mc.riskLevel !== 'Alto') {
+      // B) Favorito Visitante (gana por 2 o más goles en -1.5, por 3 o más en -2.5)
+      const awaySpreadOddsDec = realAwayAh > 1 ? realAwayAh : parseFloat(getFairOddsDecimal(probAwayAh * 0.94));
       const impliedAwaySpread = (1 / awaySpreadOddsDec) * 100;
-      const awaySpreadEdge = probAwayMinus15 - impliedAwaySpread;
+      const awaySpreadEdge = probAwayAh - impliedAwaySpread;
       if (awaySpreadOddsDec >= 1.60 && awaySpreadOddsDec <= 2.35 && awaySpreadEdge >= 2.5) {
         rawOpportunities.push({
           id: `ah-away-${m.id}`,
@@ -2335,14 +2390,14 @@ export function buildOpportunitiesAndTopSlate({
           league: m.league,
           game: `${m.home.name} vs ${m.away.name}`,
           gameDate: m.gameDate,
-          type: '⚡ HÁNDICAP ASIÁTICO (-1.5)',
-          pick: `${m.away.name} -1.5 (Gana por 2+ goles)`,
-          prob: `${probAwayMinus15.toFixed(0)}%`,
+          type: `⚡ HÁNDICAP ASIÁTICO (${ahAwayLine})`,
+          pick: `${m.away.name} ${ahAwayLine} (Gana por ${ahAwayLine === -2.5 ? '3+' : '2+'} goles)`,
+          prob: `${probAwayAh.toFixed(0)}%`,
           odds: awaySpreadOddsDec.toFixed(2),
           oddsSource: realAwayAh > 1 ? 'market' : 'model',
           edgeVal: awaySpreadEdge,
-          edgeStr: `Cover -1.5: ${probAwayMinus15.toFixed(0)}% | Edge: +${awaySpreadEdge.toFixed(1)}%`,
-          argument: `Favorito visitante dominante monetizado con Hándicap Asiático (-1.5) respaldado por Poisson (${probAwayMinus15.toFixed(0)}% por 2 o más goles) y ventaja de xG (${m.away.xG} vs ${m.home.xG}).`,
+          edgeStr: `Cover ${ahAwayLine}: ${probAwayAh.toFixed(0)}% | Edge: +${awaySpreadEdge.toFixed(1)}%`,
+          argument: `Favorito visitante dominante monetizado con Hándicap Asiático (${ahAwayLine}) respaldado por Poisson (${probAwayAh.toFixed(0)}% por ${ahAwayLine === -2.5 ? '3' : '2'} o más goles) y ventaja de xG (${m.away.xG} vs ${m.home.xG}).`,
           mcStats: { stability: mc.stabilityScore, risk: mc.riskLevel, iterations: 10000 },
           match: m,
           probs: probs
@@ -2761,6 +2816,78 @@ export function buildOpportunitiesAndTopSlate({
         probs: nflProbs
       });
     }
+
+    // 4. Moneyline Directo (WORK B, 2026-11-24): espejo del ML de NBA
+    // (bloques 3/3b, Gap 1). La NFL no tenía constructor de ML: los ML de
+    // Jets @2.44 (modelo 57.8%) y Raiders @5.56 (modelo 34.7%) del
+    // 2026-11-22 fueron solo análisis manual, nunca oportunidades del
+    // sistema. Mismos pisos del ML NBA (prob cruda >= 62.0, EV >= 3.0,
+    // favorito <= 2.05 / visitante > 2.05 — sin bajarlos).
+    // Prob de victoria del Gridiron ya en scope (nflProbs.homeWin/awayWin,
+    // strings a 1 decimal; NO se tocan los parámetros del modelo).
+    // Precio REAL: m.market.homeOdds/awayOdds — el enriquecimiento sharp
+    // (enrichMatchesWithSharpOdds, ~L4128) ya sobrescribe ese campo con el
+    // ML Pinnacle cuando hay match, y si no queda el DraftKings de ESPN;
+    // no existe un campo ML separado en m.vegas. Sin precio real no se
+    // genera nada para ese lado (fail-closed, Gap 3: sin `|| 1.90` ni
+    // cuota de modelo).
+    // El type NO lleva la palabra UNDERDOG: 'UNDERDOG' contiene 'UNDER' y
+    // ensemble.js detecta totales por subcadena (igual que en el ML NBA).
+    const homeWinProb = parseFloat(nflProbs.homeWin);
+    const awayWinProb = parseFloat(nflProbs.awayWin);
+    const homeMlPrice = parseFloat(m.market?.homeOdds);
+    const awayMlPrice = parseFloat(m.market?.awayOdds);
+    const hasHomeMl = Number.isFinite(homeMlPrice) && homeMlPrice >= 1.10;
+    const hasAwayMl = Number.isFinite(awayMlPrice) && awayMlPrice >= 1.10;
+    if (homeWinProb >= 62.0 && hasHomeMl && homeMlPrice <= 2.05) {
+      const ev = Number((homeWinProb - (100 / homeMlPrice)).toFixed(1));
+      if (ev >= 3.0) {
+        rawOpportunities.push({
+          id: `nfl-ml-h-${m.id}`,
+          sport: 'NFL',
+          league: 'NFL',
+          game: `${m.home.name} vs ${m.away.name}`,
+          gameDate: m.gameDate,
+          type: '🏈 FAVORITO DIRECTO (NFL)',
+          pick: `Victoria ${m.home.name}`,
+          prob: `${homeWinProb}%`,
+          odds: homeMlPrice.toFixed(2),
+          edgeVal: ev,
+          edgeStr: `+${ev}% EV vs Cuota | Prob: ${homeWinProb}%`,
+          argument: `Ventaja de localía proyectada por el Gridiron (${homeWinProb}% de victoria) con valor frente a la cuota de favorito.`,
+          mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel, iterations: 10000 },
+          match: m,
+          // A1 (NBA, 2026-11-18): el Voto 1 ML lee probs.homeWinProb/
+          // awayWinProb en el nivel superior; se mantiene f5 (lo usa el
+          // cálculo de effectiveProb) y se exponen las probs reales.
+          probs: { f5: { homeMl: homeWinProb, awayMl: awayWinProb }, homeWinProb, awayWinProb }
+        });
+      }
+    }
+    if (awayWinProb >= 62.0 && hasAwayMl && awayMlPrice > 2.05) {
+      const ev = Number((awayWinProb - (100 / awayMlPrice)).toFixed(1));
+      if (ev >= 3.0) {
+        rawOpportunities.push({
+          id: `nfl-ml-a-${m.id}`,
+          sport: 'NFL',
+          league: 'NFL',
+          game: `${m.home.name} vs ${m.away.name}`,
+          gameDate: m.gameDate,
+          type: '🏈 VISITANTE DIRECTO (NFL)',
+          pick: `Victoria ${m.away.name}`,
+          prob: `${awayWinProb}%`,
+          odds: awayMlPrice.toFixed(2),
+          edgeVal: ev,
+          edgeStr: `+${ev}% EV vs Cuota | Prob: ${awayWinProb}%`,
+          argument: `Ventaja de visitante proyectada por el Gridiron (${awayWinProb}% de victoria) con valor frente a la cuota de underdog.`,
+          mcStats: { stability: mcNfl.stabilityScore, risk: mcNfl.riskLevel, iterations: 10000 },
+          match: m,
+          // Igual que el ML local (A1): el Voto 1 ML lee
+          // probs.homeWinProb/awayWinProb en el nivel superior.
+          probs: { f5: { homeMl: homeWinProb, awayMl: awayWinProb }, homeWinProb, awayWinProb }
+        });
+      }
+    }
   });
 
   // ================= C.1 PLAYER PROPS NFL (QB YARDAS POR PASE, PRECIO REAL PROPLINE) =================
@@ -2968,6 +3095,69 @@ export function buildOpportunitiesAndTopSlate({
         probs: ncaafProbs
       });
     }
+
+    // 4. Moneyline Directo (WORK B, 2026-11-24): espejo del ML de NFL
+    // (mismo bloque en la sección C). La NCAAF tampoco tenía constructor
+    // de ML. Mismos pisos (prob cruda >= 62.0, EV >= 3.0, favorito
+    // <= 2.05 / visitante > 2.05 — sin bajarlos). Prob de victoria del
+    // Gridiron con isCollege=true (ncaafProbs.homeWin/awayWin, strings a
+    // 1 decimal; σ 16.5 colegial, sin tocar el modelo). Precio REAL en
+    // m.market.homeOdds/awayOdds (Pinnacle si hubo enriquecimiento sharp,
+    // DraftKings/ESPN si no); sin precio real no se genera nada para ese
+    // lado (fail-closed, Gap 3). El type NO lleva UNDERDOG ('UNDERDOG'
+    // contiene 'UNDER' y ensemble.js detecta totales por subcadena).
+    const homeWinProb = parseFloat(ncaafProbs.homeWin);
+    const awayWinProb = parseFloat(ncaafProbs.awayWin);
+    const homeMlPrice = parseFloat(m.market?.homeOdds);
+    const awayMlPrice = parseFloat(m.market?.awayOdds);
+    const hasHomeMl = Number.isFinite(homeMlPrice) && homeMlPrice >= 1.10;
+    const hasAwayMl = Number.isFinite(awayMlPrice) && awayMlPrice >= 1.10;
+    if (homeWinProb >= 62.0 && hasHomeMl && homeMlPrice <= 2.05) {
+      const ev = Number((homeWinProb - (100 / homeMlPrice)).toFixed(1));
+      if (ev >= 3.0) {
+        rawOpportunities.push({
+          id: `ncaaf-ml-h-${m.id}`,
+          sport: 'NCAAF',
+          league: m.league || 'NCAAF Colegial FBS',
+          game: `${m.home.name} vs ${m.away.name}`,
+          gameDate: m.gameDate,
+          type: '🏈 FAVORITO DIRECTO (NCAAF)',
+          pick: `Victoria ${m.home.name}`,
+          prob: `${homeWinProb}%`,
+          odds: homeMlPrice.toFixed(2),
+          edgeVal: ev,
+          edgeStr: `+${ev}% EV vs Cuota | Prob: ${homeWinProb}%`,
+          argument: `Ventaja de localía proyectada por el Gridiron colegial (${homeWinProb}% de victoria) con valor frente a la cuota de favorito.`,
+          mcStats: { stability: mcNcaaf.stabilityScore, risk: mcNcaaf.riskLevel, iterations: 10000 },
+          match: m,
+          // A1 (NBA): el Voto 1 ML lee probs.homeWinProb/awayWinProb en el
+          // nivel superior; se mantiene f5 y se exponen las probs reales.
+          probs: { f5: { homeMl: homeWinProb, awayMl: awayWinProb }, homeWinProb, awayWinProb }
+        });
+      }
+    }
+    if (awayWinProb >= 62.0 && hasAwayMl && awayMlPrice > 2.05) {
+      const ev = Number((awayWinProb - (100 / awayMlPrice)).toFixed(1));
+      if (ev >= 3.0) {
+        rawOpportunities.push({
+          id: `ncaaf-ml-a-${m.id}`,
+          sport: 'NCAAF',
+          league: m.league || 'NCAAF Colegial FBS',
+          game: `${m.home.name} vs ${m.away.name}`,
+          gameDate: m.gameDate,
+          type: '🏈 VISITANTE DIRECTO (NCAAF)',
+          pick: `Victoria ${m.away.name}`,
+          prob: `${awayWinProb}%`,
+          odds: awayMlPrice.toFixed(2),
+          edgeVal: ev,
+          edgeStr: `+${ev}% EV vs Cuota | Prob: ${awayWinProb}%`,
+          argument: `Ventaja de visitante proyectada por el Gridiron colegial (${awayWinProb}% de victoria) con valor frente a la cuota de underdog.`,
+          mcStats: { stability: mcNcaaf.stabilityScore, risk: mcNcaaf.riskLevel, iterations: 10000 },
+          match: m,
+          probs: { f5: { homeMl: homeWinProb, awayMl: awayWinProb }, homeWinProb, awayWinProb }
+        });
+      }
+    }
   });
 
   // ================= E. EVALUACIÓN DE BALONCESTO (NBA - RATINGS & POSESIONES) =================
@@ -3096,6 +3286,49 @@ export function buildOpportunitiesAndTopSlate({
         });
       }
     }
+
+    // 3b. Moneyline Visitante Underdog (GAP1, 2026-11-24): espejo del ML
+    // local para el lado visitante. Mismos pisos de prob/EV que el favorito
+    // local (prob >= 62.0, EV >= 3.0 — sin bajarlos) y precio REAL del lado
+    // visitante (m.odds.awayMl). Sin tope de cuota 2.05: ese tope es la
+    // condición de favorito, no un piso de prob/EV, y un underdog por
+    // definición cotiza por encima de 2.05 (convención del código: el
+    // Candado Anti-Underdog trata > 2.05 como underdog, igual que en fútbol);
+    // el > 2.05 acota la rama al underdog y deja fuera al favorito visitante.
+    // Sin precio real no se genera nada (fail-closed: no hay fallback a
+    // cuota de modelo; la procedencia la fija resolveOddsProvenance y el
+    // veto 'model' de classifyOpportunity sigue aplicando).
+    // El type NO lleva la palabra UNDERDOG: ensemble.js detecta totales por
+    // subcadena ('UNDER'/'OVER' en el type) y 'UNDERDOG' contiene 'UNDER',
+    // así que el Voto 1 lo evaluaría como total y el Voto 3 como UNDER.
+    // El carácter underdog lo expresan el id (nba-ml-a-) y la cuota > 2.05.
+    if (probs.awayWinProb >= 62.0 && m.odds?.awayMl && m.odds.awayMl > 2.05) {
+      const mlOdds = m.odds.awayMl.toFixed(2);
+      const ev = Number((probs.awayWinProb - (100 / m.odds.awayMl)).toFixed(1));
+      if (ev >= 3.0) {
+        rawOpportunities.push({
+          id: `nba-ml-a-${m.id}`,
+          ratingsSource: probs.ratingsSource,
+          sport: 'Baloncesto',
+          league: 'NBA',
+          game: `${m.home.name} vs ${m.away.name}`,
+          gameDate,
+          type: '🏀 VISITANTE DIRECTO (NBA)',
+          pick: `Victoria ${m.away.name}`,
+          prob: `${probs.awayWinProb}%`,
+          odds: mlOdds,
+          edgeVal: ev,
+          edgeStr: `+${ev}% EV vs Cuota | Prob: ${probs.awayWinProb}%`,
+          argument: `Ventaja de visitante proyectada en ${probs.awayExpectedScore} pts frente a ${probs.homeExpectedScore} pts locales, con valor frente a la cuota de underdog.`,
+          mcStats: null, // A1 2026-11-18: sin Monte Carlo real para NBA; null hace que el Voto 2 se abstenga.
+          match: m,
+          // Igual que el ML local (A1): el Voto 1 ML lee
+          // probs.homeWinProb/awayWinProb en el nivel superior; se mantiene
+          // f5 (lo usa el cálculo de effectiveProb) y se exponen las probs reales.
+          probs: { f5: { homeMl: probs.homeWinProb, awayMl: probs.awayWinProb }, homeWinProb: probs.homeWinProb, awayWinProb: probs.awayWinProb }
+        });
+      }
+    }
   });
 
   // ================= D. TRIBUNAL DE CONSENSO Y ORDENAMIENTO ESTRICTO POR EFECTIVIDAD =================
@@ -3168,6 +3401,21 @@ export function buildOpportunitiesAndTopSlate({
     // Auditoría Cualitativa & Big Data de Tipster Pro (Fatiga, Clima, Motivación)
     opp.tipsterAudit = auditCandidateAsTipsterPro(opp);
   });
+
+  // GAP 3 (2026-11-24): fail-closed en el builder. Una oportunidad sin precio
+  // real (hasRealPrice: 'market' | 'espn' | 'propline') NO se genera: se
+  // descarta aquí, después de resolveOddsProvenance —que es donde la
+  // procedencia queda definitiva (un 'market' pre-fijado puede bajar a
+  // 'espn'/'model', y un prop puede subir a 'propline')— y antes de
+  // clasificar. Antes estas oportunidades se generaban con cuota inventada
+  // y se vetaban después en C3 (odds_model) o P4 (no_market_odds); esas
+  // reglas NO se tocan y quedan como red de seguridad para cualquier
+  // oportunidad que llegue por otra vía. /futuro y /cheatsheet solo leen
+  // approvedOpps (siempre con precio real), así que no dependen de las
+  // oportunidades model-only descartadas aquí.
+  for (let i = rawOpportunities.length - 1; i >= 0; i--) {
+    if (!hasRealPrice(rawOpportunities[i])) rawOpportunities.splice(i, 1);
+  }
 
   // Candado de Certeza Inquebrantable:
   // Solo se aprueban selecciones con mínimo 2 de 3 votos del Tribunal.
