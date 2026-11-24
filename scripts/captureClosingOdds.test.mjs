@@ -3,9 +3,13 @@
 // Corre con: node --test scripts/captureClosingOdds.test.mjs
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   americanToDecimal, namesMatch, espnLeagueFor, extractClosing,
   findEvent, duePicks, devigDecimal, clvPct, captureForPick,
+  loadLedgerRows, mergeCapturedClosures,
 } from './captureClosingOdds.mjs';
 
 // Fixture realista: Wizards @ Pacers, 2026-11-12T00:00Z (verificado en ESPN).
@@ -218,4 +222,90 @@ test('captureForPick fútbol usa summary cuando el scoreboard trae odds null', a
   assert.equal(r.ok, true);
   assert.equal(r.record.closingOdds, 1.8); // -125
   assert.equal(r.record.clvPct, 0);
+});
+
+// Opción C (Fase 3, 2026-11-24): el ledger se lee desde GitHub con respaldo local.
+function localLedgerFile(rows) {
+  const dir = mkdtempSync(join(tmpdir(), 'capture-ledger-'));
+  const file = join(dir, 'pick_ledger.jsonl');
+  writeFileSync(file, rows.map(r => JSON.stringify(r)).join('\n') + '\n', 'utf-8');
+  return { dir, file };
+}
+
+const GH_ROWS = [
+  { id: 'gh-1', status: 'PENDING', game: 'A vs B', gameDate: '2026-11-25T20:00Z', pick: 'Victoria A (1X2)', odds: 1.5 },
+  { id: 'gh-2', status: 'CLOSED', game: 'C vs D', gameDate: '2026-11-20T20:00Z', pick: 'Victoria C (1X2)', odds: 1.8 },
+];
+
+function ghFetch(text, ok = true) {
+  return async () => ({ ok, text: async () => text });
+}
+
+test('loadLedgerRows: GitHub OK devuelve las filas con source github', async () => {
+  const { dir, file } = localLedgerFile([{ id: 'local-1', status: 'CLOSED' }]);
+  const { rows, source } = await loadLedgerRows({
+    ledgerFile: file,
+    fetchFn: ghFetch(GH_ROWS.map(r => JSON.stringify(r)).join('\n') + '\n'),
+  });
+  assert.equal(source, 'github');
+  assert.deepEqual(rows.map(r => r.id), ['gh-1', 'gh-2']);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('loadLedgerRows: GitHub no-OK o error de red cae al local', async () => {
+  const { dir, file } = localLedgerFile([{ id: 'local-1', status: 'CLOSED' }]);
+  const r1 = await loadLedgerRows({ ledgerFile: file, fetchFn: ghFetch('', false) });
+  assert.equal(r1.source, 'local');
+  assert.deepEqual(r1.rows.map(r => r.id), ['local-1']);
+  const r2 = await loadLedgerRows({ ledgerFile: file, fetchFn: async () => { throw new Error('red caída'); } });
+  assert.equal(r2.source, 'local');
+  assert.deepEqual(r2.rows.map(r => r.id), ['local-1']);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('loadLedgerRows: GitHub con JSONL inválido o vacío cae al local', async () => {
+  const { dir, file } = localLedgerFile([{ id: 'local-1', status: 'CLOSED' }]);
+  const r1 = await loadLedgerRows({ ledgerFile: file, fetchFn: ghFetch('{"id":"x"}\nESTO NO ES JSON\n') });
+  assert.equal(r1.source, 'local');
+  assert.deepEqual(r1.rows.map(r => r.id), ['local-1']);
+  const r2 = await loadLedgerRows({ ledgerFile: file, fetchFn: ghFetch('') });
+  assert.equal(r2.source, 'local');
+  assert.deepEqual(r2.rows.map(r => r.id), ['local-1']);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('loadLedgerRows: sin GitHub y sin archivo local devuelve filas vacías', async () => {
+  const { rows, source } = await loadLedgerRows({
+    ledgerFile: join(tmpdir(), 'no-existe-pick_ledger.jsonl'),
+    fetchFn: async () => { throw new Error('red caída'); },
+  });
+  assert.equal(source, 'local');
+  assert.deepEqual(rows, []);
+});
+
+test('mergeCapturedClosures: conserva filas locales, actualiza el cierre y agrega el pick de GitHub', () => {
+  const localRows = [
+    { id: 'local-only', status: 'PENDING', game: 'E vs F', pick: 'Victoria E', odds: 2.0 },
+    { id: 'gh-1', status: 'PENDING', game: 'A vs B', pick: 'Victoria A (1X2)', odds: 1.5 },
+  ];
+  const captured = [{
+    pickId: 'gh-1', source: 'espn_draftkings', capturedAt: '2026-11-24T19:00:00Z',
+    closingOdds: 1.45, closingOddsNoVig: 1.42, clvPct: 3.4, beatClosingLine: true,
+    closingLine: null, openOdds: 1.5, lineMovement: null,
+  }, {
+    pickId: 'gh-2', source: 'espn_draftkings', capturedAt: '2026-11-24T19:00:00Z',
+    closingOdds: 1.75, closingOddsNoVig: 1.7, clvPct: 2.9, beatClosingLine: true,
+    closingLine: null, openOdds: 1.8, lineMovement: null,
+  }];
+  const merged = mergeCapturedClosures(localRows, GH_ROWS, captured);
+  assert.equal(merged.length, 3, 'local-only + gh-1 actualizado + gh-2 agregado');
+  const localOnly = merged.find(r => r.id === 'local-only');
+  assert.equal(localOnly.closingOdds, undefined, 'la fila local sin captura queda intacta');
+  const gh1 = merged.find(r => r.id === 'gh-1');
+  assert.equal(gh1.closingOdds, 1.45);
+  assert.equal(gh1.clvPct, 3.4);
+  assert.equal(gh1.status, 'PENDING', 'status/result/pnl intactos');
+  const gh2 = merged.find(r => r.id === 'gh-2');
+  assert.equal(gh2.game, 'C vs D', 'la fila de GitHub se agrega con su contenido');
+  assert.equal(gh2.closingOdds, 1.75);
 });

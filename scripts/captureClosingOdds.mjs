@@ -32,6 +32,16 @@ const PAPER_CLOSING_LEDGER = path.join(ROOT, 'data', 'paper_closing_ledger.jsonl
 
 const ESPN_BASE = 'https://site.api.espn.com/apis/site/v2/sports';
 const FETCH_TIMEOUT_MS = 8000;
+
+// Opción C (Fase 3, 2026-11-24, decisión de Tavo): el ledger se lee desde
+// GitHub (rama main), no del clon local. El clon local del cron tenía 38
+// líneas contra 64 en GitHub (verificado: las 38 locales son subconjunto,
+// sin ids ni cierres locales que GitHub no tenga), así que duePicks era 0
+// siempre. Si GitHub falla, se usa el archivo local como respaldo; la
+// captura nunca se rompe por esto. La escritura sigue siendo local
+// (closing_ledger.jsonl + ledger local con los campos de cierre).
+const GITHUB_LEDGER_URL = 'https://raw.githubusercontent.com/rodarteggc-png/stats-ai/main/data/pick_ledger.jsonl';
+const GITHUB_FETCH_TIMEOUT_MS = 8000;
 const VIG_FALLBACK = 1.0476; // -110/-110 estándar, solo si no hay ambos lados para de-vig.
 
 // ---------------------------------------------------------------------------
@@ -306,6 +316,67 @@ function readRows(file) {
   return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
 }
 
+// Parsea texto JSONL a filas; una línea inválida invalida todo el texto
+// (mejor caer al respaldo local que capturar sobre datos corruptos).
+function parseLedgerText(text) {
+  const lines = String(text || '').split('\n').filter(Boolean);
+  if (!lines.length) return null;
+  const rows = [];
+  for (const l of lines) {
+    try { rows.push(JSON.parse(l)); }
+    catch { return null; }
+  }
+  return rows.length ? rows : null;
+}
+
+// Opción C: lee el ledger desde GitHub (rama main) con respaldo al archivo
+// local. Devuelve { rows, source: 'github' | 'local' }. Nunca lanza: si
+// GitHub falla (red, HTTP no-OK, JSONL inválido o vacío) usa el local.
+export async function loadLedgerRows({ ledgerFile, fetchFn = globalThis.fetch, githubUrl = GITHUB_LEDGER_URL } = {}) {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), GITHUB_FETCH_TIMEOUT_MS);
+    try {
+      const res = await fetchFn(githubUrl, { headers: { 'User-Agent': 'Mozilla/5.0 (Stats-AI Pro closing capture)' }, signal: ctrl.signal });
+      if (!res.ok) throw new Error(`GitHub HTTP ${res.status}`);
+      const rows = parseLedgerText(await res.text());
+      if (rows) return { rows, source: 'github' };
+      throw new Error('GitHub devolvió ledger vacío o inválido');
+    } finally { clearTimeout(t); }
+  } catch (e) {
+    console.warn(`[capture] Ledger desde GitHub falló (${e.message}); uso el local.`);
+  }
+  return { rows: readRows(ledgerFile), source: 'local' };
+}
+
+// Fusiona los cierres capturados en el ledger LOCAL sin perder filas: las
+// filas locales se conservan todas (pueden tener LEDGER pegados que GitHub
+// aún no tiene); cada pick capturado actualiza sus campos de cierre en la
+// fila local si existe, y si no existe se agrega la fila de GitHub con el
+// cierre. Así el local se acerca a GitHub sin borrar nada.
+export function mergeCapturedClosures(localRows, githubRows, capturedRecords) {
+  const byId = new Map((capturedRecords || []).map(r => [r.pickId, r]));
+  const ghById = new Map((githubRows || []).map(row => [row.id, row]));
+  const closingFields = (rec) => ({
+    closingOdds: rec.closingOdds, closingOddsNoVig: rec.closingOddsNoVig,
+    clvPct: rec.clvPct, beatClosingLine: rec.beatClosingLine,
+    closingSource: rec.source, closingCapturedAt: rec.capturedAt,
+    closingLine: rec.closingLine, openOdds: rec.openOdds,
+    lineMovement: rec.lineMovement,
+  });
+  const merged = (localRows || []).map(row => {
+    const rec = byId.get(row.id);
+    return rec ? { ...row, ...closingFields(rec) } : row;
+  });
+  const localIds = new Set(merged.map(row => row.id));
+  for (const rec of capturedRecords || []) {
+    if (localIds.has(rec.pickId)) continue;
+    const ghRow = ghById.get(rec.pickId);
+    if (ghRow) merged.push({ ...ghRow, ...closingFields(rec) });
+  }
+  return merged;
+}
+
 function writeRows(file, rows) {
   fs.writeFileSync(file, rows.map(r => JSON.stringify(r)).join('\n') + '\n', 'utf-8');
 }
@@ -379,14 +450,18 @@ async function main() {
 
   const ledgerFile = args.paper ? PAPER_LEDGER : LEDGER;
   const closingFile = args.paper ? PAPER_CLOSING_LEDGER : CLOSING_LEDGER;
-  if (!fs.existsSync(ledgerFile)) {
-    console.log(`Sin ledger en ${ledgerFile}; nada que capturar.`);
+  // Opción C: el ledger se lee desde GitHub (con respaldo local). En modo
+  // paper se sigue leyendo el paper ledger local (no hay paper en GitHub).
+  const { rows, source } = args.paper
+    ? { rows: readRows(ledgerFile), source: 'local' }
+    : await loadLedgerRows({ ledgerFile });
+  if (!rows.length) {
+    console.log(`Sin picks en el ledger (${source}); nada que capturar.`);
     return;
   }
-  const rows = readRows(ledgerFile);
   const now = Date.now();
   const due = duePicks(rows, now, args.windowMins);
-  console.log(`Ledger: ${rows.length} picks, ${due.length} PENDING con inicio en los próximos ${args.windowMins} min (ahora ${new Date(now).toISOString()}).`);
+  console.log(`Ledger (${source}): ${rows.length} picks, ${due.length} PENDING con inicio en los próximos ${args.windowMins} min (ahora ${new Date(now).toISOString()}).`);
   if (!due.length) return;
 
   const cache = new Map();
@@ -409,20 +484,10 @@ async function main() {
   // 1. Historial de cierres (append-only).
   const closingLines = captured.map(r => JSON.stringify(r.record)).join('\n') + '\n';
   fs.appendFileSync(closingFile, closingLines, 'utf-8');
-  // 2. Ledger: solo campos de cierre; status/result/pnl intactos.
-  const byId = new Map(captured.map(r => [r.id, r.record]));
-  const updated = rows.map(row => {
-    const rec = byId.get(row.id);
-    if (!rec) return row;
-    return {
-      ...row,
-      closingOdds: rec.closingOdds, closingOddsNoVig: rec.closingOddsNoVig,
-      clvPct: rec.clvPct, beatClosingLine: rec.beatClosingLine,
-      closingSource: rec.source, closingCapturedAt: rec.capturedAt,
-      closingLine: rec.closingLine, openOdds: rec.openOdds,
-      lineMovement: rec.lineMovement,
-    };
-  });
+  // 2. Ledger local: solo campos de cierre; status/result/pnl intactos.
+  // La fusión conserva todas las filas locales y agrega los picks
+  // capturados que no existen en local (con su contenido de GitHub).
+  const updated = mergeCapturedClosures(readRows(ledgerFile), rows, captured.map(r => r.record));
   writeRows(ledgerFile, updated);
   console.log(`Guardado: ${captured.length} cierre(s) en ${closingFile} y actualizados en ${ledgerFile}.`);
 }
