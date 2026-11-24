@@ -4,6 +4,7 @@ import { getApiSportsStatus } from '../src/services/apiSports.js';
 import { getOddsApiKeys } from '../src/services/sportsApi.js';
 import { extractTicketSelections, auditTicketLive, formatLiveTicketReport } from './_lib/parlayLive.js';
 import { scanFutureMultiSport, formatFutureMultiSport } from './_lib/futureMultiSport.js';
+import { getSafePicks, formatSafePicksMessage, recordSafePicks } from './_lib/safePicks.js';
 import { isValidTelegramWebhook } from './_lib/security.js';
 import { fetchWithRetry } from '../src/services/httpClient.js';
 
@@ -112,7 +113,8 @@ export default async function handler(req, res) {
       ...BASE_KEYBOARD_MENU,
       keyboard: [
         ...BASE_KEYBOARD_MENU.keyboard.slice(0, 2),
-        [{ text: '/cuota' }, { text: '🔭 Próximas 48 h' }]
+        [{ text: '/cuota' }, { text: '🔭 Próximas 48 h' }],
+        [{ text: '🛡️ Picks Seguros' }]
       ]
     } : BASE_KEYBOARD_MENU;
 
@@ -405,6 +407,34 @@ export default async function handler(req, res) {
     }
 
     // ==========================================
+    // OPCIÓN: /seguros -> PICKS SEGUROS (solo chat privado VIP)
+    // 2026-11-24: favoritos ML con probabilidad calibrada >= 55% y cuota
+    // corta (1.13–1.50). NO son +EV; van con su propio registro aparte.
+    // ==========================================
+    if (command === '/seguros' || command === 'seguros' || command === '🛡️ picks seguros') {
+      if (!isPrivateVip) {
+        await sendTelegramMessage(
+          '🛡️ *Picks Seguros* solo está disponible en el chat privado VIP.',
+          false,
+          chatId,
+          KEYBOARD_MENU
+        );
+        return res.status(200).send('OK');
+      }
+      await sendTelegramMessage('⏳ *Buscando Picks Seguros...*\n🔬 _Favoritos con probabilidad alta del modelo y cuota corta._', false, chatId, KEYBOARD_MENU);
+      try {
+        const { picks, evaluated } = await getSafePicks();
+        const todayStr = new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'America/Mexico_City' }).toUpperCase();
+        await sendTelegramMessage(formatSafePicksMessage(picks, todayStr, evaluated), false, chatId, KEYBOARD_MENU);
+        if (picks?.length) recordSafePicks(picks);
+      } catch (err) {
+        console.error('Error buscando Picks Seguros:', err);
+        await sendTelegramMessage(`⚠️ Error buscando Picks Seguros: ${err.message}`, false, chatId, KEYBOARD_MENU);
+      }
+      return res.status(200).send('OK');
+    }
+
+    // ==========================================
     // MENÚ POR DEFECTO (/start, ayuda o cualquier otro texto)
     // ==========================================
     const menuMsg = [
@@ -417,6 +447,7 @@ export default async function handler(req, res) {
       `4️⃣ */corte* — Ver Corte de Caja y Rendimiento de las últimas 24h`,
       `5️⃣ */cuota* — Consultar saldo de requests (API-Sports y The Odds API)`,
       ...(isPrivateVip ? ['6. */futuro* — Explorar 48 horas multideporte y candidatos de alta probabilidad'] : []),
+      ...(isPrivateVip ? ['7. */seguros* — Picks Seguros: favoritos con probabilidad alta y cuota corta (solo privado)'] : []),
       ``,
       `👉 *Toca cualquiera de los botones táctiles abajo en tu pantalla o manda foto de tu boleto.*`
     ].join('\n');

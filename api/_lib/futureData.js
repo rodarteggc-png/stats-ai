@@ -17,6 +17,14 @@ const sports = {
 const SOCCER_TIER_1_LEAGUES = [2, 3, 39, 61, 78, 135, 140, 253, 262];
 const SOCCER_TIER_2_LEAGUES = [88, 94, 144, 203, 128, 71, 143, 137];
 
+// Fix A (2026-11-24): mínimo de partidos jugados para modelar en /futuro.
+// En copas / fases de liga (Champions, league.type 'Cup') los clubes llevan 4
+// partidos en la jornada 5; el mínimo baja a 4 solo para ese tipo de
+// competición. Ligas regulares siguen en 5.
+export function minPlayedForLeague(leagueType) {
+  return leagueType === 'Cup' ? 4 : 5;
+}
+
 export function pickSoccerFixtures(fixtures, max = 6) {
   const sorted = [...fixtures].sort((first, second) => Date.parse(first.fixture.date) - Date.parse(second.fixture.date));
   const picked = sorted.filter(fixture => SOCCER_TIER_1_LEAGUES.includes(fixture.league?.id)).slice(0, max);
@@ -296,7 +304,11 @@ export async function loadFutureModelData(options = {}) {
           const response = await footballClient.request('/teams/statistics', { team: String(team.id), league: String(fixture.league.id), season: String(fixture.league.season) });
           const stats = response.data;
           const average = Number(stats?.goals?.for?.average?.total);
-          if (!(average > 0) || !(stats?.fixtures?.played?.total >= 5)) throw new Error('Muestra de goles insuficiente para modelar.');
+          // Fix A (2026-11-24): en copas / fases de liga (Champions, league.type 'Cup')
+          // los clubes llevan 4 partidos en la jornada 5; el mínimo baja de 5 a 4 solo
+          // para ese tipo de competición. Ligas regulares siguen en 5.
+          const minPlayed = minPlayedForLeague(fixture.league?.type);
+          if (!(average > 0) || !(stats?.fixtures?.played?.total >= minPlayed)) throw new Error('Muestra de goles insuficiente para modelar.');
           return { name: team.name, xG: average, elo: getDynamicElo(team.name) };
         };
         const [home, away] = await Promise.all([teamStats(fixture.teams.home), teamStats(fixture.teams.away)]);
