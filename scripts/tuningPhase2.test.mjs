@@ -1,9 +1,11 @@
 // scripts/tuningPhase2.test.mjs — Fase 2 del plan de afinación (2026-11-24).
-// R8: el despacho aplica la calibración DOCUMENTADA (global A=0.34/B=-0.33,
-// NBA A=0.36/B=-0.60 desde la Fase 3, 2026-11-24); la
+// R8: el despacho aplica la calibración DOCUMENTADA; la
 // auditoría solo SUGIERE coeficientes (persist:false) y el cloud ledger ya
 // no los hidrata. R7: el ledger registra procedencia real (oddsSource /
 // sharpBook / isPinnacle); sin procedencia queda null, nunca 'market'.
+// 2026-11-25 (REVERSIÓN COMPLETA, decisión de Tavo): TODOS los deportes
+// vuelven al par parcial viejo A=0.65/B=-0.20 (el refit A=0.34/B=-0.33 y
+// NBA A=0.36/B=-0.60 quedan revertidos; /cheatsheet equilibrado).
 // No toca el ledger real: recordPickToLedger se llama con { ledgerFile }
 // temporal (mismo patrón que recordPaperPick con { paperPath } en Fase 1).
 import assert from 'node:assert/strict';
@@ -20,8 +22,9 @@ import {
 } from '../src/utils/calibration.js';
 import { buildPaperEntry } from '../src/utils/paperLedger.js';
 
-const DOCUMENTED = { A: 0.34, B: -0.33 }; // global (fútbol, NFL, NCAAF, MLB)
-const DOCUMENTED_NBA = { A: 0.36, B: -0.60 }; // R3 interino hasta n=30
+const DOCUMENTED = { A: 0.65, B: -0.20 }; // todos los deportes (revertido 2026-11-25)
+const DOCUMENTED_FUTBOL = { A: 0.65, B: -0.20 }; // fútbol, mismo par
+const DOCUMENTED_NBA = { A: 0.65, B: -0.20 }; // NBA, mismo par (refit R3 revertido)
 
 function tmpLedger() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tuning-phase2-'));
@@ -55,15 +58,15 @@ function dispatchedPick(overrides = {}) {
 test('R8: el despacho aplica la calibración documentada, no la del ledger viejo', () => {
   // Las 7 filas con rawProb del ledger (oct 29 / nov 2) guardan Platt con los
   // coeficientes DE ESA ÉPOCA (fútbol 0.88/-0.04, NBA 0.90/0, NCAAF 0.85/0);
-  // con los defaults documentados actuales (global 0.34/-0.33, NBA 0.36/-0.60)
-  // dan estos valores.
-  assert.equal(applyPlattCalibration(63.2, 'Baloncesto'), 40);
-  assert.equal(applyPlattCalibration(86.2, 'Fútbol'), 57.3);
-  assert.equal(applyPlattCalibration(87.7, 'Fútbol'), 58.4);
+  // con los defaults documentados actuales (todos 0.65/-0.20, revertido
+  // completo 2026-11-25) dan estos valores.
+  assert.equal(applyPlattCalibration(63.2, 'Baloncesto'), 53.8);
+  assert.equal(applyPlattCalibration(86.2, 'Fútbol'), 72.9);
+  assert.equal(applyPlattCalibration(87.7, 'Fútbol'), 74.6);
   // ...y NO los valores guardados entonces (61.9 / 82.8 / 84.4).
   assert.notEqual(applyPlattCalibration(63.2, 'Baloncesto'), 61.9);
   assert.notEqual(applyPlattCalibration(86.2, 'Fútbol'), 82.8);
-  assert.deepEqual(getPlattCoefficients().futbol, DOCUMENTED);
+  assert.deepEqual(getPlattCoefficients().futbol, DOCUMENTED_FUTBOL);
   assert.deepEqual(getPlattCoefficients().nba, DOCUMENTED_NBA);
   assert.deepEqual(getPlattCoefficients().ncaaf, DOCUMENTED);
 });
@@ -73,7 +76,7 @@ test('R8: con menos de 30 picks auditados no hay refit ni mutación', () => {
     sport: 'Fútbol', status: i % 2 ? 'won' : 'lost', prob: 65,
   }));
   const before = getPlattCoefficients();
-  assert.deepEqual(recalibrateFromAudit(few, 'futbol'), DOCUMENTED);
+  assert.deepEqual(recalibrateFromAudit(few, 'futbol'), DOCUMENTED_FUTBOL);
   assert.deepEqual(getPlattCoefficients(), before);
 });
 
@@ -87,11 +90,11 @@ function miscalibratedFutbol() {
 test('R8: la auditoría (persist:false) sugiere sin mutar la calibración del despacho', () => {
   const picks = miscalibratedFutbol();
   const suggested = recalibrateFromAudit(picks, 'futbol', { persist: false });
-  assert.notDeepEqual(suggested, DOCUMENTED); // el refit sí se calculó
+  assert.notDeepEqual(suggested, DOCUMENTED_FUTBOL); // el refit sí se calculó
   // ...pero el despacho sigue con los defaults documentados, en el mismo proceso.
-  assert.deepEqual(getPlattCoefficients().futbol, DOCUMENTED);
-  assert.equal(applyPlattCalibration(86.2, 'Fútbol'), 57.3);
-  assert.equal(applyPlattCalibration(63.2, 'Baloncesto'), 40);
+  assert.deepEqual(getPlattCoefficients().futbol, DOCUMENTED_FUTBOL);
+  assert.equal(applyPlattCalibration(86.2, 'Fútbol'), 72.9);
+  assert.equal(applyPlattCalibration(63.2, 'Baloncesto'), 53.8);
 });
 
 test('R8: con persist (defecto, ruta del navegador) el refit sí se aplica y se restaura', () => {
@@ -102,9 +105,9 @@ test('R8: con persist (defecto, ruta del navegador) el refit sí se aplica y se 
   assert.deepEqual(getPlattCoefficients().futbol, suggested);
   // Restaurar los defaults documentados para no contaminar el resto de la suite.
   hydratePlattCoefficients({
-    futbol: DOCUMENTED, nfl: DOCUMENTED, ncaaf: DOCUMENTED, mlb: DOCUMENTED, nba: DOCUMENTED_NBA,
+    futbol: DOCUMENTED_FUTBOL, nfl: DOCUMENTED, ncaaf: DOCUMENTED, mlb: DOCUMENTED, nba: DOCUMENTED_NBA,
   });
-  assert.deepEqual(getPlattCoefficients().futbol, DOCUMENTED);
+  assert.deepEqual(getPlattCoefficients().futbol, DOCUMENTED_FUTBOL);
   assert.deepEqual(getPlattCoefficients().nba, DOCUMENTED_NBA);
 });
 

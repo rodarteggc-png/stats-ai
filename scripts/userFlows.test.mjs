@@ -746,16 +746,12 @@ test('las fuentes futuras cargan cinco deportes sin inventar precios ni estadist
   assert.ok(requests.filter(url => url.pathname.endsWith('/scoreboard')).every(url => url.searchParams.get('dates') === '20261102-20261104'));
   const modeled = evaluateFutureModels(data.matches, timestamp, timestamp + 48 * 3600000);
   const direct = buildOpportunitiesAndTopSlate({ ...data.matches, isForce: true, sentCache: {}, maxPicksToSend: 100 });
-  // Afinación 2026-11-24 (Fase 3, R2+R3): con el refit forense (global
-  // A=0.34/B=-0.33, NBA A=0.36/B=-0.60) el modelo evalúa el partido NBA pero
-  // rechaza los dos picks por EV negativo (spread y ML con EV < 2%): ya no
-  // hay candidato NBA en este caso, y es lo correcto (antes el spread salía
-  // con EV +4%). Las cifras de EV citadas abajo (spread 1.99%, ML -6.48%)
-  // se midieron con la calibración 2026-11-10; con el refit son aún menores.
-  // Lote 2026-11-16 (P1): el rechazo llega ANTES por el gate NBA estático
-  // (futureData no carga ratings en vivo, así que ratingsSource es 'static'):
-  // el veto es 'nba_static_ratings' y el EV negativo sigue debajo (spread
-  // EV 1.99%, ML EV -6.48%). La intención no cambia: NBA no sale.
+  // Reversión completa 2026-11-25 (par viejo A=0.65/B=-0.20 en todos los
+  // deportes): este caso no cambia — el rechazo llega ANTES por el gate NBA
+  // estático (futureData no carga ratings en vivo, así que ratingsSource es
+  // 'static'): el veto es 'nba_static_ratings' y el EV negativo sigue
+  // debajo (spread EV 1.99%, ML EV -6.48%, medidos con la calibración
+  // 2026-11-10). La intención no cambia: NBA no sale.
   const nbaVetoed = (direct.vetoedOpps || []).filter(p => p.sport === 'Baloncesto');
   assert.equal(nbaVetoed.length, 2);
   assert.ok(nbaVetoed.every(p => p.vetoReason === 'nba_static_ratings'));
@@ -1744,13 +1740,13 @@ test('R1 2026-11-24 (fase 1): TODOS los spreads en pausa, incluida NBA con ratin
   assert.equal(classifyOpportunity({ ...base, sport: 'Fútbol Americano', league: 'NFL', type: '🏈 NFL', pick: 'Kansas City -3.5 (Cubre Línea)' }).vetoReason, 'spread_paused');
 });
 
-test('afinación 2026-11-24 (Fase 3, R2+R3): Platt usa el refit forense (global A=0.34, B=-0.33; NBA A=0.36, B=-0.60)', () => {
-  // Refit honesto del diagnóstico forense (n=56, gap +16.43): cruda 85% →
-  // 56.5% global, cruda 70% → 49.0%. El slate +EV casi se vacía por diseño;
-  // el tier Seguro absorbe la acción. NBA: cruda 85% → 50.6% (interino).
-  assert.equal(applyPlattCalibration(85, 'nba'), 50.6);
-  assert.equal(applyPlattCalibration(70, 'futbol'), 49);
-  assert.equal(applyPlattCalibration(90, 'ncaaf'), 60.3);
+test('afinación 2026-11-24 (Fase 3, R2+R3) + reversión completa 2026-11-25: Platt vuelve al par viejo A=0.65/B=-0.20 en todos los deportes', () => {
+  // Refit forense revertido 2026-11-25 (decisión de Tavo, /cheatsheet
+  // equilibrado): todos los deportes al par viejo. Cruda 85% → 71.7%,
+  // cruda 70% → 58.7%, cruda 90% → 77.4%.
+  assert.equal(applyPlattCalibration(85, 'nba'), 71.7);
+  assert.equal(applyPlattCalibration(70, 'futbol'), 58.7);
+  assert.equal(applyPlattCalibration(90, 'ncaaf'), 77.4);
 });
 
 test('modo paper: buildOpportunitiesAndTopSlate devuelve los vetados con motivo', () => {

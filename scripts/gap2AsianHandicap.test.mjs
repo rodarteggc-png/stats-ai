@@ -64,15 +64,19 @@ test('Gap 2: línea -2.5 (ESPN) genera AH -2.5 con cuota real', () => {
   assert.equal(raw[0].type, '⚡ HÁNDICAP ASIÁTICO (-2.5)');
   assert.equal(raw[0].odds, '2.10');
   assert.equal(raw[0].oddsSource, 'espn', 'la cuota -2.5 es real (ESPN, tier espn), no model');
-  // Cruda Poisson homeMinus25 = 81.2% → Platt global A=0.34/B=-0.33 sobre
-  // el 81% redondeado del builder = 54.1%.
-  assert.equal(parseFloat(raw[0].prob), 54.1, `prob AH -2.5 ${raw[0].prob}, se esperaba 54.1`);
-  // El pick pasa todos los candados vigentes (3 votos, EV, sin outlier):
-  // no se veta por odds_model ni por ningún otro motivo.
-  assert.equal(out.vetoedOpps.filter(o => o.id === 'ah-home-soccer-ah-25').length, 0,
-    `el AH -2.5 no debe vetarse: ${JSON.stringify(out.vetoedOpps.filter(o => o.id.startsWith('ah-')).map(o => o.vetoReason))}`);
-  assert.equal(out.approvedOpps.filter(o => o.id === 'ah-home-soccer-ah-25').length, 1,
-    'el AH -2.5 con cuota real debe quedar aprobado');
+  // Cruda Poisson homeMinus25 = 81.2% → Platt fútbol A=0.65/B=-0.20
+  // (revertido 2026-11-25) sobre el 81% redondeado del builder = 67.8%.
+  assert.equal(parseFloat(raw[0].prob), 67.8, `prob AH -2.5 ${raw[0].prob}, se esperaba 67.8`);
+  // CONSECUENCIA DE LA REVERSIÓN (2026-11-25): la prob calibrada 67.8%
+  // supera el mercado sin vig (~45.5% para @2.10) por >12 pp, así que el
+  // tope market_outlier (12 pp, fijado por Tavo, NO se toca) lo veta. Con
+  // el refit (54.1%) la brecha era 8.6 pp y se aprobaba. El builder sigue
+  // generando el pick con cuota real; el veto es del gate de seguridad.
+  const vetoed = out.vetoedOpps.filter(o => o.id === 'ah-home-soccer-ah-25');
+  assert.equal(vetoed.length, 1, `el AH -2.5 debe vetarse por market_outlier, hay ${vetoed.length}`);
+  assert.equal(vetoed[0].vetoReason, 'market_outlier', `el veto debe ser market_outlier, es: ${vetoed[0].vetoReason}`);
+  assert.equal(out.approvedOpps.filter(o => o.id === 'ah-home-soccer-ah-25').length, 0,
+    'el AH -2.5 ya no queda aprobado tras la reversión de fútbol');
 });
 
 test('Gap 2: línea +2.5 del local (favorito visitante) genera AH -2.5 con cuota real', () => {
@@ -88,9 +92,15 @@ test('Gap 2: línea +2.5 del local (favorito visitante) genera AH -2.5 con cuota
   assert.equal(raw[0].pick, 'Team A -2.5 (Gana por 3+ goles)');
   assert.equal(raw[0].odds, '2.10');
   assert.equal(raw[0].oddsSource, 'espn', 'la cuota -2.5 visitante es real (ESPN), no model');
-  assert.equal(parseFloat(raw[0].prob), 53.5, `prob AH -2.5 visitante ${raw[0].prob}, se esperaba 53.5`);
-  assert.equal(out.approvedOpps.filter(o => o.id === 'ah-away-soccer-ah-away25').length, 1,
-    'el AH -2.5 visitante con cuota real debe quedar aprobado');
+  assert.equal(parseFloat(raw[0].prob), 66.8, `prob AH -2.5 visitante ${raw[0].prob}, se esperaba 66.8`);
+  // CONSECUENCIA DE LA REVERSIÓN (2026-11-25): igual que el -2.5 local,
+  // la prob calibrada 66.8% supera el mercado sin vig por >12 pp y el
+  // tope market_outlier lo veta (con el refit era 53.5% y se aprobaba).
+  const vetoedAway = out.vetoedOpps.filter(o => o.id === 'ah-away-soccer-ah-away25');
+  assert.equal(vetoedAway.length, 1, `el AH -2.5 visitante debe vetarse por market_outlier`);
+  assert.equal(vetoedAway[0].vetoReason, 'market_outlier', `el veto debe ser market_outlier, es: ${vetoedAway[0].vetoReason}`);
+  assert.equal(out.approvedOpps.filter(o => o.id === 'ah-away-soccer-ah-away25').length, 0,
+    'el AH -2.5 visitante ya no queda aprobado tras la reversión de fútbol');
 });
 
 test('Gap 2: línea Pinnacle (m.vegas) tiene prioridad sobre ESPN en -2.5', () => {
@@ -149,8 +159,12 @@ test('Gap 2: línea -1.5 sigue igual (regresión)', () => {
   assert.equal(raw[0].type, '⚡ HÁNDICAP ASIÁTICO (-1.5)');
   assert.equal(raw[0].odds, '1.85');
   assert.equal(raw[0].oddsSource, 'espn');
-  assert.equal(parseFloat(raw[0].prob), 52.5, `prob AH -1.5 ${raw[0].prob}, se esperaba 52.5`);
+  assert.equal(parseFloat(raw[0].prob), 65.1, `prob AH -1.5 ${raw[0].prob}, se esperaba 65.1`);
   const vetoed = out.vetoedOpps.filter(o => o.id === 'ah-home-soccer-ah-base15');
   assert.equal(vetoed.length, 1, 'el AH -1.5 de referencia sigue vetado como antes');
-  assert.equal(vetoed[0].vetoReason, 'ev_below_min', `el veto debe seguir siendo ev_below_min, es: ${vetoed[0].vetoReason}`);
+  // CONSECUENCIA DE LA REVERSIÓN (2026-11-25): el veto ya NO es
+  // ev_below_min (la prob calibrada subió a 65.1% y el EV es positivo),
+  // sino market_outlier: 65.1% vs mercado sin vig ~50.7% (@1.85/1.90)
+  // supera el tope de 12 pp. El pick sigue sin despacharse, cambia el motivo.
+  assert.equal(vetoed[0].vetoReason, 'market_outlier', `el veto debe ser market_outlier tras la reversión, es: ${vetoed[0].vetoReason}`);
 });

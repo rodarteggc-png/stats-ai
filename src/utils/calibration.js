@@ -39,17 +39,28 @@
  *   (applySoccerSafeCalibration, decisión de Tavo 2026-11-24 15:16 CST):
  *   el Seguro es solo favoritos ML de fútbol y el refit global lo
  *   sobrecorrige; con el par suave el umbral cal≥55% exige cruda ≥65.5%.
- * Consecuencia aceptada: /futuro (cal≥65%) ahora exige cruda ≥94.2% y se
- * vacía casi siempre; su umbral NO se baja para compensar. El tier Seguro
- * ya NO se vacía: los 6 seguros en vivo del 24 nov califican con el par
- * suave (Real Madrid 80.2 → 61.6, Betis 69.2 → 56.5).
+ * 2026-11-25 (REVERSIÓN COMPLETA, decisión de Tavo 18:08 CST corregida
+ * 18:15 CST — "que genere flujo pero seguro, y si no es seguro con
+ * probabilidad alta"): el refit global R2 dejó /cheatsheet y los scans en
+ * 0 picks (cruda 70% → 49%, los pisos exigen cruda ~81%). Tavo corrigió:
+ * NO es solo fútbol — el /cheatsheet viejo era equilibrado entre todos los
+ * deportes, así que el revert es COMPLETO: TODOS los deportes vuelven al
+ * par parcial viejo A=0.65/B=-0.20 (cruda 70% → 58.7%, cruda 85% →
+ * 71.7%; piso ML cal 54% exige cruda 63.5%, spread/total cal 53% exige
+ * cruda 62.1%). ADVERTENCIA HONESTA: el diagnóstico forense (n=56) encontró
+ * sobreestimación (global +16.43 pts, NBA +36.7 pts, Brier 0.2955); este
+ * revert la RESTAURA a cambio de flujo. Los gates de seguridad NO se tocan
+ * (5 candados, piso EV 2.0%, pisos de prob, consenso 3v1, market_outlier
+ * 12 pp, fail-closed Gap 3, R1 spreads en pausa): los picks que vuelvan
+ * siguen pasando por todos esos filtros. SOCCER_SAFE_PLATT (tier Seguros)
+ * tampoco se toca.
  */
 let PLATT_COEFFICIENTS = {
-  futbol: { A: 0.34, B: -0.33 },
-  nfl: { A: 0.34, B: -0.33 },
-  ncaaf: { A: 0.34, B: -0.33 },
-  mlb: { A: 0.34, B: -0.33 },
-  nba: { A: 0.36, B: -0.60 }
+  futbol: { A: 0.65, B: -0.20 },
+  nfl: { A: 0.65, B: -0.20 },
+  ncaaf: { A: 0.65, B: -0.20 },
+  mlb: { A: 0.65, B: -0.20 },
+  nba: { A: 0.65, B: -0.20 }
 };
 
 // Cargar coeficientes auto-aprendidos (Área 11) de memoria local si existen

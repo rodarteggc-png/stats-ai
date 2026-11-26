@@ -360,12 +360,14 @@ async function runNbaDryRun({ withAi, gameDate = new Date(Date.now() + 2 * 36000
   const logBackup = snapshotFile(shiftLog);
   try {
     setLiveNbaRatings({
-      // Favorito claro (margen proyectado +22.3, cruda ML 93.5% → cal 58.9%
-      // con el par NBA Fase 3, R3): el ML local pasa los gates y el dry-run
-      // tiene algo que "enviar". Con los ratings viejos (114/112 vs 110/113)
-      // la cruda era ~70.7% y el refit la dejaba en cal ~43% (EV negativo).
-      'boston celtics': { pace: 99, ortg: 119, drtg: 109, games: 10, source: 'live' },
-      'washington wizards': { pace: 101, ortg: 107, drtg: 117, games: 10, source: 'live' },
+      // Favorito moderado (cruda ML 73.6% → cal 61.5% con el par viejo
+      // A=0.65/B=-0.20, reversión completa 2026-11-25): el ML local pasa
+      // los gates (piso ML 54%, EV +17.5%, gap mercado ~9.1pp < 12pp, 2/3
+      // votos) y el dry-run tiene algo que "enviar". Con los ratings
+      // fuertes (119/109 vs 107/117) la cruda era 93.5% → cal 82.2% y el
+      // gap vs mercado (~52.4% sin vig) supera 12 pp → market_outlier.
+      'boston celtics': { pace: 99, ortg: 114, drtg: 110, games: 10, source: 'live' },
+      'washington wizards': { pace: 101, ortg: 110, drtg: 113, games: 10, source: 'live' },
     });
     clearNbaRatingsCache();
     const envPatch = {

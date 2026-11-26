@@ -1,11 +1,16 @@
 // scripts/tuningPhase3.test.mjs — Fase 3 del plan de afinación (2026-11-24).
-// R2: refit global de Platt — todos los deportes a A=0.34, B=-0.33; el piso
+// R2: refit global de Platt — NFL/NCAAF/MLB a A=0.34, B=-0.33; el piso
 // del candado en recalibrateFromAudit baja de A≥0.40 a A≥0.25.
 // R3: NBA interina (hasta n=30 cerrados) a A=0.36, B=-0.60 — el par honesto
 // de despacho (refit con candado 0.40/-0.60 compuesto con el coeficiente NBA
 // viejo 0.90), NO el 0.40/-0.60 sin componer del informe.
 // R4: fútbol SIN refit propio — cubierto por el par global; el refit suave
 // opcional (A≈0.36/B≈-0.03) NO se aplica.
+// 2026-11-25 (REVERSIÓN COMPLETA, decisión de Tavo): TODOS los deportes
+// vuelven al par parcial viejo A=0.65/B=-0.20 (el refit R2/R3 queda
+// revertido; /cheatsheet equilibrado entre deportes). Los tests de esta
+// fase quedan como registro histórico del refit: se actualizan para fijar
+// el estado vigente (par viejo en todos los deportes).
 // No toca el ledger real ni los umbrales del tier Seguro ni de /futuro.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -15,34 +20,36 @@ import {
   getPlattCoefficients,
 } from '../src/utils/calibration.js';
 
-const GLOBAL = { A: 0.34, B: -0.33 };
-const NBA = { A: 0.36, B: -0.60 };
+const OLD = { A: 0.65, B: -0.20 }; // par vigente en todos los deportes (revertido 2026-11-25)
+const NBA = { A: 0.65, B: -0.20 }; // NBA también revertida al par viejo
 
 // ---------------- R2 ----------------
 
-test('R2: los defaults globales son A=0.34/B=-0.33 para todos los deportes', () => {
+test('R2: revertido 2026-11-25 — todos los deportes vuelven al par viejo A=0.65/B=-0.20', () => {
   const coefs = getPlattCoefficients();
-  assert.deepEqual(coefs.futbol, GLOBAL);
-  assert.deepEqual(coefs.nfl, GLOBAL);
-  assert.deepEqual(coefs.ncaaf, GLOBAL);
-  assert.deepEqual(coefs.mlb, GLOBAL);
+  assert.deepEqual(coefs.futbol, OLD);
+  assert.deepEqual(coefs.nfl, OLD);
+  assert.deepEqual(coefs.ncaaf, OLD);
+  assert.deepEqual(coefs.mlb, OLD);
+  assert.deepEqual(coefs.nba, OLD);
 });
 
-test('R2: el par parcial viejo (A=0.65/B=-0.20) ya no está en ningún deporte', () => {
+test('R2: el par del refit (A=0.34/B=-0.33) ya no está en ningún deporte', () => {
   const coefs = getPlattCoefficients();
   for (const [sport, pair] of Object.entries(coefs)) {
-    assert.notDeepEqual(pair, { A: 0.65, B: -0.20 }, sport);
+    assert.notDeepEqual(pair, { A: 0.34, B: -0.33 }, sport);
   }
 });
 
-test('R2: los mapeos compuestos — cruda 70% → ~49%, cruda 85% → ~57% (56.5)', () => {
-  // El informe dice "~57%" para la cruda 85%: el valor exacto es 56.5.
-  assert.equal(applyPlattCalibration(70, 'futbol'), 49);
-  assert.equal(applyPlattCalibration(85, 'futbol'), 56.5);
-  assert.equal(applyPlattCalibration(85, 'nfl'), 56.5);
-  assert.equal(applyPlattCalibration(85, 'ncaaf'), 56.5);
-  assert.equal(applyPlattCalibration(85, 'mlb'), 56.5);
-  assert.equal(applyPlattCalibration(70, 'nfl'), 49);
+test('R2: los mapeos con el par viejo — cruda 70% → 58.7%, cruda 85% → 71.7% en todos los deportes', () => {
+  // Par viejo A=0.65/B=-0.20 en todos los deportes (revertido 2026-11-25).
+  assert.equal(applyPlattCalibration(70, 'futbol'), 58.7);
+  assert.equal(applyPlattCalibration(85, 'futbol'), 71.7);
+  assert.equal(applyPlattCalibration(85, 'nfl'), 71.7);
+  assert.equal(applyPlattCalibration(85, 'ncaaf'), 71.7);
+  assert.equal(applyPlattCalibration(85, 'mlb'), 71.7);
+  assert.equal(applyPlattCalibration(70, 'nfl'), 58.7);
+  assert.equal(applyPlattCalibration(70, 'nba'), 58.7);
 });
 
 test('R2: el piso del candado permite expresar A=0.34 (refit por debajo de 0.40)', () => {
@@ -72,29 +79,36 @@ test('R2: los demás topes del candado no cambiaron (A≤1.80, B∈[-0.60, 0.60]
 
 // ---------------- R3 ----------------
 
-test('R3: NBA es A=0.36/B=-0.60 (par compuesto, no el 0.40/-0.60 sin componer)', () => {
+test('R3: NBA revertida 2026-11-25 — vuelve al par viejo A=0.65/B=-0.20 (el par compuesto 0.36/-0.60 queda revertido)', () => {
   assert.deepEqual(getPlattCoefficients().nba, NBA);
+  assert.notDeepEqual(getPlattCoefficients().nba, { A: 0.36, B: -0.60 });
   assert.notDeepEqual(getPlattCoefficients().nba, { A: 0.40, B: -0.60 });
 });
 
-test('R3: cross-check — un pick NBA guardado como 80% con los coeficientes viejos (cruda ≈82.4%) ahora calibra ~49%', () => {
+test('R3: cross-check — un pick NBA guardado como 80% con los coeficientes viejos (cruda ≈82.4%) calibra 69.1% con el par viejo', () => {
   // Con los coeficientes NBA viejos (A=0.90/B=0.00) la cruda 82.4 se
-  // guardaba como 80.0%; con el par R3 esa misma cruda calibra 48.9.
-  assert.equal(applyPlattCalibration(82.4, 'Baloncesto'), 48.9);
-  assert.equal(applyPlattCalibration(82.4, 'nba'), 48.9);
-  // Y la NBA ya no comparte el par global: cruda 85% da 50.6, no 56.5.
-  assert.equal(applyPlattCalibration(85, 'Baloncesto'), 50.6);
-  assert.notEqual(applyPlattCalibration(85, 'Baloncesto'), applyPlattCalibration(85, 'futbol'));
+  // guardaba como 80.0%; con el par viejo A=0.65/B=-0.20 (revertido
+  // 2026-11-25) esa misma cruda calibra 69.1.
+  assert.equal(applyPlattCalibration(82.4, 'Baloncesto'), 69.1);
+  assert.equal(applyPlattCalibration(82.4, 'nba'), 69.1);
+  // Tras la reversión completa, NBA y fútbol comparten el par viejo:
+  // cruda 85% da 71.7 en ambos.
+  assert.equal(applyPlattCalibration(85, 'Baloncesto'), 71.7);
+  assert.deepEqual(applyPlattCalibration(85, 'Baloncesto'), applyPlattCalibration(85, 'futbol'));
 });
 
 // ---------------- R4 ----------------
 
-test('R4: fútbol NO tiene refit propio — es el par global, no el suave opcional', () => {
+test('R4: revertido 2026-11-25 — todos los deportes comparten el par viejo, incluido fútbol (no es el par global del refit ni el suave opcional)', () => {
   const coefs = getPlattCoefficients();
-  assert.deepEqual(coefs.futbol, GLOBAL);
+  assert.deepEqual(coefs.futbol, OLD);
   assert.deepEqual(coefs.futbol, coefs.nfl);
   assert.deepEqual(coefs.futbol, coefs.ncaaf);
   assert.deepEqual(coefs.futbol, coefs.mlb);
-  // El refit suave opcional del informe (A≈0.36/B≈-0.03) NO se aplicó.
+  assert.deepEqual(coefs.futbol, coefs.nba);
+  // El refit suave opcional del informe (A≈0.36/B≈-0.03) tampoco se aplicó
+  // al despacho (solo existe en el tier Seguro, applySoccerSafeCalibration).
   assert.notDeepEqual(coefs.futbol, { A: 0.36, B: -0.03 });
+  // Y el par global del refit (A=0.34/B=-0.33) ya no está en ningún deporte.
+  assert.notDeepEqual(coefs.futbol, { A: 0.34, B: -0.33 });
 });

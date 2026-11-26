@@ -80,8 +80,9 @@ test('WORK B (a): underdog visitante NFL con prob suficiente + precio real gener
   assert.equal(opp.league, 'NFL');
   assert.equal(opp.type, '🏈 VISITANTE DIRECTO (NFL)');
   assert.equal(opp.pick, 'Victoria New York Jets');
-  // La prob que lleva la oportunidad es la CALIBRADA (Platt global
-  // A=0.34/B=-0.33); la cruda queda en rawProb, igual que en el ML NBA.
+  // La prob que lleva la oportunidad es la CALIBRADA (Platt par viejo
+  // A=0.65/B=-0.20, reversión completa 2026-11-25); la cruda queda en
+  // rawProb, igual que en el ML NBA.
   assert.equal(opp.prob, `${applyPlattCalibration(67.8, 'NFL')}%`);
   assert.equal(opp.rawProb, '67.8%');
   assert.equal(opp.odds, '2.44');
@@ -297,13 +298,15 @@ test('WORK B (e2): Voto 1 ML NCAAF enruta (antes nunca pasaba) y el spread NCAAF
   assert.equal(spread.breakdown[0].reason, '', 'sin rama, el motivo queda vacío como antes');
 });
 
-test('WORK B (f): estado honesto en el flujo completo — el ML generado queda vetado por el piso de prob calibrada, no por falta de precio', () => {
-  // Con el refit R2 (Platt global A=0.34/B=-0.33), una cruda 67.8% calibra
-  // 48.1% < 54% (piso ML de classifyOpportunity): la oportunidad EXISTE
-  // (cierra el hueco de generación) y pasa el Voto 1, pero no se despacha.
-  // El despacho exigiría cruda >= ~81% (o una recalibración, decisión de
-  // Tavo, fuera de este trabajo). Lo que se afirma aquí: el veto es por
-  // prob, no por precio ni por consenso.
+test('WORK B (f): estado honesto en el flujo completo — el ML generado queda vetado por market_outlier, no por falta de precio', () => {
+  // Con el par viejo (A=0.65/B=-0.20, reversión completa 2026-11-25), una
+  // cruda 67.8% calibra 57.1% ≥ 54% (piso ML de classifyOpportunity): la
+  // oportunidad EXISTE (cierra el hueco de generación) y pasa el Voto 1,
+  // pero el tope market_outlier (12 pp) la veta: 57.1% vs mercado sin vig
+  // (~44%) supera 12 pp. Con el refit (48.1%) el veto era prob_below_min.
+  // El despacho exigiría cruda >= ~81% con el refit; con el par viejo el
+  // piso se pasa pero el mercado frena. Lo que se afirma aquí: el veto es
+  // por el gate de seguridad, no por precio ni por consenso.
   const match = gridironMatch({ id: 'nfl-wb-away', homeYpp: 4.8, awayYpp: 6.2, spread: 3.5, homeMl: 1.60, awayMl: 2.44 });
   const out = runBuilder({ nflMatches: [match] });
   const opp = mlOpps(out, 'nfl-ml-a-')[0];
@@ -317,7 +320,7 @@ test('WORK B (f): estado honesto en el flujo completo — el ML generado queda v
   assert.equal(opp.consensus.votesPassed, 2, '2/3 votos (Voto 2 cae por el hueco preexistente del MC)');
   const verdict = classifyOpportunity(opp);
   assert.equal(verdict.approved, false);
-  assert.equal(verdict.vetoReason, 'prob_below_min', `el veto debe ser prob_below_min, es ${verdict.vetoReason}: ${verdict.vetoDetail}`);
+  assert.equal(verdict.vetoReason, 'market_outlier', `el veto debe ser market_outlier, es ${verdict.vetoReason}: ${verdict.vetoDetail}`);
   assert.equal(out.approvedOpps.filter((o) => o.id.startsWith('nfl-ml-')).length, 0);
   assert.equal(out.vetoedOpps.filter((o) => o.id.startsWith('nfl-ml-')).length, 1, 'queda registrada en vetados (modo paper la califica)');
 });

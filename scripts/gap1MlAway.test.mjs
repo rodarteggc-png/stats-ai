@@ -88,8 +88,9 @@ test('GAP1 (a): underdog visitante con prob suficiente + precio real genera la o
   assert.equal(opp.league, 'NBA');
   assert.equal(opp.type, '🏀 VISITANTE DIRECTO (NBA)');
   assert.equal(opp.pick, 'Victoria Washington Wizards');
-  // La prob que lleva la oportunidad es la CALIBRADA (Platt NBA A=0.36/B=-0.60);
-  // la cruda queda en rawProb, igual que en el ML local.
+  // La prob que lleva la oportunidad es la CALIBRADA (Platt par viejo
+  // A=0.65/B=-0.20, reversión completa 2026-11-25); la cruda queda en
+  // rawProb, igual que en el ML local.
   assert.equal(opp.prob, `${applyPlattCalibration(65, 'Baloncesto')}%`);
   assert.equal(opp.rawProb, '65%');
   assert.equal(opp.odds, '2.44');
@@ -158,23 +159,29 @@ test('GAP1 regresión: el ML del favorito local sigue generándose y el visitant
   assert.equal(awayMlOpps(out).length, 0, 'con el visitante a 30.9% no debe generarse ML visitante');
 });
 
-test('GAP1 límite (WORK A): con el Voto 1 relajado, el underdog visitante fuerte se APRUEBA y entra al slate', () => {
+test('GAP1 límite (WORK A): con el Voto 1 relajado, el underdog visitante fuerte pasa el consenso pero lo frena market_outlier (reversión 2026-11-25)', () => {
   // Antes de WORK A este fixture se vetaba en consenso (Candado
   // Anti-Underdog NBA del Voto 1). Con la excepción GAP1 (prob cruda del
   // visitante 90% >= 62.0%, precio real @2.44): Voto 1 pasa, Voto 2 se
   // abstiene (sin Monte Carlo NBA) y Voto 3 pasa → 2/2 UNANIMIDAD_ELITE.
-  // La calibrada NBA es 54.8% (pasa el piso ML de 54%), el EV es +23.3%
-  // y el gap de mercado es ~10.4 pp (< 12), así que nada más lo frena.
+  // CONSECUENCIA DE LA REVERSIÓN COMPLETA (2026-11-25): la calibrada NBA
+  // con el par viejo es 77.4% (con el refit era 54.8%) y supera el mercado
+  // sin vig (~39% para @2.44) por >12 pp, así que el tope market_outlier
+  // (12 pp, fijado por Tavo, NO se toca) veta el pick en classify. La
+  // relajación del Voto 1 sigue funcionando (el consenso pasa); lo que lo
+  // frena es el gate de seguridad, no el consenso.
   const match = nbaMatch({ homeWinProb: 10, awayWinProb: 90, homeMl: 1.95, awayMl: 2.44 });
   const out = runBuilder([match]);
   const opps = awayMlOpps(out);
   assert.equal(opps.length, 1, 'con 90% cruda debe generarse la oportunidad');
   assert.equal(opps[0].consensus.verdict, 'UNANIMIDAD_ELITE');
   assert.equal(opps[0].consensus.votesPassed, 2);
-  assert.equal(classifyOpportunity(opps[0]).approved, true);
-  assert.equal(out.vetoedOpps.filter((o) => o.id.startsWith('nba-ml-a-')).length, 0, 'ya no queda en vetados');
-  assert.equal(out.approvedOpps.filter((o) => o.id.startsWith('nba-ml-a-')).length, 1, 'llega a aprobados');
-  assert.equal(out.topSlate.filter((o) => o.id.startsWith('nba-ml-a-')).length, 1, 'entra al slate');
+  const verdict = classifyOpportunity(opps[0]);
+  assert.equal(verdict.approved, false);
+  assert.equal(verdict.vetoReason, 'market_outlier', `el veto debe ser market_outlier, es ${verdict.vetoReason}`);
+  assert.equal(out.vetoedOpps.filter((o) => o.id.startsWith('nba-ml-a-')).length, 1, 'queda en vetados por market_outlier');
+  assert.equal(out.approvedOpps.filter((o) => o.id.startsWith('nba-ml-a-')).length, 0, 'ya no llega a aprobados tras la reversión');
+  assert.equal(out.topSlate.filter((o) => o.id.startsWith('nba-ml-a-')).length, 0, 'no entra al slate');
 });
 
 test('WORK A (a): Voto 1 pasa para ML visitante NBA fuerte (prob cruda 90%, cuota 2.44, precio real)', () => {
