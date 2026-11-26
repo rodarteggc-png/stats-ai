@@ -30,6 +30,7 @@ import {
 } from "./services/history";
 import { runBatchMonteCarlo } from "./services/simulationBridge";
 import { callGemini } from "./services/geminiClient";
+import { fetchRealCorners, resolveCornersValue } from "./services/cornersClient";
 const MODEL = "gemini-3.8-flash"; 
 
 function buildSystemPrompt() {
@@ -768,6 +769,12 @@ export default function App() {
           }
 
           // 7. TIER 2: MERCADOS ALTERNOS (Over/Under 1.5, 2.5, 3.5 y Córners con GameStateModifier)
+          // NOTA CÓRNERS REALES (2026-11-25): el radar recorre TODA la cartelera,
+          // así que pedir el dato real aquí costaría 2 requests de API-Sports por
+          // partido y agotaría la cuota diaria (100/día). El dato real solo se
+          // usa en el simulador de un partido (analyze, línea ~1590). Este Tier 2
+          // sigue con cornersAvg (proyección derivada del xG) y propProbs no se
+          // usa para generar oportunidades (solo goles Over/Under).
           const propProbs = calculatePropProbabilities(
             matchData.home.cornersAvg, matchData.away.cornersAvg,
             matchData.home.cardsAvg, matchData.away.cardsAvg,
@@ -1569,14 +1576,26 @@ export default function App() {
 
       if (activeSport === 'futbol') {
         const probs = calculateMatchProbabilities(
-          matchData.home.xG, matchData.away.xG, 
-          matchData.home.elo, matchData.away.elo, 
+          matchData.home.xG, matchData.away.xG,
+          matchData.home.elo, matchData.away.elo,
           matchData.home.daysRest, matchData.away.daysRest,
           learned.homePenalty, learned.awayPenalty
         );
-        const corners = calculatePropProbabilities(matchData.home.cornersAvg, matchData.away.cornersAvg, 9.5, probs);
+        // CÓRNERS REALES (2026-11-25): intenta el promedio real de API-Sports
+        // vía /api/corners (serverless, sin llave en el navegador). Si existe
+        // para un equipo se usa ese valor; si no, el fallback xG (cornersAvg)
+        // queda intacto. cornersAvg NUNCA se sobreescribe: el real se adjunta
+        // como cornersAvgReal y la fuente por equipo en cornersSource.
+        // Sin dato real el comportamiento es idéntico al actual.
+        const realCorners = await fetchRealCorners(matchData.home.name, matchData.away.name);
+        const homeCornersResolved = resolveCornersValue(realCorners.home, matchData.home.cornersAvg);
+        const awayCornersResolved = resolveCornersValue(realCorners.away, matchData.away.cornersAvg);
+        matchData.home.cornersAvgReal = homeCornersResolved.realAvg;
+        matchData.away.cornersAvgReal = awayCornersResolved.realAvg;
+        const cornersSource = { home: homeCornersResolved.source, away: awayCornersResolved.source };
+        const corners = calculatePropProbabilities(homeCornersResolved.value, awayCornersResolved.value, 9.5, probs);
         const cards = calculatePropProbabilities(matchData.home.cardsAvg, matchData.away.cardsAvg, 4.5);
-        mathProbs = { type: 'futbol', probs, props: { corners, cards } };
+        mathProbs = { type: 'futbol', probs, props: { corners, cards }, cornersSource };
         
         const hw = parseFloat(probs.homeWin);
         const aw = parseFloat(probs.awayWin);
@@ -1623,7 +1642,7 @@ export default function App() {
         Probabilidades (Poisson Bivariado con Ajuste por Memoria IA):
         Local: ${probs.homeWin}% | Empate: ${probs.draw}% | Visita: ${probs.awayWin}%
         Doble Oportunidad 1X: ${probs.doubleChance.dc1X}% | Doble Oportunidad X2: ${probs.doubleChance.dcX2}%
-        Over 1.5 Goles: ${probs.over15}% | Over 2.5 Goles: ${probs.over25}% | Over 3.5 Goles: ${probs.over35}% | Ambos Anotan: ${probs.bttsYes}% | Córners >9.5: ${corners.over}%
+        Over 1.5 Goles: ${probs.over15}% | Over 2.5 Goles: ${probs.over25}% | Over 3.5 Goles: ${probs.over35}% | Ambos Anotan: ${probs.bttsYes}% | Córners >9.5: ${corners.over}% (fuente córners — local: ${cornersSource.home === 'real' ? `dato real API-Sports (${matchData.home.cornersAvgReal} prom.)` : 'proyección derivada del xG'}; visita: ${cornersSource.away === 'real' ? `dato real API-Sports (${matchData.away.cornersAvgReal} prom.)` : 'proyección derivada del xG'})
         Marcadores más probables: ${probs.mostLikelyScores.map(s => s.score + ' (' + s.prob + ')').join(', ')}
         `;
       } else if (activeSport === 'mlb') {
@@ -3655,6 +3674,13 @@ export default function App() {
                             <ProbBox label="OVER 2.5 GOLES" prob={analysisResult.mathProbs.probs.over25} color="#10b981" />
                             <ProbBox label="AMBOS ANOTAN" prob={analysisResult.mathProbs.probs.bttsYes} color="#f59e0b" />
                           </div>
+                          {/* CÓRNERS REALES (2026-11-25): fuente por equipo — dato real de
+                              API-Sports cuando existe, o proyección derivada del xG. */}
+                          {analysisResult.mathProbs.props?.corners && (
+                            <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 15 }}>
+                              Córners &gt;9.5: {analysisResult.mathProbs.props.corners.over}% (esperados {analysisResult.mathProbs.props.corners.expectedTotal}) — Local: {analysisResult.mathProbs.cornersSource?.home === 'real' ? `dato real (API-Sports, ${analysisResult.match.home.cornersAvgReal} prom.)` : 'proyección derivada del xG'} · Visita: {analysisResult.mathProbs.cornersSource?.away === 'real' ? `dato real (API-Sports, ${analysisResult.match.away.cornersAvgReal} prom.)` : 'proyección derivada del xG'}
+                            </div>
+                          )}
                         </>
                       )}
 

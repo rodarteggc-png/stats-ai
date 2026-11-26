@@ -2421,6 +2421,12 @@ export function buildOpportunitiesAndTopSlate({
         gameDate: prop.gameDate,
         type: '⚽ PLAYER PROP (TIROS A PUERTA)',
         isProp: true,
+        // lineupVerified (corrección SOT 2026-11-25): true solo si hay
+        // alineación oficial Y el jugador está en ella. Para fútbol hoy
+        // siempre es false (ESPN no publica alineaciones en el
+        // scoreboard); queda en el opp para auditoría y para un futuro
+        // fail-closed cuando exista fuente de alineaciones/lesiones.
+        lineupVerified: prop.lineupVerified === true,
         pick: prop.fullPick,
         prob: `${prop.prob}%`,
         odds: prop.marketOdds,

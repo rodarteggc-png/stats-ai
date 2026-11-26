@@ -1441,6 +1441,29 @@ async function fetchRealSoccerSchedule(dateRange) {
       const soccerDaysRest = getSoccerDaysRest(leagueCode, ev.date);
       const homeLeader = comp.leaders?.[0]?.leaders?.[0]?.athlete?.displayName || home.leaders?.[0]?.leaders?.[0]?.athlete?.displayName || "Delantero Principal";
       const awayLeader = comp.leaders?.[1]?.leaders?.[0]?.athlete?.displayName || away.leaders?.[0]?.leaders?.[0]?.athlete?.displayName || "Extremo Titular";
+      // Categoría y valor del líder (dato real ESPN, mismo origen que el
+      // nombre): `leaders[0]` es la categoría "goals" (hay un duplicado
+      // "goalsLeaders") y `value` es el total de goles del jugador en la
+      // competición (verificado en vivo 2026-11-25: Viñas 8, Henry Martín
+      // 11, Mbeumo 4, Riquelme 3, Rudoni 3). Se adjuntan para que el
+      // generador de props (soccerProps.js) pueda validar que el
+      // keyPlayer es un tirador plausible y escalar su proyección por su
+      // producción real. Sin este dato el generador no puede distinguir a
+      // un delantero de un defensa que lidera por 1 gol (Llorente,
+      // Champions 25 nov 2026: 1 gol en 5 partidos, 0.6 tiros/90).
+      // Nota: `leaders` solo existe pre-partido (en partidos finalizados
+      // ESPN devuelve la lista vacía y el nombre cae al placeholder).
+      const homeLeaderCategory = comp.leaders?.[0]?.name || home.leaders?.[0]?.name || null;
+      const homeLeaderValue = comp.leaders?.[0]?.leaders?.[0]?.value ?? home.leaders?.[0]?.leaders?.[0]?.value ?? null;
+      const awayLeaderCategory = comp.leaders?.[1]?.name || away.leaders?.[0]?.name || null;
+      const awayLeaderValue = comp.leaders?.[1]?.leaders?.[0]?.value ?? away.leaders?.[0]?.leaders?.[0]?.value ?? null;
+      // Posición del líder (ESPN athlete.position.abbreviation: "F"
+      // delantero, "M" centrocampista, "D" defensa, "G" portero;
+      // verificado en vivo 2026-11-25: Viñas "F", Henry Martín "F",
+      // Ocampos "M", Esteves "M"). Se adjunta para que el generador de
+      // props bloquee a defensas/porteros como tiradores.
+      const homeLeaderPosition = comp.leaders?.[0]?.leaders?.[0]?.athlete?.position?.abbreviation || home.leaders?.[0]?.leaders?.[0]?.athlete?.position?.abbreviation || null;
+      const awayLeaderPosition = comp.leaders?.[1]?.leaders?.[0]?.athlete?.position?.abbreviation || away.leaders?.[0]?.leaders?.[0]?.athlete?.position?.abbreviation || null;
 
       const statusName = ev.status?.type?.name || '';
       const wentToExtraTime = /AET|PEN|EXTRA|SHOOTOUT/i.test(statusName);
@@ -1480,7 +1503,7 @@ async function fetchRealSoccerSchedule(dateRange) {
           daysRest: soccerDaysRest,
           cornersAvg: (3.5 + (parseFloat(homeXG) || 1) * 1.8).toFixed(1),
           cardsAvg: (2.8 - (parseFloat(homeXG) || 1) * 0.3).toFixed(1),
-          keyPlayer: { name: homeLeader, shotsOnTargetAvg: (parseFloat(homeXG) || 1).toFixed(1) }
+          keyPlayer: { name: homeLeader, shotsOnTargetAvg: (parseFloat(homeXG) || 1).toFixed(1), leaderCategory: homeLeaderCategory, leaderValue: homeLeaderValue, leaderPosition: homeLeaderPosition }
         },
         away: {
           name: away.team?.displayName || "Visitante",
@@ -1492,7 +1515,7 @@ async function fetchRealSoccerSchedule(dateRange) {
           daysRest: soccerDaysRest,
           cornersAvg: (3.0 + (parseFloat(awayXG) || 1) * 1.5).toFixed(1),
           cardsAvg: (3.0 - (parseFloat(awayXG) || 1) * 0.2).toFixed(1),
-          keyPlayer: { name: awayLeader, shotsOnTargetAvg: ((parseFloat(awayXG) || 1) * 0.8).toFixed(1) }
+          keyPlayer: { name: awayLeader, shotsOnTargetAvg: ((parseFloat(awayXG) || 1) * 0.8).toFixed(1), leaderCategory: awayLeaderCategory, leaderValue: awayLeaderValue, leaderPosition: awayLeaderPosition }
         },
         market: (() => {
           // Si no hay momios reales de ESPN, calcular cuota justa real (Fair Odds) alineada con Poisson para NO inventar 1.95/2.05 ni cuotas subvaluadas

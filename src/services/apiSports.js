@@ -4,6 +4,7 @@
 // Cuota: 100 requests / día (reseteo diario a las 00:00 UTC).
 
 import { fetchWithRetry } from './httpClient.js';
+import { isTeamMatch, normalizeTeamName } from './history.js';
 
 // Sin llave en el codigo: solo APISPORTS_KEY en variables de entorno (servidor).
 const CACHE_TTL_MS = 3 * 60 * 60 * 1000; // 3 Horas de caché (consumo mínimo: ~2 a 4 req/día)
@@ -251,4 +252,176 @@ export async function fetchApiSportsPinnacleOdds(dateStr = null) {
     console.warn('[API-Sports] Error consultando cuotas Pinnacle:', err.message);
     return [];
   }
+}
+
+// ---------------------------------------------------------------------------
+// CÓRNERS REALES (2026-11-25) — dato real de API-Sports, NO proyección xG.
+// HALLAZGO FASE 1 (JSON real de la API): /v3/teams/statistics NO trae
+// córners. Su respuesta completa es: league, team, form, fixtures, goals,
+// biggest, clean_sheet, failed_to_score, penalty, lineups, cards. Por eso el
+// diseño es con FIXTURES, no con teams/statistics:
+// - Fuente real: /v3/fixtures/statistics (por partido, tipo "Corner Kicks")
+//   y el arreglo `statistics` embebido en cada objeto de /v3/fixtures.
+// - Diseño: GET /v3/fixtures?team={id}&season={season}&last=10 (1 request por
+//   equipo) y promediar "Corner Kicks" solo de los partidos con dato válido.
+// Estrategia de caché (2 niveles, ambos en memoria por instancia):
+// - Resolución de id por nombre (teamIdCache): SIN expiración, los ids de
+//   API-Football no cambian. También se cachea el null ("sin coincidencia
+//   clara") para no repetir la búsqueda en la misma instancia.
+// - Promedio de córners (cornersAvgCache): TTL 24 h (el promedio de
+//   temporada cambia lento); cada equipo cuesta como máximo 1 request/día
+//   en el camino feliz. También se cachea el null (sin dato) por 24 h.
+// Respaldo: si la lista de /v3/fixtures viene SIN arreglo `statistics`
+// (el proveedor no lo garantiza en la respuesta de lista), se consultan
+// /v3/fixtures/statistics?fixture={id} por partido, hasta 10 partidos
+// (peor caso 1 + 10 requests por equipo, igualmente cacheado 24 h).
+// Fail-safe total: sin llave, sin id, sin dato o error de red → null, nunca
+// throw. La llave nunca se registra ni se devuelve. NO toca Poisson,
+// Dixon-Coles, Monte Carlo, candados, Platt ni market_outlier.
+// ---------------------------------------------------------------------------
+
+export const CORNERS_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 h
+export const CORNERS_LAST_N = 10;
+
+const cornersAvgCache = new Map(); // `corners_{teamId}_{season}` -> { data, timestamp }
+const teamIdCache = new Map(); // nombre normalizado -> teamId | null
+
+/** Solo para tests: vacía ambos cachés de córners. */
+export function clearCornersCache() {
+  cornersAvgCache.clear();
+  teamIdCache.clear();
+}
+
+/**
+ * GET a API-Football con la llave del pool (round-robin). Devuelve el JSON
+ * parseado o null (sin llave, HTTP no-OK o error de red/parseo). Un 429 marca
+ * la llave como no saludable para que el pool use la siguiente. Nunca throw.
+ */
+async function fetchApiSportsJson(path, { retries = 1, timeoutMs = 8000 } = {}) {
+  const apiKey = getApiSportsKey();
+  if (!apiKey) return null;
+  try {
+    const res = await fetchWithRetry(
+      `https://v3.football.api-sports.io${path}`,
+      { headers: { 'x-apisports-key': apiKey } },
+      { retries, timeoutMs }
+    );
+    if (!res.ok) {
+      if (res.status === 429) markApiSportsKeyUnhealthy(apiKey, `HTTP 429 en ${path}`);
+      return null;
+    }
+    return await res.json().catch(() => null);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resuelve el id de API-Football de un equipo por nombre.
+ * Usa /v3/teams?search={name} (1 request, cacheado por nombre normalizado)
+ * y elige el candidato con isTeamMatch (catálogo TEAM_ALIASES, palabras
+ * distintivas y guardia femenil/varonil de history.js): primero la
+ * coincidencia exacta por nombre normalizado y luego la primera por alias.
+ * Si no hay coincidencia clara o no hay llave, devuelve null. Nunca throw.
+ */
+export async function resolveApiSportsTeamId(teamName) {
+  if (!teamName || typeof teamName !== 'string') return null;
+  const normalized = normalizeTeamName(teamName);
+  if (!normalized) return null;
+  if (teamIdCache.has(normalized)) return teamIdCache.get(normalized);
+  let resolved = null;
+  try {
+    const data = await fetchApiSportsJson(`/v3/teams?search=${encodeURIComponent(teamName.trim())}`);
+    const candidates = Array.isArray(data?.response) ? data.response : [];
+    const exact = candidates.find((c) => normalizeTeamName(c?.team?.name) === normalized);
+    const matched = exact || candidates.find((c) => isTeamMatch(c?.team?.name || '', teamName));
+    const id = matched?.team?.id;
+    resolved = Number.isInteger(id) ? id : null;
+  } catch {
+    resolved = null;
+  }
+  teamIdCache.set(normalized, resolved);
+  return resolved;
+}
+
+/**
+ * Extrae los córners de UN equipo de UN fixture.
+ * Devuelve: número (dato válido), null (arreglo presente pero sin dato
+ * válido para el equipo) o undefined (el fixture no trae arreglo
+ * `statistics` en absoluto — no se puede saber si hay dato).
+ * El value puede ser número o null; nunca se promedia el del rival.
+ */
+export function extractTeamCornersFromFixture(fixture, teamId) {
+  const blocks = Array.isArray(fixture?.statistics) ? fixture.statistics : null;
+  if (!blocks) return undefined;
+  const block = blocks.find((b) => b?.team?.id === teamId);
+  if (!block) return null;
+  const item = (block.statistics || []).find((s) => s?.type === 'Corner Kicks');
+  if (!item) return null;
+  const value = typeof item.value === 'number'
+    ? item.value
+    : (typeof item.value === 'string' ? parseFloat(item.value) : NaN);
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Promedio real de córners por partido de un equipo en una temporada.
+ * GET /v3/fixtures?team={teamId}&season={season}&last=10 y promedia
+ * "Corner Kicks" solo de los fixtures con valor numérico válido.
+ * Devuelve { avg, n, source: 'api-sports' } o null si no hay dato/llave/red.
+ * Fail-safe total: cualquier error → null, nunca throw.
+ */
+export async function fetchTeamCornersAvg(teamId, season = new Date().getFullYear()) {
+  if (!Number.isInteger(teamId)) return null;
+  const seasonYear = Number.isInteger(season) ? season : new Date().getFullYear();
+  const cacheKey = `corners_${teamId}_${seasonYear}`;
+  const now = Date.now();
+  const cached = cornersAvgCache.get(cacheKey);
+  if (cached && now - cached.timestamp < CORNERS_CACHE_TTL_MS) return cached.data;
+
+  let result = null;
+  try {
+    const data = await fetchApiSportsJson(
+      `/v3/fixtures?team=${teamId}&season=${seasonYear}&last=${CORNERS_LAST_N}`
+    );
+    const fixtures = Array.isArray(data?.response) ? data.response : [];
+    const values = [];
+    let anyStatisticsArray = false;
+    for (const fx of fixtures) {
+      const v = extractTeamCornersFromFixture(fx, teamId);
+      if (v !== undefined) anyStatisticsArray = true;
+      if (typeof v === 'number') values.push(v);
+    }
+    if (values.length === 0 && fixtures.length > 0 && !anyStatisticsArray) {
+      // Respaldo: la lista no trae `statistics` embebidos → 1 request por
+      // partido a /v3/fixtures/statistics (hasta 10). Costo acotado y
+      // cacheado 24 h igual que el camino feliz.
+      for (const fx of fixtures.slice(0, CORNERS_LAST_N)) {
+        const fixtureId = fx?.fixture?.id;
+        if (!Number.isInteger(fixtureId)) continue;
+        const sdata = await fetchApiSportsJson(`/v3/fixtures/statistics?fixture=${fixtureId}`);
+        const sresponse = Array.isArray(sdata?.response) ? sdata.response : [];
+        const v = extractTeamCornersFromFixture({ statistics: sresponse }, teamId);
+        if (typeof v === 'number') values.push(v);
+      }
+    }
+    if (values.length > 0) {
+      const avg = values.reduce((a, b) => a + b, 0) / values.length;
+      result = { avg: Math.round(avg * 10) / 10, n: values.length, source: 'api-sports' };
+    }
+  } catch {
+    result = null;
+  }
+  cornersAvgCache.set(cacheKey, { data: result, timestamp: now });
+  return result;
+}
+
+/**
+ * Atajo nombre → id → promedio. Devuelve { avg, n, source } o null.
+ * Nunca throw.
+ */
+export async function fetchTeamCornersByName(teamName, season = new Date().getFullYear()) {
+  const teamId = await resolveApiSportsTeamId(teamName);
+  if (teamId === null) return null;
+  return fetchTeamCornersAvg(teamId, season);
 }
